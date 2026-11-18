@@ -2,7 +2,7 @@
   "slug": "2026-11-18-drama-production-workbench",
   "tier": "T2",
   "schema": 2,
-  "status": "confirmed",
+  "status": "done",
   "created": "2026-11-18T12:12:26Z",
   "baseRef": "16a32d4",
   "gates": {
@@ -246,5 +246,6 @@
       },
       "records": 4
     }
-  ]
+  ],
+  "doneAt": "2026-11-18T12:57:19Z"
 }

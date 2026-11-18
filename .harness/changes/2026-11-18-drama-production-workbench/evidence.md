@@ -36,6 +36,16 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC10 | test | record 012 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | ff9bd8e+04023051707f22b7 | 2026-11-18T12:47:37Z |
 | AC1 | test:one | record 013 | cli | `node --test 'backend-node/test/workbench/multiProject.test.js'` | pass | ff9bd8e+04023051707f22b7 | 2026-11-18T12:47:44Z |
 | AC9 | build | record 014 | cli | `cd frontweb && npm run build` | pass | ff9bd8e+04023051707f22b7 | 2026-11-18T12:47:55Z |
+| AC2 | test | record 016 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:54:32Z |
+| AC3 | test | record 017 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:54:39Z |
+| AC4 | test | record 018 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:54:46Z |
+| AC5 | test | record 019 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:54:52Z |
+| AC6 | test | record 020 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:54:58Z |
+| AC7 | test | record 021 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:55:05Z |
+| AC8 | test | record 022 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:55:12Z |
+| AC10 | test | record 023 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | eb37316+399e26340223be93 | 2026-11-18T12:55:21Z |
+| AC1 | test:one | record 024 | cli | `node --test 'backend-node/test/workbench/multiProject.test.js'` | pass | eb37316+399e26340223be93 | 2026-11-18T12:55:28Z |
+| AC9 | build | record 025 | cli | `cd frontweb && npm run build` | pass | eb37316+399e26340223be93 | 2026-11-18T12:55:39Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review
@@ -74,3 +84,12 @@ the user did not agree to is not a deferral; say so here.
 2026-11-18 使用临时副本叠加了主工作树当时的在途源码与测试。两处同名文档内容一致，共同修改的 episodeStoryboardService.js 可三方自动合并。合并演练通过后端 185 项（含两部作品正式交付）和前端 32 项。主工作树的后续提交需按同一组用例再行核对。
 
 实际 Chromium 验证了选章后只更新第二集、重开改编原文、核对并采用 AI 拟稿、在当前片与历史片之间按时间码切换、从审片修改对白和旁白，以及跨过已完成镜头时取得紧邻前镜的已采用尾帧。两部双集夹具使用临时库与合成视频，八份成片逐帧验证。将 FFmpeg 与 ffprobe 的路径切换为安装包内的版本后，草稿 / 正式交付及两部作品的异库往返仍通过。
+
+## macOS 安装包
+
+桌面版本 1.2.9，构建号 1.2.10。两个 Lite DMG 均通过磁盘映像校验、只读挂载和应用深度签名校验。在各自挂载卷内运行 Electron 44.8.0，加载 SQLite、Sharp 与助手依赖，使用独立临时数据库读取工作台、选择性采用小说章节，并用随包工具编解码 H.264。Intel 在 Apple Silicon 的 Rosetta 环境中验证。使用本地 ad-hoc 签名；Apple 公证未执行。Lite 省略示例工程。
+
+| 架构 | desktop/release 下的文件 | SHA-256 |
+|---|---|---|
+| Apple Silicon | LocalMiniDrama-Lite-1.2.9-build-1.2.10-mac-arm64.dmg | `0bf30f080b7836e7a8ba2239c5723e043c6ea9ac59fa937f1979f9c160255631` |
+| Intel | LocalMiniDrama-Lite-1.2.9-build-1.2.10-mac-x64.dmg | `abf3b33a31832e1f80d0b1a8eab8e769eb272dc2a2698400388b73a733b7cf3b` |
