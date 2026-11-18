@@ -90,6 +90,7 @@ export function imageRecordUrl(record) {
 /** 当前分镜视频（优先匹配 storyboard.video_url） */
 export function resolveSbVideoRecord(sb, videosBySbId) {
   if (!sb) return null
+  if ('resolved_video' in sb) return sb.resolved_video
   const list = getSbVideosList(videosBySbId, sb.id)
   if (list.length) {
     if (sb.video_url) {
@@ -150,5 +151,5 @@ export function hasStoryboardImage(sb, imagesBySbId, drama) {
 export function hasStoryboardVideo(sb, videosBySbId) {
   if (!sb) return false
   const rec = resolveSbVideoRecord(sb, videosBySbId)
-  return !!(rec?.video_url || rec?.local_path || sb.video_url)
+  return !!(rec?.video_url || rec?.local_path)
 }

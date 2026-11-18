@@ -285,6 +285,7 @@ function setupRouter(cfg, db, log) {
   r.delete('/images/:id', images.delete);
 
   // ---------- videos ----------
+  require('./workbenchTakes')(r, db, cfg);
   r.get('/videos', videos.list);
   r.post('/videos', videos.create);
   r.post('/videos/image/:image_gen_id', videos.fromImage);

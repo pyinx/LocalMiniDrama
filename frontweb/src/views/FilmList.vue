@@ -112,6 +112,21 @@
       </div>
     </main>
 
+    <el-dialog v-model="showExport" title="导出工程包" width="min(580px, 92vw)">
+      <p>默认包含采用片、已记录审片意见和手动保留的候选。可勾选其他成功候选。</p>
+      <div v-for="v in exportChoices" :key="v.id">
+        <el-checkbox :model-value="v.default_included || exportExtras.includes(v.id)" :disabled="v.default_included || !v.local_available"
+          @change="checked => toggleExportTake(v.id, checked)">
+          第 {{ v.episode_number }} 集 · 镜 {{ v.storyboard_number }} · 候选 #{{ v.id }}
+          {{ v.default_included ? '（默认包含）' : '' }}{{ v.local_available ? '' : ' · 缺少本地视频' }}
+        </el-checkbox>
+      </div>
+      <el-alert v-if="exportChoices.some(v => v.default_included && !v.local_available)" title="默认候选缺少本地视频，请补齐后再导出" type="error" :closable="false" />
+      <template #footer>
+        <el-button @click="showExport = false">取消</el-button>
+        <el-button type="primary" :disabled="exportChoices.some(v => v.default_included && !v.local_available)" @click="downloadProject">下载工程包</el-button>
+      </template>
+    </el-dialog>
     <!-- 新建项目：先填标题和描述 -->
     <el-dialog
       v-model="showNewDialog"
@@ -721,13 +736,31 @@ function openProject(id) {
   router.push('/drama/' + id)
 }
 
-function onExport(d) {
+const showExport = ref(false), exportProject = ref(null), exportChoices = ref([]), exportExtras = ref([])
+async function onExport(d) {
+  if (exportingId.value) return
+  exportingId.value = d.id
+  try {
+    exportChoices.value = await dramaAPI.exportTakes(d.id)
+    exportProject.value = d
+    exportExtras.value = []
+    showExport.value = true
+  } catch (err) { ElMessage.error(err.message || '无法读取候选') }
+  finally { exportingId.value = null }
+}
+function toggleExportTake(id, checked) {
+  exportExtras.value = checked ? [...exportExtras.value, id] : exportExtras.value.filter(x => x !== id)
+}
+function downloadProject() {
+  const d = exportProject.value
   if (exportingId.value) return
   exportingId.value = d.id
   try {
     // 大 ZIP 用浏览器原生下载，避免 axios blob 经 dev proxy 整包缓冲导致 ERR_FAILED
     const a = document.createElement('a')
-    a.href = `/api/v1/dramas/${d.id}/export`
+    const extra = exportExtras.value.length ? '?take_ids=' + exportExtras.value.join(',') : ''
+    a.href = `/api/v1/dramas/${d.id}/export` + extra
+    showExport.value = false
     a.download = `${d.title || 'drama'}.zip`
     a.rel = 'noopener'
     document.body.appendChild(a)

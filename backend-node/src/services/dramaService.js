@@ -1,3 +1,4 @@
+const takes = require('./workbenchTakeService');
 // 对应 Go application/services/drama_service.go
 
 const storageLayout = require('./storageLayout');
@@ -79,7 +80,7 @@ function getDrama(db, dramaId, baseUrl) {
         'SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC, id ASC'
       ).all(ep.id)
     );
-    ep.storyboards = storyboards.map((s) => rowToStoryboard(s));
+    ep.storyboards = storyboards.map((s) => rowToStoryboard(s, db));
     // 批量加载 storyboard_props，附加到对应分镜
     try {
       const sbIds = ep.storyboards.map((s) => s.id);
@@ -201,7 +202,7 @@ function listDramas(db, query) {
           'SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC, id ASC'
         ).all(ep.id)
       );
-      ep.storyboards = storyboards.map((s) => rowToStoryboard(s));
+      ep.storyboards = storyboards.map((s) => rowToStoryboard(s, db));
       try {
         const sbIds = ep.storyboards.map((s) => s.id);
         if (sbIds.length > 0) {
@@ -346,7 +347,7 @@ function parseStoryboardCharacters(charactersStr) {
   }
 }
 
-function rowToStoryboard(r) {
+function rowToStoryboard(r, db) {
   return {
     id: r.id,
     episode_id: r.episode_id,
@@ -388,6 +389,7 @@ function rowToStoryboard(r) {
       local_path: r.local_path ?? null,
       main_panel_idx: r.main_panel_idx != null ? Number(r.main_panel_idx) : null,
       video_url: r.video_url,
+      ...takes.selectionFields(db, r),
       audio_local_path: r.audio_local_path ?? null,
       narration_audio_local_path: r.narration_audio_local_path ?? null,
       status: r.status || 'pending',
@@ -744,50 +746,13 @@ function saveCanvasLayout(db, log, dramaId, req) {
 }
 
 /**
- * 取某分镜的视频地址：优先使用用户手动选定的 storyboard.video_url，否则取最新完成的 video_generations 记录
+ * 为合成器解析当前采用片的媒体地址。
  */
 function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
-  // 1. 获取 storyboard 表中的视频信息（代表用户选定或上次同步的结果）
-  const sb = db.prepare('SELECT video_url, local_path, updated_at FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(storyboardId);
-  
-  // 2. 获取 video_generations 表中最新完成的记录
-  const vg = db.prepare(
-    "SELECT video_url, local_path, completed_at, updated_at, created_at FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1"
-  ).get(storyboardId);
-
-  // 辅助函数：构造完整 URL，优先使用本地路径（避免远程URL过期导致无法合并）
-  const buildUrl = (videoUrl, localPath) => {
-    if (localPath && String(localPath).trim() && baseUrl) {
-      const base = (baseUrl || '').replace(/\/$/, '');
-      const p = String(localPath).replace(/^\//, '');
-      return p ? base + '/' + p : null;
-    }
-    if (videoUrl && String(videoUrl).trim()) return videoUrl;
-    return null;
-  };
-
-  const sbUrl = sb ? buildUrl(sb.video_url, sb.local_path) : null;
-  const vgUrl = vg ? buildUrl(vg.video_url, vg.local_path) : null;
-
-  // 策略：比较时间，取最新的
-  // 如果只有其中一个有 URL，直接用那个
-  if (sbUrl && !vgUrl) return sbUrl;
-  if (!sbUrl && vgUrl) return vgUrl;
-  if (!sbUrl && !vgUrl) return null;
-
-  // 都有 URL，比较时间
-  // sb 使用 updated_at
-  // vg 使用 completed_at > updated_at > created_at
-  const sbTime = sb.updated_at || '1970-01-01';
-  const vgTime = vg.completed_at || vg.updated_at || vg.created_at || '1970-01-01';
-
-  // 如果生成记录的时间比分镜更新时间还晚（说明是重新生成的，且可能没回写），则优先用生成记录
-  if (vgTime > sbTime) {
-    return vgUrl;
-  }
-  
-  // 否则依然以 storyboard 为准（可能是用户手动修改过，或者已经回写过）
-  return sbUrl;
+  const sb = db.prepare('SELECT * FROM storyboards WHERE id=? AND deleted_at IS NULL').get(storyboardId);
+  const selected = takes.resolveTake(db, sb);
+  if (selected?.local_path && baseUrl) return baseUrl.replace(/\/$/, '') + '/' + selected.local_path.replace(/^\/+/, '');
+  return selected?.video_url || null;
 }
 
 function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {

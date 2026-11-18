@@ -67,6 +67,19 @@ function postUniversalSegmentNdjsonStream(url, body, onDelta) {
 }
 
 export const storyboardsAPI = {
+  takes(id) { return request.get(`/storyboards/${id}/takes`) },
+  adopt(id, video_generation_id, expected_revision) {
+    return request.put(`/storyboards/${id}/takes/adoption`, { video_generation_id, expected_revision })
+  },
+  retain(id, take, keep_in_archive) {
+    return request.put(`/storyboards/${id}/takes/${take}/retention`, { keep_in_archive })
+  },
+  addTakeReview(id, take, review) {
+    return request.post(`/storyboards/${id}/takes/${take}/reviews`, review)
+  },
+  takeReviewStatus(id, take, review, status) {
+    return request.put(`/storyboards/${id}/takes/${take}/reviews/${review}`, { status })
+  },
   get(id) {
     return request.get(`/storyboards/${id}`)
   },

@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const takeArchive = require('./workbenchTakeArchive');
 const { randomUUID } = require('crypto');
 const storageLayout = require('./storageLayout');
 
@@ -127,6 +128,9 @@ function importDrama(db, cfg, log, zipBuffer) {
   const storagePath = getStoragePath(cfg);
   const { data, files } = parseZip(zipBuffer);
 
+  for (const ep of data.episodes || []) {
+    for (const sb of ep.storyboards || []) takeArchive.validateBoard(sb, files);
+  }
   const d = data.drama;
   const title = resolveTitle(db, d.title || '导入项目');
   const now = new Date().toISOString();
@@ -338,6 +342,10 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
         now,
         now
       ];
+      if (sb.creative_review_lock != null && db.prepare('PRAGMA table_info(storyboards)').all().some(c => c.name === 'creative_review_lock')) {
+        sbCols.push('creative_review_lock');
+        sbVals.push(typeof sb.creative_review_lock === 'string' ? sb.creative_review_lock : JSON.stringify(sb.creative_review_lock));
+      }
       if (sbCols.length !== sbVals.length) {
         throw new Error(`storyboards 导入列数不匹配: cols=${sbCols.length}, vals=${sbVals.length}`);
       }
@@ -405,8 +413,10 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
         }
       }
 
-      // 导入视频（仍保持单条最新，视频首尾帧 URL 由生成时绑定）
-      if (sb.video_file) {
+      // 新包按分镜重建候选 ID，旧包只含单条 video_file。
+      if (Array.isArray(sb.video_takes)) {
+        takeArchive.restore(db, sb, dramaId, sbId, now, file => saveMediaFile(storagePath, projectDir, 'videos', files, file, 'vid_imp'));
+      } else if (sb.video_file) {
         const videoLocalPath = saveMediaFile(storagePath, projectDir, 'videos', files, sb.video_file, 'vid_imp');
         if (videoLocalPath) {
           db.prepare(

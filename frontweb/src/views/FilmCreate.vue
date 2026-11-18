@@ -1513,16 +1513,19 @@
                   </el-button>
                 </template>
               </div>
+              <el-button v-if="getSbAllVideos(sb.id).length || sb.adopted_video_generation_id" size="small" @click="reviewBoard = sb">
+                {{ sb.adopted_video_generation_id ? '已采用 #' + sb.adopted_video_generation_id + ' · 审片' : '选择采用版与审片' }}
+              </el-button>
               <!-- 视频历史条：有多条历史时显示，点击可切换 -->
               <div v-if="getVideoStripItems(sb.id).length" class="sb-videos-strip">
-                <el-tooltip content="历史视频：点击可切换为当前视频" placement="top" :show-arrow="false">
+                <el-tooltip content="历史视频：点击采用此候选" placement="top" :show-arrow="false">
                   <el-icon class="sb-strip-hint-icon"><InfoFilled /></el-icon>
                 </el-tooltip>
                 <div
                   v-for="item in getVideoStripItems(sb.id)"
                   :key="item.key"
                   class="sb-video-thumb"
-                  :title="`${item.label}（点击切换）`"
+                  :title="`${item.label}（点击采用）`"
                   @click="onSelectSbMainVideo(sb, item.video)"
                 >
                   <video :src="item.src" preload="metadata" class="sb-video-thumb-player" />
@@ -1663,6 +1666,9 @@
     </main>
 
     <!-- 添加道具弹窗 -->
+    <TakeReviewDialog v-if="reviewBoard" :key="reviewBoard.id" :board="reviewBoard" :episode-number="currentEpisode?.episode_number"
+      @selection="selection => updateTakeSelection(reviewBoard, selection)" @close="reviewBoard = null"
+      @revise="onOpenSbPromptDialog" @reshoot="onGenerateSbVideo" />
     <el-dialog v-model="showAddProp" title="添加道具" width="600px" @close="() => { addPropForm = { name: '', type: '', description: '', prompt: '' }; addPropAddRefImage = null }">
       <el-form label-width="90px">
         <el-form-item label="参考图">
@@ -2597,6 +2603,7 @@
 </template>
 
 <script setup>
+import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 import { useAgentContext } from '@/stores/agentContext'
 import { useRoute, useRouter } from 'vue-router'
@@ -3696,16 +3703,11 @@ function getSbAllVideos(storyboardId) {
   if (!Array.isArray(list)) return []
   return list.filter((i) => i.status === 'completed' && recordHasPlayableVideoUrl(i))
 }
-/** 取该分镜当前选中的视频（尊重 sbSelectedVideoId，否则默认第一条） */
+/** 各播放入口使用服务器解析出的采用片。 */
 function getSbVideo(storyboardId) {
-  const all = getSbAllVideos(storyboardId)
-  if (all.length === 0) return null
-  const selectedId = sbSelectedVideoId.value[storyboardId]
-  if (selectedId != null) {
-    const found = all.find((v) => v.id === selectedId)
-    if (found) return found
-  }
-  return all[0]
+  const sb = (store.storyboards || []).find(b => b.id === storyboardId)
+  if (sb && 'resolved_video' in sb) return sb.resolved_video
+  return getSbAllVideos(storyboardId)[0] || null
 }
 /** 取下一个分镜（按 storyboard_number 顺序） */
 function getNextStoryboard(storyboardId) {
@@ -3743,12 +3745,19 @@ function getVideoStripItems(storyboardId) {
     }))
 }
 /** 选中某条历史视频为当前视频，并持久化到分镜记录供合成视频使用 */
-function onSelectSbMainVideo(sb, video) {
-  sbSelectedVideoId.value = { ...sbSelectedVideoId.value, [sb.id]: video.id }
-  storyboardsAPI.update(sb.id, {
-    video_url: video.video_url || null,
-    local_path: video.local_path || undefined,
-  }).catch(e => console.warn('[主视频] 保存后端失败', e))
+const reviewBoard = ref(null)
+function updateTakeSelection(sb, selection) {
+  if (!sb || selection.take_revision < (sb.take_revision || 0)) return
+  sb.take_revision = selection.take_revision
+  sb.adopted_video_generation_id = selection.adopted_video_generation_id
+  sb.resolved_video = selection.resolved_video
+}
+async function onSelectSbMainVideo(sb, video) {
+  try {
+    updateTakeSelection(sb, await storyboardsAPI.adopt(sb.id, video.id, sb.take_revision || 0))
+  } catch (e) {
+    if (e.response?.status === 409) updateTakeSelection(sb, await storyboardsAPI.get(sb.id))
+  }
 }
 /** 取该分镜最近一次视频生成的错误信息（从 API 返回的记录或本地即时错误） */
 function getSbVideoError(storyboardId) {
@@ -3881,10 +3890,12 @@ async function recoverAndSyncEpisodeTasks(epId) {
 async function loadSingleStoryboardMedia(sbId) {
   if (!sbId) return
   try {
-    const [imgRes, vidRes] = await Promise.all([
+    const [imgRes, vidRes, selection] = await Promise.all([
       imagesAPI.list({ storyboard_id: sbId, page: 1, page_size: 100 }),
-      videosAPI.list({ storyboard_id: sbId, page: 1, page_size: 50 })
+      videosAPI.list({ storyboard_id: sbId, page: 1, page_size: 50 }),
+      storyboardsAPI.get(sbId)
     ])
+    updateTakeSelection(store.storyboards?.find(s => s.id === sbId), selection)
     sbImages.value = {
       ...sbImages.value,
       [sbId]: (imgRes && imgRes.items) ? imgRes.items : []
@@ -3903,7 +3914,6 @@ async function loadSingleStoryboardMedia(sbId) {
 
 const sbSelectedImgId = ref({})   // sbId → 选中的首帧/主图 image_generation.id
 const sbSelectedLastImgId = ref({}) // sbId → 选中的尾帧 image_generation.id
-const sbSelectedVideoId = ref({}) // sbId → 选中的 video_generation.id
 const generatingSbFirstImageIds = reactive(new Set())
 const generatingSbLastImageIds = reactive(new Set())
 /** sbId → 'first' | 'last'，上传目标槽位 */
@@ -6429,13 +6439,6 @@ async function onGenerateSbVideo(sb) {
   const meta = buildSbGenMeta(sb, GEN_RESOURCE.SB_VIDEO, '分镜视频')
   genStore.markRunning(meta)
   sbVideoErrors.value[sb.id] = ''
-  // 清除前端选中状态 + 清除后端手动指定的 video_url，让合成时自动取最新生成的视频
-  if (sbSelectedVideoId.value[sb.id] != null) {
-    const next = { ...sbSelectedVideoId.value }
-    delete next[sb.id]
-    sbSelectedVideoId.value = next
-  }
-  storyboardsAPI.update(sb.id, { video_url: null }).catch(() => {})
   try {
     let absoluteUrl = ''
     let referenceUrls = undefined
@@ -6871,13 +6874,6 @@ async function startBatchVideoGeneration() {
         }
         try {
           generatingSbVideoIds.add(sb.id)
-          // 批量生成时清除手动指定的视频，确保合成时使用最新生成记录
-          storyboardsAPI.update(sb.id, { video_url: null }).catch(() => {})
-          if (sbSelectedVideoId.value[sb.id] != null) {
-            const next = { ...sbSelectedVideoId.value }
-            delete next[sb.id]
-            sbSelectedVideoId.value = next
-          }
           const firstFrameUrl = await getMainImageUrlForVideo(sb)
           const absoluteUrl = universal ? (omniRefs[0] || '') : toAbsoluteImageUrl(firstFrameUrl)
           // 连贯帧：提取上一条视频末帧作为参考（全能模式不走连贯帧替换）
@@ -6928,14 +6924,12 @@ async function startBatchVideoGeneration() {
               prevVideoItem = null
             } else if (contiguity && pollRes?.status === 'completed') {
               // 连贯帧：保存本条视频用于下一条
-              const vList = sbVideos.value[sb.id] || []
-              prevVideoItem = vList.find((v) => v.status === 'completed') || null
+              prevVideoItem = getSbVideo(sb.id)
             }
           } else {
             await loadSingleStoryboardMedia(sb.id)
             if (contiguity) {
-              const vList = sbVideos.value[sb.id] || []
-              prevVideoItem = vList.find((v) => v.status === 'completed') || null
+              prevVideoItem = getSbVideo(sb.id)
             }
           }
         } catch (e) {

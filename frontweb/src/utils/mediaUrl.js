@@ -13,6 +13,10 @@ export function storyboardImageUrl(sb) {
 
 export function storyboardVideoUrl(sb) {
   if (!sb) return ''
+  if ('resolved_video' in sb) {
+    const v = sb.resolved_video
+    return v?.local_path ? '/static/' + v.local_path.replace(/^\//, '') : v?.video_url || ''
+  }
   const lp = sb.video_local_path && String(sb.video_local_path).trim()
   if (lp) return '/static/' + lp.replace(/^\//, '')
   return sb.video_url || ''

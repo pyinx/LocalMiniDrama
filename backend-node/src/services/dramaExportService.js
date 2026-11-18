@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 
-const EXPORT_VERSION = '1.4';  // 1.4: 完整导出分镜图片历史（含首尾帧 first/last 绑定）、frame_prompts、layout_description 等，支持导入后恢复首尾帧模式数据
+const takeArchive = require('./workbenchTakeArchive');
+const EXPORT_VERSION = '1.5'; // 分镜候选与审片，保留单片 video_file 供旧版打开。
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -77,7 +78,9 @@ function parseSbChars(raw) {
  * 导出一个剧集为 ZIP Buffer
  * @returns {Buffer}
  */
-function exportDrama(db, cfg, log, dramaId) {
+function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
+  const extras = new Set(extraTakeIds.map(Number));
+  const zip = new AdmZip();
   const storagePath = getStoragePath(cfg);
 
   // ---- 1. 读取 drama 基本信息 ----
@@ -102,21 +105,15 @@ function exportDrama(db, cfg, log, dramaId) {
     ).all(ep.id);
   }
 
-  // ---- 4. 读取分镜图（完整历史 + 首尾帧 first/last）和视频（取最新完成的） ----
+  // ---- 4. 读取分镜图（完整历史 + 首尾帧 first/last） ----
   const allSbIds = Object.values(storyboardsByEp).flat().map(s => s.id);
   const allImagesBySb = {};  // sbId -> 所有 image_generations 记录（用于导出历史和首尾帧绑定）
-  const videosBySb = {};
   for (const sbId of allSbIds) {
     // 导出所有非删除的图片生成记录（含历史、首尾帧、各种 frame_type），仅打包有 local_path 的文件
     const igs = db.prepare(
       "SELECT * FROM image_generations WHERE storyboard_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
     ).all(sbId);
     allImagesBySb[sbId] = igs.filter(ig => ig && ig.local_path);
-
-    const vg = db.prepare(
-      "SELECT video_url, local_path FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1"
-    ).get(sbId);
-    if (vg) videosBySb[sbId] = vg;
   }
 
   // 收集需要打包的分镜图片文件（完整历史）
@@ -227,8 +224,6 @@ function exportDrama(db, cfg, log, dramaId) {
           // 兼容：仍提供 image_file（指向首帧或最新一张），旧版导入器可继续工作
           let mainIg = igsForThis.find(g => g.id === sb.first_frame_image_id) || igsForThis[igsForThis.length - 1];
           const sbImageFile = mainIg ? `media/storyboards/sb_${sb.id}_gen_${mainIg.id}${extOf(mainIg.local_path)}` : null;
-          const vg = videosBySb[sb.id];
-          const sbVideoFile = vg && vg.local_path ? `media/videos/sb_${sb.id}${extOf(vg.local_path)}` : null;
           const sbAudioFile = sb.audio_local_path
             ? `media/audio/sb_${sb.id}${extOf(sb.audio_local_path)}`
             : null;
@@ -291,7 +286,8 @@ function exportDrama(db, cfg, log, dramaId) {
             scene_index: sceneIndex,
             prop_indices: propIndices,
             image_file: sbImageFile,
-            video_file: sbVideoFile,
+            ...takeArchive.packBoard(db, storagePath, sb, extras, zip, ep.episode_number),
+            ...(sb.creative_review_lock != null && { creative_review_lock: sb.creative_review_lock }),
             audio_file: sbAudioFile,
             narration_audio_file: sbNarrationAudioFile,
             // 完整分镜图片历史（含首尾帧），导入后可恢复 getSbAllImages + 绑定
@@ -376,7 +372,7 @@ function exportDrama(db, cfg, log, dramaId) {
   };
 
   // ---- 9. 打包 ZIP ----
-  const zip = new AdmZip();
+  if (extras.size) require('./workbenchTakeService').fail('额外候选必须是当前项目中已完成的视频');
   zip.addFile('project.json', Buffer.from(JSON.stringify(zipData, null, 2), 'utf8'));
 
   // 分镜图片完整历史（含首尾帧 first/last 专用图 + 所有历史生成）
@@ -384,15 +380,6 @@ function exportDrama(db, cfg, log, dramaId) {
     const abs = localPathToAbs(storagePath, localRelPath);
     const buf = safeReadFile(abs);
     if (buf) zip.addFile(zipPath, buf);
-  }
-
-  // 分镜视频
-  for (const [sbId, vg] of Object.entries(videosBySb)) {
-    if (vg.local_path) {
-      const abs = localPathToAbs(storagePath, vg.local_path);
-      const buf = safeReadFile(abs);
-      if (buf) zip.addFile(`media/videos/sb_${sbId}${extOf(vg.local_path)}`, buf);
-    }
   }
 
   // 分镜对白 TTS / 解说旁白 TTS（分字段存储）

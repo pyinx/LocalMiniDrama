@@ -270,17 +270,6 @@ async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, v
       ).run('completed', videoUrl, localPath, now, videoGenId);
     } else throw e;
   }
-  if (row.storyboard_id) {
-    try {
-      db.prepare('UPDATE storyboards SET video_url = ?, local_path = ?, updated_at = ? WHERE id = ?').run(
-        videoUrl, localPath, now, row.storyboard_id
-      );
-      log.info('Updated storyboard video' + (logLabel ? ` (${logLabel})` : ''), {
-        storyboard_id: row.storyboard_id,
-        video_url: videoUrl,
-      });
-    } catch (_) {}
-  }
   if (row.task_id) {
     taskService.updateTaskResult(db, row.task_id, {
       video_generation_id: videoGenId,
@@ -606,9 +595,14 @@ async function processVideoGeneration(db, log, videoGenId) {
 }
 
 function deleteById(db, log, id) {
-  const now = new Date().toISOString();
-  const result = db.prepare('UPDATE video_generations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, Number(id));
-  return result.changes > 0;
+  return db.transaction(() => {
+    const protectedTake = db.prepare(`SELECT 1 FROM storyboards WHERE adopted_video_generation_id=? AND deleted_at IS NULL
+      UNION ALL SELECT 1 FROM video_take_reviews WHERE video_generation_id=? LIMIT 1`).get(id, id);
+    if (protectedTake) throw Object.assign(new Error('该候选已采用或被审片引用，需保留视频历史'), { status: 409 });
+    const result = db.prepare('UPDATE video_generations SET deleted_at=? WHERE id=? AND deleted_at IS NULL')
+      .run(new Date().toISOString(), Number(id));
+    return result.changes > 0;
+  }).immediate();
 }
 
 module.exports = {

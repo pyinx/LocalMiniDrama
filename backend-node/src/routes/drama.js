@@ -171,12 +171,14 @@ function downloadEpisodeVideo(db) {
 function exportDrama(db, cfg, log) {
   return (req, res) => {
     try {
-      const { buffer, title } = dramaExportService.exportDrama(db, cfg, log, req.params.id);
+      const { buffer, title } = dramaExportService.exportDrama(db, cfg, log, req.params.id,
+        req.query.take_ids ? String(req.query.take_ids).split(',') : []);
       const safeName = (title || 'drama').replace(/[^\w\u4e00-\u9fff\-]/g, '_').slice(0, 50);
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}.zip`);
       res.send(buffer);
     } catch (err) {
+      if (err.status) return response.error(res, err.status, 'EXPORT_ERROR', err.message);
       log.error('Export drama failed', { error: err.message });
       response.internalError(res, err.message || '导出失败');
     }

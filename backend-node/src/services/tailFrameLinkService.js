@@ -18,22 +18,12 @@ function routes(db, cfg, log) {
           return res.status(400).json({ error: '缺少必要参数' });
         }
 
-        // 1. 获取当前分镜的最新已完成视频
-        const video = db.prepare(`
-          SELECT id, local_path, video_url FROM video_generations
-          WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL
-          ORDER BY created_at DESC LIMIT 1
-        `).get(storyboardId);
-
-        if (!video || !video.local_path) {
-          return res.status(400).json({ error: '当前分镜没有可用的本地视频文件' });
-        }
-
-        // 2. 找到下一个分镜
-        const currentSb = db.prepare('SELECT episode_id, storyboard_number FROM storyboards WHERE id = ?').get(storyboardId);
-        if (!currentSb) {
-          return res.status(404).json({ error: '分镜不存在' });
-        }
+        const currentSb = db.prepare(`SELECT s.* FROM storyboards s JOIN episodes e ON e.id=s.episode_id
+          WHERE s.id=? AND e.drama_id=? AND s.deleted_at IS NULL AND e.deleted_at IS NULL`).get(storyboardId, dramaId);
+        if (!currentSb) return res.status(404).json({ error: '分镜不存在' });
+        const takes = require('./workbenchTakeService');
+        const video = takes.resolveTake(db, currentSb);
+        if (!video?.local_path) return res.status(400).json({ error: '当前采用片没有可用的本地视频文件' });
 
         const nextSb = db.prepare(`
           SELECT id, storyboard_number FROM storyboards
@@ -58,11 +48,8 @@ function routes(db, cfg, log) {
         const storageBase = path.isAbsolute(rawStorage)
           ? rawStorage
           : path.join(process.cwd(), rawStorage);
-        const videoAbsPath = path.isAbsolute(video.local_path)
-          ? video.local_path
-          : path.join(storageBase, video.local_path.replace(/^\/+/, ''));
-
-        if (!fs.existsSync(videoAbsPath)) {
+        const videoAbsPath = takes.localFile(storageBase, video.local_path);
+        if (!videoAbsPath) {
           return res.status(400).json({ error: '视频文件不存在: ' + video.local_path });
         }
 
@@ -77,15 +64,14 @@ function routes(db, cfg, log) {
         const outputRelPath = `media/images/${outputFileName}`;
 
         // 6. 使用 ffmpeg 提取最后一帧
-        // 使用 -sseof -1 定位到最后一秒，然后取第一帧
+        // 从片尾附近解码到结束，image2 的 update 模式将实际最后一帧留在输出文件。
         log.info('[尾帧衔接] 开始提取', { from: video.local_path, to: outputRelPath });
 
         const result = spawnSync(ffmpeg, [
-          '-sseof', '-1',
+          '-sseof', '-2',
           '-i', videoAbsPath,
           '-update', '1',
           '-q:v', '2',
-          '-frames:v', '1',
           '-y',
           outputAbsPath
         ], { encoding: 'utf8', timeout: 60000 });

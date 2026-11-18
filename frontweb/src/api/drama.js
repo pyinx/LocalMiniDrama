@@ -73,6 +73,7 @@ export const dramaAPI = {
   extractEpisodeCharacters(episodeId) {
     return request.post(`/episodes/${episodeId}/characters/extract`)
   },
+  exportTakes(id) { return request.get(`/dramas/${id}/export-takes`) },
   exportDrama(id) {
     return request.get(`/dramas/${id}/export`, { responseType: 'blob' })
   },
