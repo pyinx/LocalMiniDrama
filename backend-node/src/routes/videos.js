@@ -18,10 +18,13 @@ function routes(db, log) {
     create: (req, res) => {
       try {
         const body = req.body || {};
-        const task = taskService.createTask(db, log, 'video_generation', String(body.drama_id || ''));
         const now = new Date().toISOString();
         const dramaId = Number(body.drama_id) || 0;
         const storyboardId = body.storyboard_id != null ? Number(body.storyboard_id) : null;
+        const operation = body.operation_key ?? null;
+        if (operation !== null && (typeof operation !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(operation))) {
+          return response.badRequest(res, '视频操作标识无效');
+        }
         const provider = body.provider || 'chatfire';
         let prompt = body.prompt || '';
         const style = (body.style || '').toString().trim();
@@ -61,16 +64,34 @@ function routes(db, log) {
           body.reference_image_urls && Array.isArray(body.reference_image_urls)
             ? JSON.stringify(body.reference_image_urls.slice(0, 10))
             : null;
-        db.prepare(
-          `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, status, task_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?)`
-        ).run(dramaId, storyboardId, provider, prompt, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, task.id, now, now);
-        const videoGenId = db.prepare('SELECT last_insert_rowid() as id').get().id;
-        setImmediate(() => {
-          videoService.processVideoGeneration(db, log, videoGenId);
-        });
-        const item = videoService.getById(db, videoGenId);
-        response.created(res, item || { id: videoGenId, task_id: task.id, status: 'processing' });
+        const result = db.transaction(() => {
+          if (operation) {
+            const planned = db.prepare('SELECT storyboard_id FROM video_batch_items WHERE operation_key=?').get(operation);
+            if (planned && planned.storyboard_id !== storyboardId) return { conflict: true };
+            const existing = db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(operation);
+            if (existing) {
+              if (existing.deleted_at || existing.drama_id !== dramaId || existing.storyboard_id !== storyboardId) return { conflict: true };
+              if (!planned) {
+                const inputs = { prompt, provider, model, duration, aspect_ratio: aspectRatio, resolution, seed,
+                  camera_fixed: cameraFixed, watermark, image_url: imageUrl, first_frame_url: firstFrameUrl,
+                  last_frame_url: lastFrameUrl, reference_image_urls: refImagesJson };
+                if (Object.entries(inputs).some(([key, value]) => existing[key] !== value)) return { conflict: true };
+              }
+              return { id: existing.id, reused: true };
+            }
+          }
+          const task = taskService.createTask(db, log, 'video_generation', String(dramaId));
+          const inserted = db.prepare(
+            `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, status, task_id, created_at, updated_at, operation_key, dispatch_state)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, 'queued')`
+          ).run(dramaId, storyboardId, provider, prompt, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, task.id, now, now, operation);
+          return { id: inserted.lastInsertRowid };
+        }).immediate();
+        if (result.conflict) return response.error(res, 409, 'VIDEO_OPERATION_CONFLICT', '原提交内容已变化或记录已删除，请核查后重新发起');
+        if (!result.reused) setImmediate(() => videoService.processVideoGeneration(db, log, result.id));
+        const item = videoService.getById(db, result.id);
+        if (result.reused) return response.success(res, item);
+        response.created(res, item);
       } catch (err) {
         log.error('videos create', { error: err.message });
         response.internalError(res, err.message);
@@ -122,10 +143,13 @@ function routes(db, log) {
     },
     episodeBatch: (req, res) => {
       try {
-        response.success(res, []);
+        const ids = req.body?.storyboard_ids || [];
+        if (!Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id) || id <= 0)) return response.badRequest(res, '分镜清单无效');
+        const batch = require('../services/workbenchVideoBatch');
+        response.success(res, batch.openBatch(db, Number(req.params.episode_id), ids));
       } catch (err) {
         log.error('videos episode batch', { error: err.message });
-        response.internalError(res, err.message);
+        response.badRequest(res, err.message);
       }
     },
   };

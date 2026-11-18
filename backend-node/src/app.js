@@ -20,7 +20,7 @@ function createApp() {
   const log = logger;
 
   const taskService = require('./services/taskService');
-  taskService.failOrphanedAsyncTasksOnStartup(db, log);
+  taskService.failOrphanedAsyncTasksOnStartup(db, log, true);
 
   const { resumeProcessingVideoGenerations } = require('./services/videoService');
   resumeProcessingVideoGenerations(db, log);

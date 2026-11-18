@@ -153,6 +153,7 @@ function finalizeEpisode(db, log, cfg) {
     const baseUrl = cfg?.storage?.base_url || '';
     const result = dramaService.finalizeEpisode(db, log, episodeId, baseUrl, req.body || {});
     if (!result) return response.notFound(res, '剧集不存在');
+    if (result.error) return response.error(res, 422, 'INCOMPLETE_DELIVERY', result.error, { missing_shots: result.missing_shots });
     response.success(res, result);
   };
 }

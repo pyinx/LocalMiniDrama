@@ -240,8 +240,9 @@ async function runMergedEpisodePostProcess(db, log, opts) {
       for (let i = 0; i < scenes.length; i++) {
         const sc = scenes[i];
         const sbId = Number(sc.scene_id);
+        const shot = `第 ${sc.storyboard_number ?? sbId} 镜`;
         const slotSec = Math.max(0.2, Number(sc.duration) || 5);
-        const row = db.prepare(
+        const row = sc.sound || db.prepare(
           'SELECT dialogue, narration, audio_local_path, narration_audio_local_path FROM storyboards WHERE id = ? AND deleted_at IS NULL'
         ).get(sbId);
 
@@ -261,8 +262,10 @@ async function runMergedEpisodePostProcess(db, log, opts) {
           const srcAbs = rel ? path.join(storageRoot, rel.replace(/\//g, path.sep)) : null;
           if (srcAbs && fs.existsSync(srcAbs)) {
             if (!fitAudioToSlot(srcAbs, slotSec, diaFit, log)) {
-              return { ok: false, error: `对白配音时长对齐失败 #${i}` };
+              return { ok: false, error: shot + '对白配音时长对齐失败' };
             }
+          } else if (mergeOpts.delivery_mode === 'complete' && (rel || row?.dialogue?.trim())) {
+            return { ok: false, error: `第 ${sc.storyboard_number ?? sbId} 镜缺少对白配音` };
           } else if (!writeSilenceMp3(slotSec, diaFit, log)) {
             return { ok: false, error: `对白静音片段失败 #${i}` };
           }
@@ -272,6 +275,11 @@ async function runMergedEpisodePostProcess(db, log, opts) {
           if (!narrText) {
             if (!writeSilenceMp3(slotSec, narrFit, log)) {
               return { ok: false, error: `旁白静音片段失败 #${i}` };
+            }
+          } else if (mergeOpts.delivery_mode === 'complete' && row.narration_audio_local_path) {
+            const src = path.resolve(storageRoot, row.narration_audio_local_path);
+            if (!fs.existsSync(src) || !fitAudioToSlot(src, slotSec, narrFit, log)) {
+              return { ok: false, error: shot + '旁白配音文件缺失或无法解码' };
             }
           } else {
             const segRaw = path.join(tempRoot, `narr_raw_${i}.mp3`);
@@ -284,7 +292,7 @@ async function runMergedEpisodePostProcess(db, log, opts) {
               });
             } catch (e) {
               log.warn('merged post: narration TTS failed', { segment: i, error: e.message });
-              return { ok: false, error: `解说旁白 TTS 失败：${e.message}` };
+              return { ok: false, error: `${shot}解说旁白 TTS 失败：${e.message}` };
             }
             const narrAbs = path.join(storageRoot, synth.local_path.replace(/\//g, path.sep));
             if (!fs.existsSync(narrAbs)) {

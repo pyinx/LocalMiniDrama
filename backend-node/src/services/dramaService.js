@@ -755,34 +755,41 @@ function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
   return selected?.video_url || null;
 }
 
+function episodeDeliveryInputs(db, episodeId, baseUrl) {
+  const boards = db.prepare('SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number, id').all(episodeId);
+  return boards.map((sb, order) => ({
+    scene_id: sb.id, storyboard_number: sb.storyboard_number, order,
+    take_id: sb.adopted_video_generation_id ?? null,
+    video_url: getVideoUrlForStoryboard(db, sb.id, baseUrl),
+    duration: Number(sb.duration) || 5,
+    sound: {
+      dialogue: sb.dialogue, narration: sb.narration,
+      audio_local_path: sb.audio_local_path, narration_audio_local_path: sb.narration_audio_local_path,
+    },
+  }));
+}
+
 function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
   const ep = db.prepare('SELECT id, drama_id, episode_number FROM episodes WHERE id = ? AND deleted_at IS NULL').get(episodeId);
   if (!ep) return null;
-  const drama = db.prepare('SELECT title FROM dramas WHERE id = ? AND deleted_at IS NULL').get(ep.drama_id);
-  const storyboards = db.prepare(
-    'SELECT id, storyboard_number, duration FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC'
-  ).all(episodeId);
+  const drama = db.prepare('SELECT title, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(ep.drama_id);
   const videoMergeService = require('./videoMergeService');
-  const scenes = [];
-  for (let i = 0; i < storyboards.length; i++) {
-    const sb = storyboards[i];
-    const videoUrl = getVideoUrlForStoryboard(db, sb.id, baseUrl);
-    if (!videoUrl) {
-      log.warn('Finalize skip storyboard (no video)', { storyboard_id: sb.id, storyboard_number: sb.storyboard_number });
-      continue;
-    }
-    scenes.push({
-      scene_id: sb.id,
-      video_url: videoUrl,
-      duration: Number(sb.duration) || 5,
-      order: i,
-    });
+  const title = `${drama?.title || '项目 ' + ep.drama_id} - 第${ep.episode_number ?? episodeId}集`;
+  const mode = body.delivery_mode;
+  let aspectRatio;
+  try { aspectRatio = JSON.parse(drama?.metadata || '{}').aspect_ratio; } catch (_) {}
+  if (mode != null && !['complete', 'draft'].includes(mode)) return { error: '未知的交付模式' };
+  const inputs = episodeDeliveryInputs(db, episodeId, baseUrl);
+  const missing = inputs.filter(sc => !sc.video_url).map(sc => sc.storyboard_number ?? sc.scene_id);
+  const message = missing.length ? `${title}：第 ${missing.join('、')} 镜缺少视频` : '';
+  if (mode === 'complete' && (missing.length || !inputs.length || inputs.length > 100)) {
+    return { error: message || `${title}：正式交付需要 1 至 100 个分镜`, missing_shots: missing };
   }
+  const scenes = inputs.filter(sc => sc.video_url);
   if (scenes.length === 0) {
     log.warn('Finalize no scenes with video', { episode_id: episodeId });
-    return { message: '本集没有可合成的视频片段', merge_id: null, episode_id: episodeId, scenes_count: 0, task_id: null };
+    return { message: message || '本集没有可合成的视频片段', missing_shots: missing, merge_id: null, episode_id: episodeId, scenes_count: 0, task_id: null };
   }
-  const title = drama && drama.title ? `${drama.title} - 第${ep.episode_number ?? episodeId}集` : null;
   const mergeReq = {
     episode_id: episodeId,
     drama_id: ep.drama_id,
@@ -790,6 +797,8 @@ function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
     scenes,
     provider: 'ffmpeg',
     merge_options: {
+      delivery_mode: mode,
+      aspect_ratio: mode ? aspectRatio : undefined,
       burn_narration_subtitles: !!(body && body.burn_narration_subtitles),
       burn_dialogue_audio: !!(body && body.burn_dialogue_audio),
       watermark_text: (body && body.watermark_text != null)
@@ -799,12 +808,15 @@ function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
   };
   const created = videoMergeService.create(db, log, mergeReq);
   const mergeId = created.merge_id || created.id;
-  db.prepare('UPDATE episodes SET status = ? WHERE id = ?').run('processing', episodeId);
+  if (!mode && !videoMergeService.hasPublishedDelivery(db, episodeId)) {
+    db.prepare('UPDATE episodes SET status = ? WHERE id = ?').run('processing', episodeId);
+  }
   setImmediate(() => {
     videoMergeService.processVideoMerge(db, log, mergeId, baseUrl);
   });
   return {
-    message: '视频合成任务已创建，正在后台处理',
+    message: message || '视频合成任务已创建，正在后台处理',
+    missing_shots: missing,
     merge_id: mergeId,
     episode_id: episodeId,
     scenes_count: scenes.length,
@@ -834,6 +846,7 @@ module.exports = {
   saveProgress,
   saveCanvasLayout,
   finalizeEpisode,
+  episodeDeliveryInputs,
   downloadEpisodeVideo,
   generateStoryboard,
 };

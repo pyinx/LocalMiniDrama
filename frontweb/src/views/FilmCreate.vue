@@ -899,11 +899,14 @@
                 :disabled="!currentEpisodeId || batchImageRunning || batchVideoRunning || pipelineRunning || storyboardGenerating || universalOmniPolishRunning"
                 @click="startBatchVideoGeneration"
               >
-                批量生成分镜视频
+                {{ batchItems.some(i => i.status === 'waiting' || i.status === 'processing') ? '继续分镜视频批次' : '批量生成分镜视频' }}
               </el-button>
               <el-button v-if="batchImageRunning" size="large" type="danger" plain @click="batchImageStopping = true">停止图片</el-button>
               <el-button v-if="batchVideoRunning" size="large" type="danger" plain @click="batchVideoStopping = true">停止视频</el-button>
             </div>
+            <p v-for="item in batchItems.filter(i => i.dispatch_state === 'unknown')" :key="item.operation_key">
+              第 {{ item.storyboard_number }} 镜厂商接单结果待核实，请在厂商后台查单后决定是否重拍。
+            </p>
             <!-- 连贯帧模式 UI 暂时隐藏（保留变量与批量生成逻辑，后续可快速恢复） -->
             <div v-if="false" class="batch-video-options" style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:13px;">
               <el-checkbox v-model="videoFrameContiguity" size="small">
@@ -1641,8 +1644,13 @@
           :disabled="!currentEpisodeId || storyboards.length === 0 || videoStatus === 'generating'"
           @click="onGenerateVideo"
         >
-          合成视频
+          正式交付整集
         </el-button>
+        <el-button size="large" :loading="draftBusy" :disabled="!currentEpisodeId || !storyboards.length" @click="previewDraft">草稿预览</el-button>
+        <div v-if="draftPreview?.episode === currentEpisodeId" class="video-preview-wrap">
+          <p>{{ draftPreview.message }}</p>
+          <video v-if="draftPreview.url" :src="draftPreview.url" controls />
+        </div>
         <div v-if="videoStatus === 'generating'" class="video-progress">
           <el-progress :percentage="videoProgress" :status="videoProgress >= 100 ? 'success' : undefined" />
           <p>视频生成中...</p>
@@ -2804,6 +2812,8 @@ const universalOmniPolishProgress = ref({ current: 0, total: 0, label: '' })
 const sbTruncatedWarning = ref(false)
 const sbTruncatedDismissed = ref(false)
 const videoErrorMsg = ref('')
+const draftBusy = ref(false)
+const draftPreview = ref(null)
 // 一键全流程流水线
 const pipelineRunning = ref(false)
 const pipelinePaused = ref(false)
@@ -3205,6 +3215,16 @@ const batchVideoRunning = ref(false)
 const batchVideoStopping = ref(false)
 const batchVideoProgress = ref({ current: 0, total: 0, failed: 0 })
 const batchVideoErrors = ref([])
+const batchItems = ref([])
+async function refreshVideoBatch(episode) {
+  if (!episode) return
+  const items = await videosAPI.openBatch(episode)
+  if (currentEpisodeId.value === episode) batchItems.value = items
+}
+watch(currentEpisodeId, episode => {
+  batchItems.value = []
+  if (episode) refreshVideoBatch(episode).catch(e => ElMessage.error(e.message))
+}, { immediate: true })
 // P0-1: 连贯帧模式
 const videoFrameContiguity = ref(false)
 // P0-3: 分镜超分辨率 loading set
@@ -6825,6 +6845,7 @@ async function startBatchImageGeneration() {
 
 async function startBatchVideoGeneration() {
   if (!currentEpisodeId.value || batchVideoRunning.value || pipelineRunning.value) return
+  const episode = currentEpisodeId.value
   batchVideoErrors.value = []
   batchVideoStopping.value = false
   batchVideoRunning.value = true
@@ -6848,6 +6869,8 @@ async function startBatchVideoGeneration() {
       ElMessage.info('没有需要生成视频的分镜（分镜缺少图片，或视频已全部生成）')
       return
     }
+    const batch = await videosAPI.openBatch(episode, todo.map(s => s.id))
+    batchItems.value = batch
     batchVideoProgress.value = { current: 0, total: todo.length, failed: 0 }
     const contiguity = videoFrameContiguity.value
     // 连贯帧模式强制顺序（concurrency=1），普通模式并发
@@ -6858,7 +6881,7 @@ async function startBatchVideoGeneration() {
     let videoQueueIdx = 0
     const videoWorker = async () => {
       while (videoQueueIdx < todo.length) {
-        if (batchVideoStopping.value) break
+        if (batchVideoStopping.value || episode !== currentEpisodeId.value) break
         const sb = todo[videoQueueIdx++]
         const universal = isSbUniversalMode(sb.id)
         const omniRefs = universal ? collectSbOmniReferenceAbsoluteUrls(sb) : []
@@ -6902,7 +6925,10 @@ async function startBatchVideoGeneration() {
           if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
             refUrls = [...refUrls, vLast]
           }
-          const res = await videosAPI.create({
+          const planned = batch.find(i => i.storyboard_id === sb.id)
+          if (planned.status === 'failed') throw new Error(planned.error_msg || '本次生成失败，可在分镜里核查后重拍')
+          const res = planned.video_id ? planned : await videosAPI.create({
+            operation_key: planned.operation_key,
             drama_id: dramaId.value,
             storyboard_id: sb.id,
             prompt: buildSbVideoPromptForApi(sb),
@@ -6952,14 +6978,37 @@ async function startBatchVideoGeneration() {
     }
   } finally {
     batchVideoRunning.value = false
+    await refreshVideoBatch(episode)
   }
 }
 
 function getFinalizeMergeOptions() {
   return {
+    delivery_mode: 'complete',
     burn_narration_subtitles: !!videoSubtitle.value,
     burn_dialogue_audio: !!videoBurnDialogue.value,
     watermark_text: videoWatermark.value ? String(videoWatermarkText.value || '').trim().slice(0, 200) : '',
+  }
+}
+
+async function previewDraft() {
+  const episode = currentEpisodeId.value
+  draftBusy.value = true
+  draftPreview.value = null
+  try {
+    const job = await dramaAPI.finalizeEpisode(episode, { delivery_mode: 'draft' })
+    const message = job.missing_shots?.length ? job.message : `草稿共 ${job.scenes_count} 镜`
+    draftPreview.value = { episode, message }
+    if (!job.task_id) return
+    const task = await pollTask(job.task_id)
+    if (task.status !== 'completed') throw new Error(task.error || '草稿尚未完成，可在任务列表查看')
+    const result = typeof task.result === 'string' ? JSON.parse(task.result) : task.result
+    const summary = [job.missing_shots?.length && job.message, `草稿包含 ${result.scenes_count} 镜`, ...(result.warnings || [])].filter(Boolean).join('。')
+    draftPreview.value = { episode, message: summary, url: isHttpVideoUrl(result.video_url) ? result.video_url : '/static/' + result.video_url }
+  } catch (err) {
+    draftPreview.value = { episode, message: err.message }
+  } finally {
+    draftBusy.value = false
   }
 }
 
@@ -7597,7 +7646,7 @@ async function runOneClickPipeline(textOnly = false) {
             if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
               refUrls = [...refUrls, vLast]
             }
-            const res = await videosAPI.create({
+            const res = await videosAPI.fillMissing(episodeId, {
               drama_id: dramaIdVal,
               storyboard_id: sb.id,
               prompt: buildSbVideoPromptForApi(sb),
@@ -7938,7 +7987,7 @@ async function runRepairPipeline() {
             if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
               refUrls = [...refUrls, vLast]
             }
-            const res = await videosAPI.create({
+            const res = await videosAPI.fillMissing(episodeId, {
               drama_id: dramaIdVal,
               storyboard_id: sb.id,
               prompt: buildSbVideoPromptForApi(sb),

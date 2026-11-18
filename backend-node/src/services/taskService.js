@@ -87,6 +87,10 @@ function cancelTask(db, log, taskId, reason) {
     return { ok: true, already_done: true, task };
   }
   const msg = (reason || USER_CANCEL_TASK_MSG).toString().trim() || USER_CANCEL_TASK_MSG;
+  if (task.type === 'video_generation') {
+    db.prepare("UPDATE video_generations SET status='failed', dispatch_state='cancelled_before_dispatch', error_msg=?, updated_at=? WHERE task_id=? AND dispatch_state='queued' AND status='processing'")
+      .run(msg, new Date().toISOString(), taskId);
+  }
   updateTaskError(db, taskId, msg);
   log.info('Task cancelled by user', { task_id: taskId, type: task.type });
   return { ok: true, task: getTask(db, taskId) };
@@ -95,10 +99,11 @@ function cancelTask(db, log, taskId, reason) {
 /**
  * 进程内 setImmediate 任务在重启后会丢失；启动时将遗留的 pending/processing 标为失败，避免前端无限轮询。
  */
-function failOrphanedAsyncTasksOnStartup(db, log) {
+function failOrphanedAsyncTasksOnStartup(db, log, recoverVideos = false) {
+  const recoverable = recoverVideos ? "AND NOT EXISTS (SELECT 1 FROM video_generations v WHERE v.task_id=async_tasks.id AND v.status='processing' AND v.deleted_at IS NULL)" : '';
   const rows = db.prepare(
     `SELECT id, type, status, resource_id FROM async_tasks
-     WHERE status IN ('pending', 'processing') AND deleted_at IS NULL`
+     WHERE status IN ('pending', 'processing') AND deleted_at IS NULL ${recoverable}`
   ).all();
   if (!rows.length) return 0;
   log.warn('Failing orphaned async tasks after startup', { count: rows.length });
