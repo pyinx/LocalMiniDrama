@@ -4,7 +4,9 @@ const path = require('path');
 const AdmZip = require('adm-zip');
 
 const takeArchive = require('./workbenchTakeArchive');
-const EXPORT_VERSION = '1.5'; // 分镜候选与审片，保留单片 video_file 供旧版打开。
+const { localFile } = require('./workbenchTakeService');
+const { parseDramaCharacterIds } = require('./storyboardService');
+const EXPORT_VERSION = '1.6'; // 分集角色名单、场景身份和角色阶段；保留旧字段。
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -63,15 +65,6 @@ function supplementFramePromptsFromImageGens(db, sbId, fps) {
     if (p) out.push({ frame_type: 'last', prompt: p, description: null, layout: null, created_at: now, updated_at: now });
   }
   return out;
-}
-
-/** 解析 storyboard.characters JSON 字段，返回 ID 数组 */
-function parseSbChars(raw) {
-  if (!raw) return [];
-  try {
-    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(arr) ? arr.map(Number).filter(n => !isNaN(n)) : [];
-  } catch (_) { return []; }
 }
 
 /**
@@ -151,32 +144,12 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
     'SELECT * FROM props WHERE drama_id = ? AND deleted_at IS NULL ORDER BY id'
   ).all(Number(dramaId));
 
-  // ---- 场景去重（数据库中可能存在同 location+time 的重复记录，导出时只保留第一条）----
-  const seenSceneKeys = new Set();
-  const dedupedScenes = [];
-  for (const s of scenes) {
-    const key = `${(s.location || '').trim()}|${(s.time || '').trim()}`;
-    if (seenSceneKeys.has(key)) continue;
-    seenSceneKeys.add(key);
-    dedupedScenes.push(s);
-  }
-  // 为去重后被丢弃的重复场景 ID 建立到保留场景的映射，确保分镜 scene_index 仍指向保留的场景
-  const sceneDedupeIdMap = new Map(); // 原 ID → 保留后的同 key 首个 ID
-  for (const s of scenes) {
-    const key = `${(s.location || '').trim()}|${(s.time || '').trim()}`;
-    const kept = dedupedScenes.find(d => `${(d.location||'').trim()}|${(d.time||'').trim()}` === key);
-    if (kept) sceneDedupeIdMap.set(s.id, kept.id);
-  }
-
   // ---- 构建 ID → 导出数组下标 的映射（用于分镜 characters/scene_id/prop_ids 跨项目还原） ----
   const charIdToIndex = {};
   characters.forEach((c, idx) => { charIdToIndex[c.id] = idx; });
   const sceneIdToIndex = {};
-  dedupedScenes.forEach((s, idx) => { sceneIdToIndex[s.id] = idx; });
-  // 去重丢弃的重复场景 ID 也指向保留场景的下标
-  for (const [origId, keptId] of sceneDedupeIdMap.entries()) {
-    if (!(origId in sceneIdToIndex)) sceneIdToIndex[origId] = sceneIdToIndex[keptId];
-  }
+  scenes.forEach((s, idx) => { sceneIdToIndex[s.id] = idx; });
+  const episodeCast = db.prepare('SELECT character_id FROM episode_characters WHERE episode_id=? ORDER BY character_id');
   const propIdToIndex = {};
   props.forEach((p, idx) => { propIdToIndex[p.id] = idx; });
 
@@ -197,9 +170,43 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   // ---- 8. 组装 project.json ----
   // 收集 extra_images 需要打包的文件：{ localRelPath, zipPath }
   const extraFilesToPack = [];
+  // 旧分镜没有项目角色数组时，通过 storyboard_characters 引用素材库的独立 ID 空间。
+  const libraryCharacters = [];
+  const libraryIndex = new Map();
+  const libraryCast = new Map();
+  const staticBase = (cfg.storage?.base_url || '').replace(/\/$/, '');
+  const libraryRows = db.prepare(`SELECT DISTINCT sc.storyboard_id, c.* FROM storyboard_characters sc
+    JOIN character_libraries c ON c.id=sc.character_id
+    JOIN storyboards b ON b.id=sc.storyboard_id JOIN episodes e ON e.id=b.episode_id
+    WHERE e.drama_id=? AND (c.drama_id=e.drama_id OR c.drama_id IS NULL) AND c.deleted_at IS NULL
+      AND e.deleted_at IS NULL AND b.deleted_at IS NULL AND TRIM(COALESCE(b.characters,''))=''
+    ORDER BY c.id, sc.storyboard_id`).all(drama.id);
+  for (const row of libraryRows) {
+    if (!libraryIndex.has(row.id)) {
+      const entry = { name: row.name, appearance: row.appearance, description: row.description,
+        category: row.category, tags: row.tags, identity_anchors: row.identity_anchors,
+        style_tokens: row.style_tokens, color_palette: row.color_palette };
+      for (const [field, value] of [['image', row.local_path || row.image_url], ['four_view', row.four_view_image_url]]) {
+        if (!value) continue;
+        const relative = staticBase && value.startsWith(staticBase + '/') ? value.slice(staticBase.length + 1) : value.replace(/^\/static\//, '');
+        if (/^(https?:\/\/|data:image\/)/i.test(relative)) {
+          entry[field + '_url'] = value;
+        } else {
+          const local = localFile(storagePath, relative);
+          if (!local) throw new Error(`素材角色“${row.name}”的参考图缺失：${value}`);
+          entry[field + '_file'] = `media/characters/library_${row.id}_${field}${path.extname(local)}`;
+          zip.addFile(entry[field + '_file'], fs.readFileSync(local));
+        }
+      }
+      libraryIndex.set(row.id, libraryCharacters.push(entry) - 1);
+    }
+    if (!libraryCast.has(row.storyboard_id)) libraryCast.set(row.storyboard_id, []);
+    libraryCast.get(row.storyboard_id).push(libraryIndex.get(row.id));
+  }
 
   const zipData = {
     version: EXPORT_VERSION,
+    library_characters: libraryCharacters,
     exported_at: new Date().toISOString(),
     drama: {
       title: drama.title,
@@ -214,6 +221,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
       const sbs = storyboardsByEp[ep.id] || [];
       return {
         episode_number: ep.episode_number,
+        character_indices: episodeCast.all(ep.id).map(({ character_id }) => charIdToIndex[character_id]).filter(i => i !== undefined),
         title: ep.title,
         description: ep.description,
         script_content: ep.script_content,
@@ -232,7 +240,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
             : null;
 
           // characters: 存储角色在导出列表中的下标（而非原 ID），方便跨项目恢复
-          const charIds = parseSbChars(sb.characters);
+          const charIds = parseDramaCharacterIds(sb.characters) || [];
           const characterIndices = charIds
             .map(id => charIdToIndex[id])
             .filter(idx => idx !== undefined);
@@ -283,6 +291,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
             last_frame_image_url: sb.last_frame_image_url || null,
             last_frame_local_path: sb.last_frame_local_path || null,
             character_indices: characterIndices,
+            ...(libraryCast.has(sb.id) && { library_character_indices: libraryCast.get(sb.id) }),
             scene_index: sceneIndex,
             prop_indices: propIndices,
             image_file: sbImageFile,
@@ -327,13 +336,14 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         description: c.description,
         personality: c.personality,
         appearance: c.appearance,
+        stages: c.stages ?? null,
         voice_style: c.voice_style,
         polished_prompt: c.polished_prompt || null,
         image_file: c.local_path ? `media/characters/char_${c.id}${extOf(c.local_path)}` : null,
         extra_image_files: extraFiles,
       };
     }),
-    scenes: dedupedScenes.map(s => {
+    scenes: scenes.map(s => {
       const epIdx = episodeIds.indexOf(s.episode_id);
       const extras = parseExtraImages(s.extra_images);
       const extraFiles = extras.map((relPath, i) => {
@@ -408,7 +418,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   }
 
   // 场景主图
-  for (const s of dedupedScenes) {
+  for (const s of scenes) {
     if (s.local_path) {
       const abs = localPathToAbs(storagePath, s.local_path);
       const buf = safeReadFile(abs);
