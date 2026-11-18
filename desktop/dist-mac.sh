@@ -36,8 +36,7 @@ npx electron-builder --mac --config electron-builder-mac-lite.json
 echo ""
 echo "========== 全部构建完成 =========="
 echo "输出目录：release/"
-echo "  完整版（Intel）：LocalMiniDrama-x.x.x-mac-x64.dmg"
-echo "  完整版（ARM）  ：LocalMiniDrama-x.x.x-mac-arm64.dmg"
-echo "  纯净版（Intel）：LocalMiniDrama-Lite-x.x.x-mac-x64.dmg"
-echo "  纯净版（ARM）  ：LocalMiniDrama-Lite-x.x.x-mac-arm64.dmg"
+version=$(node -p "require('./package.json').version")
+build_number=$(node -p "require('./electron-builder-mac-version.json').buildVersion")
+ls -1 "release/"*"-${version}-build-${build_number}-mac-"*.dmg
 echo ""

@@ -53,6 +53,10 @@ test('project review follows the effective take and keeps historical notes reach
   assert.equal(s.current_take_id, null);
   assert.equal(s.needs_review, false);
   assert.deepEqual(s.history_reviews.map(old => old.id), [b]);
+  require('node:fs').unlinkSync(require('node:path').join(ws.storage, 'red.mp4'));
+  s = find(await overview(), target.id);
+  assert.equal(s.has_video, false);
+  assert.equal(s.video_state, 'missing');
 });
 
 test('keeps notes on the reviewed take after a reshoot', async t => {

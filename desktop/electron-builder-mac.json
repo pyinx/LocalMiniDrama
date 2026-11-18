@@ -1,4 +1,5 @@
 {
+  "extends": "./electron-builder-mac-version.json",
   "appId": "com.localminidrama.desktop",
   "productName": "LocalMiniDrama",
   "directories": {
@@ -41,6 +42,6 @@
   },
   "dmg": {
     "title": "${productName} ${version}",
-    "artifactName": "${productName}-${version}-mac-${arch}.dmg"
+    "artifactName": "${productName}-${version}-build-${buildVersion}-mac-${arch}.dmg"
   }
 }

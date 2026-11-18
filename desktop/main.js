@@ -115,13 +115,6 @@ function ensureFfmpeg(backendCwd) {
   const ffprobeName = isWin ? 'ffprobe.exe' : 'ffprobe';
 
   const destDir = path.join(backendCwd, 'tools', 'ffmpeg');
-  const destFfmpeg = path.join(destDir, ffmpegName);
-
-  // 已存在则跳过（支持用户手动替换）
-  if (fs.existsSync(destFfmpeg)) {
-    console.log('[ffmpeg] Already exists at', destFfmpeg);
-    return;
-  }
 
   const srcDir = path.join(process.resourcesPath, 'ffmpeg');
   const srcFfmpeg = path.join(srcDir, ffmpegName);
@@ -136,14 +129,13 @@ function ensureFfmpeg(backendCwd) {
 
   try {
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-    fs.copyFileSync(srcFfmpeg, destFfmpeg);
-    if (!isWin) fs.chmodSync(destFfmpeg, 0o755);
-
-    const srcFfprobe = path.join(srcDir, ffprobeName);
-    if (fs.existsSync(srcFfprobe)) {
-      const destFfprobe = path.join(destDir, ffprobeName);
-      fs.copyFileSync(srcFfprobe, destFfprobe);
-      if (!isWin) fs.chmodSync(destFfprobe, 0o755);
+    for (const name of [ffmpegName, ffprobeName]) {
+      const from = path.join(srcDir, name);
+      const to = path.join(destDir, name);
+      if (fs.existsSync(from) && !fs.existsSync(to)) {
+        fs.copyFileSync(from, to);
+        if (!isWin) fs.chmodSync(to, 0o755);
+      }
     }
     console.log('[ffmpeg] Auto-extracted to', destDir);
   } catch (e) {
