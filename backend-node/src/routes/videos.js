@@ -2,6 +2,7 @@ const response = require('../response');
 const videoService = require('../services/videoService');
 const taskService = require('../services/taskService');
 const { normalizeAspectRatioForApi } = require('../services/videoClient');
+const batch = require('../services/workbenchVideoBatch');
 
 function routes(db, log) {
   return {
@@ -70,9 +71,11 @@ function routes(db, log) {
             : null;
         const result = db.transaction(() => {
           if (operation) {
-            const planned = db.prepare('SELECT storyboard_id FROM video_batch_items WHERE operation_key=?').get(operation);
-            if (planned && planned.storyboard_id !== storyboardId) return { conflict: true };
-            const existing = db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(operation);
+            const planned = db.prepare(`SELECT b.*, e.drama_id FROM video_batch_items b
+              JOIN episodes e ON e.id=b.episode_id WHERE b.operation_key=?`).get(operation);
+            if (planned && (planned.storyboard_id !== storyboardId || planned.drama_id !== dramaId)) return { conflict: true };
+            const existing = planned ? batch.resolveBatchVideo(db, planned)
+              : db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(operation);
             if (existing) {
               if (existing.deleted_at || existing.drama_id !== dramaId || existing.storyboard_id !== storyboardId) return { conflict: true };
               if (!planned) {
@@ -149,7 +152,6 @@ function routes(db, log) {
       try {
         const ids = req.body?.storyboard_ids || [];
         if (!Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id) || id <= 0)) return response.badRequest(res, '分镜清单无效');
-        const batch = require('../services/workbenchVideoBatch');
         response.success(res, batch.openBatch(db, Number(req.params.episode_id), ids));
       } catch (err) {
         log.error('videos episode batch', { error: err.message });

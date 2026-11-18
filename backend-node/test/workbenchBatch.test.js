@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
 const { once } = require('node:events');
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const Database = require('better-sqlite3');
 const { runMigrationsAndEnsure } = require('../src/db/migrate');
@@ -11,7 +13,72 @@ const api = require('../src/services/videoClient');
 const video = require('../src/services/videoService');
 const tasks = require('../src/services/taskService');
 const drama = require('../src/services/dramaService');
+const { getFfmpegPath } = require('../src/utils/ffmpegPath');
+const { takeWorkspace } = require('./helpers/workbenchTakes');
 const log = { info() {}, warn() {}, error() {} };
+
+test('a waiting batch reuses later manual takes at submission and on reopen', async t => {
+  const ws = await takeWorkspace(t);
+  const episode = ws.episodes[0].id;
+  const [running, uncertain] = ws.shots;
+  const finished = await ws.request('POST', '/storyboards', { episode_id: episode, storyboard_number: 3, duration: 1 });
+  const post = (board, key) => ws.request('POST', '/videos', {
+    drama_id: ws.id, storyboard_id: board.id, operation_key: key, prompt: '同一镜头',
+  });
+  const batch = ids => ws.request('POST', '/videos/episode/' + episode + '/batch', { storyboard_ids: ids });
+  const slots = await batch([running.id, uncertain.id, finished.id]);
+  assert.ok(slots.every(item => item.status === 'waiting'));
+
+  const attempts = new Map();
+  const supplier = http.createServer((req, res) => {
+    const id = Number(req.url.slice(1));
+    attempts.set(id, (attempts.get(id) || 0) + 1);
+    res.end('accepted');
+  });
+  supplier.listen(0, '127.0.0.1');
+  await once(supplier, 'listening');
+  t.after(() => new Promise(resolve => supplier.close(resolve)));
+  let release;
+  const hold = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  execFileSync(getFfmpegPath(), ['-loglevel', 'error', '-f', 'lavfi', '-i', 'color=green:s=64x64:r=2:d=1',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(ws.storage, 'done.mp4')]);
+  t.mock.method(require('../src/config'), 'loadConfig', () => ws.cfg);
+  t.mock.method(api, 'getDefaultVideoConfig', () => ({ provider: 'test' }));
+  t.mock.method(api, 'callVideoApi', async (_db, _log, body) => {
+    await (await fetch('http://127.0.0.1:' + supplier.address().port + '/' + body.storyboard_id, { method: 'POST' })).text();
+    if (body.storyboard_id === running.id) await hold;
+    return body.storyboard_id === uncertain.id ? { error: '接单后请求超时' } : { video_url: ws.cfg.storage.base_url + '/done.mp4' };
+  });
+  async function waitStatus(id, status) {
+    for (let n = 0; n < 500 && video.getById(ws.db, id).status !== status; n++) await delay(10);
+    assert.equal(video.getById(ws.db, id).status, status);
+  }
+  const [one, two, three] = await Promise.all([
+    post(running, 'manual-one'), post(uncertain, 'manual-two'), post(finished, 'manual-three'),
+  ]);
+  await Promise.all([waitStatus(two.id, 'failed'), waitStatus(three.id, 'completed')]);
+  // Both windows still hold waiting snapshots. No call to openBatch refreshes them before POST.
+  const repeats = await Promise.all([
+    post(running, slots[0].operation_key), post(running, slots[0].operation_key), post(uncertain, slots[1].operation_key),
+  ]);
+  assert.deepEqual(repeats.map(v => [v.id, v.task_id]), [[one.id, one.task_id], [one.id, one.task_id], [two.id, two.task_id]]);
+  assert.equal(repeats[2].dispatch_state, 'unknown');
+  const reopened = await batch([]);
+  assert.deepEqual(reopened.map(v => v.video_id), [one.id,two.id,three.id]);
+  assert.deepEqual(reopened.map(v => v.operation_key), slots.map(v => v.operation_key));
+  assert.deepEqual(reopened.map(v => v.status), ['processing','failed','completed']);
+  assert.equal((await post(finished,slots[2].operation_key)).id, three.id);
+  assert.equal((await post(finished,'manual-three')).id, three.id);
+  assert.equal(ws.db.prepare('SELECT COUNT(*) n FROM video_generations').get().n, 3);
+  assert.deepEqual([running,uncertain,finished].map(b => attempts.get(b.id)), [1,1,1]);
+  const reshoot = await post(uncertain, 'manual-explicit-reshoot');
+  await waitStatus(reshoot.id,'failed');
+  assert.notEqual(reshoot.id, two.id);
+  assert.equal(attempts.get(uncertain.id), 2);
+  release();
+  await waitStatus(one.id, 'completed');
+});
 
 test('recovers without repeating uncertain dispatches', async t => {
   const db = new Database(':memory:');

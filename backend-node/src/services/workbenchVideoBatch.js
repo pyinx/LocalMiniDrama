@@ -1,29 +1,52 @@
 const { randomUUID } = require('node:crypto');
+const { publicMedia } = require('./workbenchTakeService');
+
+// Call inside the transaction that reads or dispatches the batch slot. The batch key
+// and a manual request's key are independently retriable even when they share a take.
+function resolveBatchVideo(db, slot) {
+  const bound = slot.reused_video_id != null
+    ? db.prepare('SELECT * FROM video_generations WHERE id=?').get(slot.reused_video_id)
+    : db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(slot.operation_key);
+  if (bound) return bound;
+  const candidates = db.prepare(`SELECT * FROM video_generations WHERE storyboard_id=? AND drama_id=? AND deleted_at IS NULL
+    AND (status IN ('pending','processing','completed') OR dispatch_state='unknown' OR TRIM(provider_task_id)!='')
+    ORDER BY id DESC`).all(slot.storyboard_id, slot.drama_id);
+  const existing = candidates.find(v => v.status !== 'completed' || publicMedia(v));
+  if (existing) db.prepare('UPDATE video_batch_items SET reused_video_id=? WHERE operation_key=?').run(existing.id, slot.operation_key);
+  return existing;
+}
 
 // A batch fills missing clips. A deliberate reshoot creates its own operation.
 function openBatch(db, episodeId, storyboardIds) {
-  const ep = db.prepare('SELECT id FROM episodes WHERE id=? AND deleted_at IS NULL').get(episodeId);
+  const ep = db.prepare('SELECT id, drama_id FROM episodes WHERE id=? AND deleted_at IS NULL').get(episodeId);
   if (!ep) throw new Error('剧集不存在');
   return db.transaction(() => {
     const board = db.prepare('SELECT id FROM storyboards WHERE id=? AND episode_id=? AND deleted_at IS NULL');
     const insert = db.prepare('INSERT OR IGNORE INTO video_batch_items(episode_id,storyboard_id,operation_key) VALUES(?,?,?)');
-    for (const id of new Set(storyboardIds)) {
+    const requested = new Set(storyboardIds);
+    for (const id of requested) {
       if (!board.get(id, episodeId)) throw new Error('批次分镜不属于本集');
-      const existing = db.prepare("SELECT * FROM video_generations WHERE storyboard_id=? AND deleted_at IS NULL AND (status IN ('processing','completed') OR dispatch_state='unknown' OR provider_task_id IS NOT NULL) ORDER BY id DESC LIMIT 1").get(id);
-      const key = existing?.operation_key || randomUUID();
-      if (existing && !existing.operation_key) db.prepare('UPDATE video_generations SET operation_key=? WHERE id=?').run(key, existing.id);
-      insert.run(episodeId, id, key);
-      // 已经发出的操作保留原标识。领取前取消的项在作者继续此批次时重新排队。
-      db.prepare(`UPDATE video_batch_items SET operation_key=? WHERE episode_id=? AND storyboard_id=? AND
-        EXISTS (SELECT 1 FROM video_generations v WHERE v.operation_key=video_batch_items.operation_key AND v.dispatch_state='cancelled_before_dispatch')`)
-        .run(key, episodeId, id);
+      insert.run(episodeId, id, randomUUID());
     }
-    return db.prepare(`SELECT b.storyboard_id, b.operation_key, v.id AS video_id, v.task_id,
-        COALESCE(v.status,'waiting') AS status, v.dispatch_state, v.error_msg, s.storyboard_number
+    const slots = db.prepare(`SELECT b.*, s.storyboard_number
       FROM video_batch_items b JOIN storyboards s ON s.id=b.storyboard_id AND s.deleted_at IS NULL
-      LEFT JOIN video_generations v ON v.operation_key=b.operation_key
       WHERE b.episode_id=? ORDER BY s.storyboard_number, s.id`).all(episodeId);
+    return slots.map(slot => {
+      slot.drama_id = ep.drama_id;
+      let video = resolveBatchVideo(db, slot);
+      if (requested.has(slot.storyboard_id) && video?.dispatch_state === 'cancelled_before_dispatch') {
+        const key = slot.operation_key === video.operation_key ? randomUUID() : slot.operation_key;
+        db.prepare('UPDATE video_batch_items SET operation_key=?,reused_video_id=NULL WHERE operation_key=?').run(key, slot.operation_key);
+        slot.operation_key = key;
+        slot.reused_video_id = null;
+        video = resolveBatchVideo(db, slot);
+      }
+      return { storyboard_id: slot.storyboard_id, storyboard_number: slot.storyboard_number,
+        operation_key: slot.operation_key, video_id: video?.id ?? null, task_id: video?.task_id ?? null,
+        status: video?.deleted_at ? 'failed' : video?.status || 'waiting', dispatch_state: video?.dispatch_state ?? null,
+        error_msg: video?.deleted_at ? '关联视频已删除，请核查后手动重拍' : video?.error_msg ?? null };
+    });
   }).immediate();
 }
 
-module.exports = { openBatch };
+module.exports = { openBatch, resolveBatchVideo };
