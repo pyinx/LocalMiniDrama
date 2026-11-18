@@ -891,6 +891,7 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
 
     // 提前删除旧分镜，为增量流式保存腾出位置
     const deleteNow = new Date().toISOString();
+    require('./workbenchContinuity').checkEpisodeReplacement(db, episodeIdNum);
     db.prepare('UPDATE storyboards SET deleted_at = ? WHERE episode_id = ? AND deleted_at IS NULL').run(deleteNow, episodeIdNum);
 
     // 不使用 json_mode：response_format:json_object 要求返回 JSON 对象而非数组，会导致模型包装成
@@ -1131,6 +1132,7 @@ function generateStoryboard(db, log, episodeId, model, style, storyboardCount, v
   if (!episode) {
     throw new Error('剧集不存在或无权限访问');
   }
+  require('./workbenchContinuity').checkEpisodeReplacement(db, episodeId);
 
   // 获取剧集风格和比例（如果未指定，则从 drama metadata / style 中获取完整提示词）
   const drama = db.prepare('SELECT style, metadata FROM dramas WHERE id = ?').get(episode.drama_id);
@@ -1263,6 +1265,7 @@ function generateStoryboard(db, log, episodeId, model, style, storyboardCount, v
     userPrompt += promptI18n.getStoryboardNarrationExtraInstructions(cfg);
   }
 
+  userPrompt = require('./workbenchCreativeMethods').withCreativeGuidance(db, userPrompt, episode.drama_id, 'storyboard');
   let systemPrompt = promptI18n.getStoryboardSystemPrompt(cfg);
 
   // 当用户指定了分镜数量时，在系统提示词后追加最高优先级覆盖指令，

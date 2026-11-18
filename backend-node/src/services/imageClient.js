@@ -1455,7 +1455,7 @@ async function callGeminiImageApi(db, config, log, opts) {
  */
 async function callImageApi(db, log, opts) {
   const {
-    prompt,
+    prompt: sourcePrompt,
     model: preferredModel,
     size,
     quality,
@@ -1471,6 +1471,8 @@ async function callImageApi(db, log, opts) {
     system_prompt,
     user_negative_prompt,
   } = opts;
+  const assetTask = opts.storyboard_id ? 'frame' : opts.character_id ? 'character' : opts.scene_id ? 'scene' : opts.prop_id ? 'prop' : null;
+  const prompt = require('./workbenchCreativeMethods').withCreativeGuidance(db, sourcePrompt, drama_id, assetTask, opts.storyboard_id);
   const preferredProvider = preferred_provider ?? opts.preferredProvider;
   const config = getDefaultImageConfig(db, preferredModel, preferredProvider, imageServiceType);
   if (!config) {
@@ -1751,6 +1753,7 @@ function createAndGenerateImage(db, log, opts) {
         quality,
         drama_id: drama_id,
         character_id: character_id,
+        scene_id,
         image_type,
         image_gen_id: imageGenId,
         user_negative_prompt: user_negative_prompt || undefined,

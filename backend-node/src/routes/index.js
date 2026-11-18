@@ -52,6 +52,17 @@ function setupRouter(cfg, db, log) {
   r.get('/dramas', drama.listDramas);
   r.post('/dramas', drama.createDrama);
   r.get('/dramas/stats', drama.getDramaStats);
+  const workbench = require('../services/workbenchContinuity');
+  const reviewRoute = fn => (req, res, next) => {
+    try { response.success(res, fn(req) || {}); }
+    catch (err) {
+      if (err.status) return response.error(res, err.status, 'creative_review', err.message);
+      next(err);
+    }
+  };
+  r.get('/dramas/:id/creative-review', reviewRoute(req => workbench.readWorkbench(db, req.params.id)));
+  r.put('/dramas/:id/creative-direction', reviewRoute(req => workbench.updateDirection(db, req.params.id, req.body || {})));
+  r.put('/dramas/:id/creative-review/:shot', reviewRoute(req => workbench.reviewShot(db, req.params.id, req.params.shot, req.body || {})));
   // 导出/导入（放在 :id 路由前，避免被 :id 捕获）
   r.get('/dramas/:id/export', drama.exportDrama);
   const multer = require('multer');

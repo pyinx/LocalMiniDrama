@@ -170,6 +170,7 @@ function ensureAllColumns(database) {
     { name: 'depth_of_field',    type: 'TEXT' },               // 景深（shallow/medium/deep/extreme_shallow）
     { name: 'polished_prompt',        type: 'TEXT' },               // 文字AI润色后的图片生成提示词（可编辑，生图时优先使用）
     { name: 'continuity_snapshot',   type: 'TEXT' },               // JSON: 连戏状态快照 {characters:{name:{position,clothing,expression,props}},lighting}
+    { name: 'creative_review_lock',  type: 'TEXT' },               // 人工锁定的对白、外观描述及镜头方法
     { name: 'audio_local_path',      type: 'TEXT' },               // 对白 TTS 本地路径
     { name: 'narration_audio_local_path', type: 'TEXT' },         // 解说旁白 TTS 本地路径
     { name: 'creation_mode',     type: 'TEXT DEFAULT \'classic\'' }, // classic | universal

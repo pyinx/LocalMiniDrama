@@ -262,6 +262,7 @@ function insertBeforeStoryboard(db, log, targetId) {
 }
 
 module.exports = {
+  parseDramaCharacterIds,
   createStoryboard,
   insertBeforeStoryboard,
   updateStoryboard,

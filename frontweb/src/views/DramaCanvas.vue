@@ -30,6 +30,7 @@
         <span v-else-if="layoutSaveState === 'error'" class="layout-status error">保存失败</span>
 
         <div class="header-actions">
+          <CreativeReviewPanel :drama-id="dramaId" :current-episode-id="filterEpisodeId" />
           <el-button size="small" type="warning" plain @click="focusScriptNode">
             剧本
           </el-button>
@@ -259,6 +260,7 @@
 </template>
 
 <script setup>
+import CreativeReviewPanel from '@/components/CreativeReviewPanel.vue'
 import { computed, markRaw, nextTick, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { useAgentContext } from '@/stores/agentContext'
 import { useRoute, useRouter } from 'vue-router'

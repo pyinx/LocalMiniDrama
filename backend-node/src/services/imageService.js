@@ -1365,6 +1365,8 @@ async function processImageGeneration(db, log, imageGenId) {
 
     const result = await imageClient.callImageApi(db, log, {
       prompt: finalPrompt,
+      storyboard_id: row.storyboard_id,
+      scene_id: row.scene_id,
       model: row.model,
       size: imageSize,
       quality: row.quality,

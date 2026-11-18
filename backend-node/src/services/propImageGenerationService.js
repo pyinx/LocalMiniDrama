@@ -69,6 +69,7 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
   try {
     result = await imageClient.callImageApi(db, log, {
       prompt: fullPrompt,
+      prop_id: prop.id,
       size: imageSize,
       drama_id: prop.drama_id,
       model: model || undefined,

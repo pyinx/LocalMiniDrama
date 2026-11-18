@@ -35,6 +35,11 @@ function routes(db, log) {
             prompt = prompt ? `${prompt}. Style: ${style}` : `Style: ${style}`;
           }
         }
+        // The optional method only applies to project storyboards. Free creation keeps its own text.
+        if (storyboardId) {
+          prompt = require('../services/workbenchCreativeMethods').withCreativeGuidance(db, prompt, dramaId, 'video', storyboardId);
+        }
+        const task = taskService.createTask(db, log, 'video_generation', String(body.drama_id || ''));
         const model = body.model ?? null;
         const duration = body.duration ?? null;
         // 画幅：请求体归一化（全角冒号等）后写入 DB；未传则从 drama.metadata 读取并同样归一化

@@ -1,5 +1,6 @@
 import { createRequire } from 'module';
 import { assertOwned, resolveEpisode } from './context.mjs';
+import methods from '../services/workbenchCreativeMethods.js';
 
 function fail(error) {
   return { ok: false, error };
@@ -28,6 +29,7 @@ export function executeGetCurrentProject(db, dramaId, episodeId) {
   const drama = dramaRow(db, dramaId);
   if (!drama) return fail('项目不存在');
   const episodes = listEpisodes(db, dramaId);
+  const direction = methods.directionOf(drama);
   let resolvedId = null;
   let episodeSpecified = false;
   if (episodeId != null && episodeId !== '') {
@@ -58,7 +60,7 @@ export function executeGetCurrentProject(db, dramaId, episodeId) {
     // image_generations 记录（四宫格等不写回 storyboards）。不能用 storyboards.local_path，
     // 视频管线会把同一个字段写成视频路径。
     storyboards = db.prepare(
-      `SELECT s.id, s.storyboard_number, s.description, s.image_prompt, s.image_url,
+      `SELECT s.*,
               EXISTS (
                 SELECT 1 FROM image_generations ig
                 WHERE ig.storyboard_id = s.id
@@ -73,6 +75,10 @@ export function executeGetCurrentProject(db, dramaId, episodeId) {
       id: row.id,
       number: row.storyboard_number,
       summary: clip(row.description || row.image_prompt || '', 200),
+      ...(direction.enabled ? {
+        method: methods.scenarioFor(row, methods.readLock(row.creative_review_lock).method),
+        checks: methods.creativeGuidance(drama, 'video', row).checks,
+      } : {}),
       hasImage: Boolean(String(row.image_url || '').trim()) || Boolean(row.has_generated_image),
     }));
   }
@@ -103,6 +109,8 @@ export function executeGetCurrentProject(db, dramaId, episodeId) {
       title: drama.title,
       style: drama.style,
       aspectRatio,
+      creativeDirection: direction,
+      creativeMethods: methods.creativeGuidance(drama, 'storyboard'),
       episodes: episodes.map((ep) => ({ id: ep.id, number: ep.episode_number, title: ep.title })),
       episodeSpecified,
       script,
@@ -235,7 +243,12 @@ function runTask(fn) {
 }
 
 export function executeGenerateStory(db, log, dramaId, deps) {
-  return runTask(() => taskResult(deps.startStoryGeneration(db, log, { drama_id: Number(dramaId) }), '已开始生成剧本'));
+  const drama = dramaRow(db, dramaId);
+  if (!drama?.description?.trim()) return fail('请先保存本剧的故事梗概');
+  const episodeCount = listEpisodes(db, dramaId).length || 1;
+  return runTask(() => taskResult(deps.startStoryGeneration(db, log, {
+    drama_id: Number(dramaId), premise: drama.description, style: drama.style, episode_count: episodeCount,
+  }), '已开始生成剧本'));
 }
 
 export function executeGenerateCharacters(db, cfg, log, dramaId, episodeId, deps) {

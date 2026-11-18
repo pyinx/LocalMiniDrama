@@ -35,6 +35,7 @@
           画布模式
         </el-button>
         <div class="header-actions">
+          <CreativeReviewPanel ref="creativeReviewPanel" :drama-id="dramaId" :current-episode-id="currentEpisodeId" />
           <el-button class="btn-theme" :title="isDark ? '切换到浅色模式' : '切换到暗色模式'" @click="toggleTheme">
             <el-icon><Sunny v-if="isDark" /><Moon v-else /></el-icon>
             {{ isDark ? '浅色' : '暗色' }}
@@ -1016,6 +1017,7 @@
           <div :id="'sb-' + sb.id" class="storyboard-row">
             <!-- 左：分镜脚本 -->
             <div class="sb-panel sb-script">
+              <el-button size="small" text @click="creativeReviewPanel?.openAt(sb.id)">复核本镜</el-button>
               <div class="sb-script-row sb-script-selects">
                 <el-select
                   :model-value="getSbCharacterIds(sb.id)"
@@ -2612,7 +2614,9 @@
 
 <script setup>
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
+import CreativeReviewPanel from '@/components/CreativeReviewPanel.vue'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
+const creativeReviewPanel = ref(null)
 import { useAgentContext } from '@/stores/agentContext'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'

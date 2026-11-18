@@ -17,7 +17,8 @@ async function generateStory(db, log, body) {
   const episodeCount = Math.max(1, Math.floor(Number(body.episode_count) || 1));
 
   const systemPrompt = promptI18n.getStoryExpansionSystemPrompt(cfg, episodeCount);
-  const userPrompt = promptI18n.buildStoryExpansionUserPrompt(cfg, premise, style, type, episodeCount);
+  const userPrompt = require('./workbenchCreativeMethods').withCreativeGuidance(db,
+    promptI18n.buildStoryExpansionUserPrompt(cfg, premise, style, type, episodeCount), body.drama_id, 'story');
 
   // 每集约 800 字（中文）≈ 1600 token，多留余量作为最低需求；
   // 不使用 max_tokens 硬上限，而是用 min_max_tokens 确保即使用户 AI 配置了小上限也能保证基本输出量。

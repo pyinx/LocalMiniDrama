@@ -277,6 +277,7 @@ function generateStoryboard(db, log) {
       response.success(res, resData);
     } catch (err) {
       log.error('Generate storyboard failed', { error: err.message });
+      if (err.status === 409) return response.error(res, 409, 'storyboard_locked', err.message);
       response.internalError(res, err.message || '生成分镜失败');
     }
   };

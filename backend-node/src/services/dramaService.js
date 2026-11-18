@@ -407,6 +407,7 @@ function rowToCharacter(r) {
     role: r.role,
     description: r.description,
     appearance: r.appearance,
+    stages: r.stages ?? null,
     personality: r.personality,
     voice_style: r.voice_style,
     image_url: sanitizeImageUrl(r.image_url),
@@ -484,11 +485,14 @@ function saveOutline(db, log, dramaId, req) {
   let newMetadata = {};
   if (req.metadata) {
     try {
-      newMetadata = typeof req.metadata === 'string' ? JSON.parse(req.metadata) : req.metadata;
+      newMetadata = { ...(typeof req.metadata === 'string' ? JSON.parse(req.metadata) : req.metadata) };
     } catch (e) {
       newMetadata = {};
     }
   }
+  // Project direction has its own optimistic update contract. Old outline forms
+  // can submit cached metadata, including an earlier review revision.
+  delete newMetadata.creative_direction;
   const mergedMetadata = { ...existingMetadata, ...newMetadata };
 
   // 与 mergeCfgStyleWithDrama 一致：提示词优先读 metadata.style_prompt_*。仅改 dramas.style 而不带画风长文案时，
@@ -832,6 +836,7 @@ function downloadEpisodeVideo(db, episodeId) {
 }
 
 module.exports = {
+  getVideoUrlForStoryboard,
   createDrama,
   getDrama,
   getDramaById,
