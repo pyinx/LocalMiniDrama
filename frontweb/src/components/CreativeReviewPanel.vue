@@ -25,20 +25,21 @@
             <tbody><tr v-for="ep in data.episodes" :key="ep.id">
               <td><el-button link @click="episodeId = ep.id">第 {{ ep.number }} 集 · {{ ep.title }}</el-button></td>
               <td>{{ ep.shots.filter(s => s.has_video).length }} / {{ ep.shots.length }}</td>
-              <td>{{ ep.shots.filter(s => s.changes.length).length }} 镜</td>
+              <td>{{ pendingShots(ep) || '无' }}</td>
               <td>{{ missing(ep) }}</td>
             </tr></tbody>
           </table>
           <template v-else>
-            <p>{{ missing(episode) }} · {{ episode.shots.filter(s => s.changes.length).length }} 镜待复核</p>
+            <p>{{ missing(episode) }} · 待复核：{{ pendingShots(episode) || '无' }}</p>
             <label v-if="episode.shots.length" class="field">查看镜头
               <select v-model="shotId"><option :value="null">选择分镜</option>
-                <option v-for="s in episode.shots" :key="s.id" :value="s.id">镜 {{ s.number }} · {{ s.title || '未命名' }}{{ s.changes.length ? ' · 待复核' : '' }}{{ !s.has_video ? ' · 缺视频' : '' }}</option>
+                <option v-for="s in episode.shots" :key="s.id" :value="s.id">镜 {{ s.number }} · {{ s.title || '未命名' }}{{ s.needs_review ? ' · 待复核' : '' }}{{ !s.has_video ? ' · 缺视频' : '' }}</option>
               </select>
             </label>
           </template>
           <article v-if="shot">
             <p>{{ shot.adopted_id ? (shot.has_video ? '当前采用 #' : '采用视频失效，请重选 #') + shot.adopted_id : shot.has_video ? '沿用旧镜视频' : '缺视频' }}</p>
+            <MediaReviewNotes :key="shot.id" :current="shot.current_review" :history="shot.history_reviews" />
             <template v-if="data.direction.enabled">
               <label class="field">本镜创作方法
                 <select :value="shot.lock.method || 'auto'" :disabled="saving" @change="saveShot({action:'method', method:$event.target.value})">
@@ -68,6 +69,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import request from '@/utils/request'
+import MediaReviewNotes from './MediaReviewNotes.vue'
 
 const props = defineProps({ dramaId: [Number, String], currentEpisodeId: [Number, String] })
 const opened = ref(false)
@@ -86,6 +88,10 @@ const url = () => '/dramas/' + props.dramaId
 let generation = 0
 
 function format(value) { return (Array.isArray(value) ? value.join('\n') : value) || '无' }
+function pendingShots(ep) {
+  const numbers = ep.shots.filter(s => s.needs_review).map(s => s.number)
+  return numbers.length ? '镜 ' + numbers.join('、') : ''
+}
 function missing(ep) {
   const items = []
   if (!ep.has_script) items.push('缺剧本')

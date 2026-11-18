@@ -3,6 +3,7 @@
 const { createHash } = require('node:crypto');
 const { parseDramaMetadata } = require('../utils/dramaStyleMerge');
 const { catalog, creativeGuidance, directionOf, characterIds, scenarioFor, readLock } = require('./workbenchCreativeMethods');
+const { resolveTake, publicMedia } = require('./workbenchTakeService');
 
 function failure(status, message) { return Object.assign(new Error(message), { status }); }
 
@@ -107,9 +108,31 @@ function describeShot(shot, drama, assets) {
   };
 }
 
+function openMediaReviews(db, dramaId) {
+  const byShot = new Map();
+  const rows = db.prepare(`SELECT v.id AS take_id, v.storyboard_id, v.local_path, v.video_url,
+      r.id, r.time_ms, r.note, r.action
+    FROM video_take_reviews r JOIN video_generations v ON v.id = r.video_generation_id
+    JOIN storyboards s ON s.id = v.storyboard_id JOIN episodes e ON e.id = s.episode_id
+    WHERE e.drama_id = ? AND v.drama_id = e.drama_id AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+      AND v.deleted_at IS NULL AND v.status = 'completed' AND r.status = 'open'
+    ORDER BY v.id DESC, r.time_ms, r.id`).all(dramaId);
+  for (const row of rows) {
+    if (!byShot.has(row.storyboard_id)) byShot.set(row.storyboard_id, new Map());
+    const takes = byShot.get(row.storyboard_id);
+    if (!takes.has(row.take_id)) {
+      const media = publicMedia({ ...row, id: row.take_id });
+      takes.set(row.take_id, { id: row.take_id, media, notes: [] });
+    }
+    takes.get(row.take_id).notes.push({ id: row.id, time_ms: row.time_ms, note: row.note, action: row.action });
+  }
+  return byShot;
+}
+
 function readWorkbench(db, id) {
   const drama = project(db, id);
   const assets = projectAssets(db, drama.id);
+  const reviews = openMediaReviews(db, drama.id);
   const episodes = db.prepare(`SELECT id, episode_number AS number, title, TRIM(COALESCE(script_content, '')) != '' AS has_script
     FROM episodes WHERE drama_id = ? AND deleted_at IS NULL ORDER BY episode_number, id`).all(drama.id);
   const byEpisode = new Map(episodes.map(e => [e.id, Object.assign(e, { shots: [] })]));
@@ -117,9 +140,14 @@ function readWorkbench(db, id) {
     WHERE e.drama_id = ? AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY e.episode_number, s.storyboard_number, s.id`).all(drama.id);
   for (const shot of shots) {
     const item = describeShot(shot, drama, assets);
-    const currentVideo = require('./dramaService').getVideoUrlForStoryboard(db, shot.id, '/static');
-    item.has_video = Boolean(currentVideo) && !/\.(png|jpe?g|webp|avif|gif)(?:[?#]|$)/i.test(currentVideo);
+    const current = resolveTake(db, shot);
+    item.has_video = Boolean(current);
+    item.current_take_id = current?.id ?? null;
     item.adopted_id = shot.adopted_video_generation_id ?? null;
+    const notes = reviews.get(shot.id);
+    item.current_review = notes?.get(item.current_take_id) ?? null;
+    item.history_reviews = notes ? [...notes.values()].filter(take => take.id !== item.current_take_id) : [];
+    item.needs_review = item.changes.length > 0 || Boolean(item.current_review);
     byEpisode.get(shot.episode_id).shots.push(item);
   }
   return {
