@@ -25,6 +25,7 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC | Criterion | Evidence | Source | Command | Result | Rev | At |
 |---|---|---|---|---|---|---|---|
 | AC1 | test:one | record 003 | cli | `node --test 'backend-node/test/workbench/multiProject.test.js'` | pass | 16a32d4+f667a32fcf9fc354 | 2026-11-18T12:19:36Z |
+| AC1 | test:one | record 004 | cli | `node --test 'backend-node/test/workbench/multiProject.test.js'` | pass | cf8e72b+40a0265b327b8e93 | 2026-11-18T12:20:34Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review

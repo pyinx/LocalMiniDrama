@@ -118,64 +118,70 @@ async function verifyCut(ws, ep, size, colorOrder) {
   }
 }
 
-for (const project of projects) {
-  test(project.title + ' preserves two episode cuts across archive import', async t => {
-    const source = await openWorkbench(t);
-    const dest = await openWorkbench(t);
-    const storageConfig = t.mock.method(config, 'loadConfig', () => source.cfg);
-    const drama = await source.request('POST', '/dramas', { title: project.title, style: project.style });
-    const scripts = await scriptsFromSource(t, source, project);
-    assert.deepEqual(scripts.map(ep => [ep.title, ep.script_content]), project.episodes);
-    await source.request('PUT', '/dramas/' + drama.id + '/episodes', { episodes: scripts });
-    const draft = await source.request('GET', '/dramas/' + drama.id);
-    const characterPath = '/dramas/' + drama.id + '/characters';
-    const reference = execFileSync(getFfmpegPath(), ['-loglevel', 'error', '-f', 'lavfi', '-i',
-      'testsrc=size=48x48', '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', 'pipe:1']);
-    fs.writeFileSync(path.join(source.storage, 'lead.png'), reference);
-    for (const ep of draft.episodes) {
-      await source.request('PUT', characterPath, {
-        episode_id: ep.id, characters: [{ name: project.lead, local_path: 'lead.png' }],
+async function verifyProjectLifecycle(t, project) {
+  const source = await openWorkbench(t);
+  const dest = await openWorkbench(t);
+  const storageConfig = t.mock.method(config, 'loadConfig', () => source.cfg);
+  const drama = await source.request('POST', '/dramas', { title: project.title, style: project.style });
+  const scripts = await scriptsFromSource(t, source, project);
+  assert.deepEqual(scripts.map(ep => [ep.title, ep.script_content]), project.episodes);
+  await source.request('PUT', '/dramas/' + drama.id + '/episodes', { episodes: scripts });
+  const draft = await source.request('GET', '/dramas/' + drama.id);
+  const characterPath = '/dramas/' + drama.id + '/characters';
+  const reference = execFileSync(getFfmpegPath(), ['-loglevel', 'error', '-f', 'lavfi', '-i',
+    'testsrc=size=48x48', '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', 'pipe:1']);
+  fs.writeFileSync(path.join(source.storage, 'lead.png'), reference);
+  for (const ep of draft.episodes) {
+    await source.request('PUT', characterPath, {
+      episode_id: ep.id, characters: [{ name: project.lead, local_path: 'lead.png' }],
+    });
+  }
+  const cast = await source.request('GET', characterPath);
+  assert.equal(cast.length, 1, 'both episodes share the same character');
+  const orders = [['red', 'blue'], ['blue', 'red']];
+  const originalShotIds = [];
+  for (const [i, ep] of draft.episodes.entries()) {
+    for (const [j, color] of orders[i].entries()) {
+      const shot = await source.request('POST', '/storyboards', {
+        episode_id: ep.id, storyboard_number: j + 1, title: ep.title + ' 镜' + (j + 1), duration: 1,
       });
+      originalShotIds.push(shot.id);
+      await source.request('PUT', '/storyboards/' + shot.id, { character_ids: [cast[0].id] });
+      addRenderedClip(source, drama.id, shot.id, project.size, color);
     }
-    const cast = await source.request('GET', characterPath);
-    assert.equal(cast.length, 1, 'both episodes share the same character');
-    const orders = [['red', 'blue'], ['blue', 'red']];
-    const originalShotIds = [];
-    for (const [i, ep] of draft.episodes.entries()) {
-      for (const [j, color] of orders[i].entries()) {
-        const shot = await source.request('POST', '/storyboards', {
-          episode_id: ep.id, storyboard_number: j + 1, title: ep.title + ' 镜' + (j + 1), duration: 1,
-        });
-        originalShotIds.push(shot.id);
-        await source.request('PUT', '/storyboards/' + shot.id, { character_ids: [cast[0].id] });
-        addRenderedClip(source, drama.id, shot.id, project.size, color);
-      }
-      await verifyCut(source, ep, project.size, orders[i]);
-    }
-    const exported = await fetch(source.url('/dramas/' + drama.id + '/export'));
-    assert.equal(exported.status, 200);
-    const form = new FormData();
-    form.append('file', await exported.blob(), 'project.zip');
-    // Occupy IDs in the other database to make stale source IDs observable.
-    await dest.request('POST', '/dramas/import', form);
-    const restored = await dest.request('POST', '/dramas/import', form);
-    const reopened = await dest.request('GET', '/dramas/' + restored.drama_id);
-    assert.notEqual(reopened.id, drama.id);
-    assert.equal(reopened.style, project.style);
-    assert.equal(reopened.characters.length, 1);
-    const lead = reopened.characters[0];
-    assert.equal(lead.name, project.lead);
-    assert.notEqual(lead.id, cast[0].id);
-    assert.deepEqual(fs.readFileSync(path.join(dest.storage, lead.local_path)), reference);
-    assert.deepEqual(reopened.episodes.map(ep => [ep.title, ep.script_content]), project.episodes);
-    storageConfig.mock.mockImplementation(() => dest.cfg);
-    for (const [i, ep] of reopened.episodes.entries()) {
-      assert.notEqual(ep.id, draft.episodes[i].id);
-      assert.deepEqual(ep.storyboards.map(shot => shot.storyboard_number), [1, 2]);
-      assert.deepEqual(ep.characters.map(actor => actor.id), [lead.id]);
-      for (const shot of ep.storyboards) assert.deepEqual(shot.characters, [lead.id]);
-      assert.ok(ep.storyboards.every(shot => !originalShotIds.includes(shot.id)));
-      await verifyCut(dest, ep, project.size, orders[i]);
-    }
-  });
+    await verifyCut(source, ep, project.size, orders[i]);
+  }
+  const exported = await fetch(source.url('/dramas/' + drama.id + '/export'));
+  assert.equal(exported.status, 200);
+  const form = new FormData();
+  form.append('file', await exported.blob(), 'project.zip');
+  // Occupy IDs in the other database to make stale source IDs observable.
+  await dest.request('POST', '/dramas/import', form);
+  const restored = await dest.request('POST', '/dramas/import', form);
+  const reopened = await dest.request('GET', '/dramas/' + restored.drama_id);
+  assert.notEqual(reopened.id, drama.id);
+  assert.equal(reopened.style, project.style);
+  assert.equal(reopened.characters.length, 1);
+  const lead = reopened.characters[0];
+  assert.equal(lead.name, project.lead);
+  assert.notEqual(lead.id, cast[0].id);
+  assert.deepEqual(fs.readFileSync(path.join(dest.storage, lead.local_path)), reference);
+  assert.deepEqual(reopened.episodes.map(ep => [ep.title, ep.script_content]), project.episodes);
+  storageConfig.mock.mockImplementation(() => dest.cfg);
+  for (const [i, ep] of reopened.episodes.entries()) {
+    assert.notEqual(ep.id, draft.episodes[i].id);
+    assert.deepEqual(ep.storyboards.map(shot => shot.storyboard_number), [1, 2]);
+    assert.deepEqual(ep.characters.map(actor => actor.id), [lead.id]);
+    for (const shot of ep.storyboards) assert.deepEqual(shot.characters, [lead.id]);
+    assert.ok(ep.storyboards.every(shot => !originalShotIds.includes(shot.id)));
+    await verifyCut(dest, ep, project.size, orders[i]);
+  }
 }
+
+test('最后一碗 preserves two episode cuts across archive import', async t => {
+  await verifyProjectLifecycle(t, projects[0]);
+});
+
+test('借潮灯 preserves two episode cuts across archive import', async t => {
+  await verifyProjectLifecycle(t, projects[1]);
+});
