@@ -9,12 +9,14 @@ set -e
 export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
 export ELECTRON_BUILDER_BINARIES_MIRROR="https://cdn.npmmirror.com/binaries/electron-builder-binaries/"
 
-# 禁用 macOS 代码签名（无证书时跳过签名流程）
+# 本地构建使用配置中的 ad-hoc 签名。
 export CSC_IDENTITY_AUTO_DISCOVERY=false
 
 # 切换到 desktop 目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+python3 scripts/prepare-mac-media.py
 
 echo ""
 echo "========== [1/2] 构建完整版（含示例资源）=========="

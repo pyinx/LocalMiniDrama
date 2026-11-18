@@ -38,7 +38,7 @@
     ],
     "category": "public.app-category.entertainment",
     "icon": null,
-    "identity": null
+    "identity": "-"
   },
   "dmg": {
     "title": "${productName} ${version}",

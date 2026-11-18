@@ -1,0 +1,55 @@
+{
+  "components": [
+    {
+      "platform": "arm64",
+      "ffmpeg": {
+        "version": "9.0",
+        "binary_sha256": "591260c945d0eef150e3bf82b0ef988bd36a9cecc18ff05d6679617159f0a95e",
+        "binary_license": "GPL-2.0-or-later",
+        "distribution": "imageio-ffmpeg 0.8.1",
+        "url": "https://files.pythonhosted.org/packages/2b/47/9f9b654f853598bae0850fa22bba168103e45d31b5a2a893ed474f28d54a/imageio_ffmpeg-0.8.1-py3-none-macosx_12_0_arm64.whl",
+        "archive_sha256": "5636d691e36e5274b13fe38182b1f627b2e35dcecc63944012c2470f9484fc45",
+        "archive_member": "imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v9.0",
+        "upstream_url": "https://www.osxexperts.net/ffmpeg9arm.zip",
+        "source": "https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz"
+      },
+      "ffprobe": {
+        "version": "n4.4.1",
+        "binary_sha256": "c846d5db9d3b5bc33f987725e21f3ea14953931221c191575918e907ad6c18ff",
+        "binary_license": "LGPL-2.1-or-later",
+        "distribution": "@ffprobe-installer/darwin-arm64@5.0.1",
+        "url": "https://registry.npmjs.org/@ffprobe-installer/darwin-arm64/-/darwin-arm64-5.0.1.tgz",
+        "archive_member": "package/ffprobe",
+        "source": "https://ffmpeg.org/releases/ffmpeg-4.4.1.tar.xz",
+        "archive_sha256": "27069fc32879761968823c3ce5353d3c6573f5df7d83d40b60bc2d878e886d39"
+      }
+    },
+    {
+      "platform": "x86_64",
+      "ffmpeg": {
+        "version": "9.0.2",
+        "binary_sha256": "a45b462cf91ed89148ae218c4577e30896485d7a6792c3673bcf5f823fa01b63",
+        "binary_license": "GPL-3.0-or-later",
+        "distribution": "imageio-ffmpeg 0.8.1",
+        "url": "https://files.pythonhosted.org/packages/da/24/2c3a7c69453bfb8374ddbbb5007346bad4a4247bc86882f3521cd615f929/imageio_ffmpeg-0.8.1-py3-none-macosx_10_13_x86_64.whl",
+        "archive_sha256": "9538a10e598257263b5de1a1c1b86e7603417bc219245b1e279b452e5e48cc20",
+        "archive_member": "imageio_ffmpeg/binaries/ffmpeg-macos-x86_64-v9.0.2",
+        "upstream_url": "https://evermeet.cx/ffmpeg/ffmpeg-9.0.2.zip",
+        "source": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz"
+      },
+      "ffprobe": {
+        "version": "N-109856-gf8d6d0fbf1-tessus",
+        "binary_sha256": "424ce5e9271085240e90bd27f9e3f0ce280d388ea4379a211f76b64fcc07ce33",
+        "binary_license": "GPL-3.0-or-later",
+        "distribution": "@ffprobe-installer/darwin-x64@5.1.0",
+        "url": "https://registry.npmjs.org/@ffprobe-installer/darwin-x64/-/darwin-x64-5.1.0.tgz",
+        "archive_member": "package/ffprobe",
+        "source": "https://github.com/FFmpeg/FFmpeg/archive/f8d6d0fbf1.tar.gz",
+        "archive_sha256": "efe50b1fc86deb59a0263013a3f2c08ad5771ad1258a436e117e44b75ec8bd47"
+      }
+    }
+  ],
+  "binary_provenance": "https://github.com/imageio/imageio-ffmpeg/blob/v0.8.1/tools/ffmpeg-sources.json",
+  "license_files_base_url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/n9.0/",
+  "corresponding_source_note": "FFmpeg source URLs identify upstream source revisions. These URLs and license texts alone are not a verified complete corresponding source bundle for the linked codec libraries and build scripts."
+}

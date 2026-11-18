@@ -29,3 +29,7 @@ node_modules
 ohos_hap
 证书
 exports
+
+# hx: scratch state and local evidence are not worth reviewing
+.harness/.tmp/
+.harness/changes/*/records/

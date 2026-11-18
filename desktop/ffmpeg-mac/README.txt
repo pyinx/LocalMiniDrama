@@ -1,9 +1,5 @@
-将 macOS 版 ffmpeg 可执行文件放在本目录：
-  ffmpeg-mac/ffmpeg
-  ffmpeg-mac/ffprobe   （可选，建议一并放入）
+在 desktop 目录运行 python3 scripts/prepare-mac-media.py，可准备包含 arm64 与 x86_64 的 ffmpeg 和 ffprobe。npm run dist:mac 会执行同一步。已有双架构工具可继续使用。
 
-推荐使用 evermeet.cx 的静态构建版本，解压后放入此目录，注意需要有可执行权限：
-  chmod +x ffmpeg ffprobe
+licenses/MEDIA-TOOLS-SOURCES.json 记录各架构使用的发行包、原始二进制 SHA-256 和源码地址。该目录随桌面应用分发。
 
-构建 dmg 后，这两个文件会随安装包分发；用户首次启动时自动复制到：
-  ~/Library/Application Support/localminidrama-desktop/backend/tools/ffmpeg/
+首次启动时，应用将缺少的工具复制到 ~/Library/Application Support/localminidrama-desktop/backend/tools/ffmpeg/。
