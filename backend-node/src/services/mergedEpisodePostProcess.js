@@ -276,7 +276,7 @@ async function runMergedEpisodePostProcess(db, log, opts) {
             if (!writeSilenceMp3(slotSec, narrFit, log)) {
               return { ok: false, error: `旁白静音片段失败 #${i}` };
             }
-          } else if (mergeOpts.delivery_mode === 'complete' && row.narration_audio_local_path) {
+          } else if (mergeOpts.delivery_mode && row.narration_audio_local_path) {
             const src = path.resolve(storageRoot, row.narration_audio_local_path);
             if (!fs.existsSync(src) || !fitAudioToSlot(src, slotSec, narrFit, log)) {
               return { ok: false, error: shot + '旁白配音文件缺失或无法解码' };

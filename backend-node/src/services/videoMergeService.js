@@ -219,10 +219,11 @@ async function inspectDeliveryClip(file, label, requireAudio = false) {
     const video = info.streams.find(s => s.codec_type === 'video');
     const seconds = Number(video?.duration) || Number(info.format?.duration);
     if (!video?.height || !(seconds > 0)) throw new Error('缺少有效视频流');
-    if (requireAudio && !info.streams.some(s => s.codec_type === 'audio')) throw new Error('缺少必需音轨');
+    const hasAudio = info.streams.some(s => s.codec_type === 'audio');
+    if (requireAudio && !hasAudio) throw new Error('缺少必需音轨');
     await execFile(getFfmpegPath(), ['-v', 'error', '-xerror', '-i', file, '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-']);
     const [n, d] = (video.avg_frame_rate || '').split('/').map(Number);
-    return { seconds, ratio: video.width / video.height, frame: n && d ? d / n : 0.04 };
+    return { seconds, ratio: video.width / video.height, frame: n && d ? d / n : 0.04, hasAudio };
   } catch (err) {
     throw new Error(`${label}无法读取或解码：${err.stderr?.trim().slice(-220) || err.message.split('\n')[0]}`);
   }
@@ -295,7 +296,10 @@ async function renderMerge(db, log, r, baseUrl, work) {
       sc.duration = info.seconds;
       if (mergeOpts.burn_dialogue_audio && (sc.sound.dialogue?.trim() || sc.sound.audio_local_path)) {
         const audio = sc.sound.audio_local_path;
-        if (!audio || !fs.existsSync(path.resolve(storageRoot, audio))) throw new Error(label + '缺少对白配音');
+        if (!audio || !fs.existsSync(path.resolve(storageRoot, audio))) {
+          if (complete) throw new Error(label + '缺少对白配音');
+          draftWarnings.push(label + '缺少对白配音，草稿中该镜对白为静音');
+        }
       }
     }
     if (p) {
@@ -351,12 +355,17 @@ async function renderMerge(db, log, r, baseUrl, work) {
         scenes,
         episodeId,
         mergeOpts,
+      }).catch(err => {
+        if (mode !== 'draft') throw err;
+        return { ok: false, error: err.message };
       });
       if (post.ok && post.relativePath) {
         mergedRelativePath = post.relativePath;
         log.info('Video merge: merged episode post-process', { merge_id: mergeId, out: mergedRelativePath });
       } else if (complete) {
         throw new Error(`第 ${shotRange} 镜后期失败：${post.error || '未生成成片'}`);
+      } else if (mode === 'draft') {
+        draftWarnings.push(`第 ${shotRange} 镜后期失败，草稿使用后期处理前的合成片：${post.error || '未生成后期文件'}`);
       } else if (post.error && post.error !== 'NO_POST_OPTS') {
         log.warn('Video merge: post-process skipped', { merge_id: mergeId, err: post.error });
       }
@@ -365,8 +374,9 @@ async function renderMerge(db, log, r, baseUrl, work) {
 
   if (mode) {
     totalDuration = scenes.reduce((sum, sc) => sum + sc.duration, 0);
-    const info = await inspectDeliveryClip(path.join(storageRoot, mergedRelativePath), `第 ${shotRange} 镜合成结果`,
-      mergeOpts.burn_dialogue_audio || mergeOpts.burn_narration_subtitles);
+    const wantsAudio = mergeOpts.burn_dialogue_audio || mergeOpts.burn_narration_subtitles;
+    const info = await inspectDeliveryClip(path.join(storageRoot, mergedRelativePath), `第 ${shotRange} 镜合成结果`, complete && wantsAudio);
+    if (!complete && wantsAudio && !info.hasAudio) draftWarnings.push(`第 ${shotRange} 镜草稿未包含所选音轨`);
     if (Math.abs(info.seconds - totalDuration) > Math.max(firstInfo.frame, info.frame) + 0.001 ||
         Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(`第 ${shotRange} 镜合成后画幅或时长不符`);
   }

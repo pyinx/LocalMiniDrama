@@ -56,11 +56,24 @@ test('preserves the last release on incomplete media', async t => {
   assert.equal(published(), release.merged_url);
   db.prepare("UPDATE video_generations SET local_path='good.mp4' WHERE storyboard_id=?").run(b);
   db.prepare("UPDATE storyboards SET dialogue='船来了' WHERE id=?").run(b);
+  const draftResult = async options => {
+    const job = finalize('draft', options);
+    const row = await finish(job);
+    assert.equal(row.status, 'completed', row.error_msg);
+    assert.equal(published(), release.merged_url);
+    return JSON.parse(db.prepare('SELECT result FROM async_tasks WHERE id=?').get(job.task_id).result);
+  };
+  const silent = await draftResult({ burn_dialogue_audio: true });
+  assert.equal(silent.scenes_count, 2);
+  assert.match(silent.warnings.join(' '), /第 2 镜缺少对白配音/);
   assert.match((await finish(finalize('complete', { burn_dialogue_audio: true }))).error_msg, /第 2 镜缺少对白/);
   db.prepare("UPDATE storyboards SET narration='水面泛起波纹' WHERE id=?").run(b);
   t.mock.method(require('../src/services/ttsService'), 'synthesize', async () => { throw new Error('旁白合成中断'); });
   const subtitle = await finish(finalize('complete', { burn_narration_subtitles: true }));
   assert.match(subtitle.error_msg, /第 2 镜.*旁白合成中断/);
+  const preview = await draftResult({ burn_narration_subtitles: true, watermark_text: '试剪' });
+  assert.match(preview.warnings.join(' '), /草稿使用后期处理前的合成片.*第 2 镜.*旁白合成中断/);
+  assert.ok(fs.statSync(path.join(root, preview.video_url)).size > 0);
   assert.equal(published(), release.merged_url);
   const pending = finalize('complete');
   db.prepare("UPDATE video_generations SET local_path='other-take.mp4' WHERE storyboard_id=?").run(a);

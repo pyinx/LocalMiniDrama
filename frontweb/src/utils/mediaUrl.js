@@ -22,6 +22,17 @@ export function storyboardVideoUrl(sb) {
   return sb.video_url || ''
 }
 
+export function previousStoryboard(boards, currentId) {
+  const index = boards.findIndex(board => board.id === currentId)
+  return index > 0 ? boards[index - 1] : null
+}
+
+/** Read the adopted take at dispatch time, including completed shots skipped by the batch. */
+export async function previousTakeUrl(boards, currentId, loadBoard) {
+  const previous = previousStoryboard(boards, currentId)
+  return previous ? storyboardVideoUrl(await loadBoard(previous.id)) : ''
+}
+
 export function audioUrl(localPath) {
   if (!localPath) return ''
   const p = String(localPath).trim()

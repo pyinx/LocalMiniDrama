@@ -909,23 +909,13 @@
             <p v-for="item in batchItems.filter(i => i.dispatch_state === 'unknown')" :key="item.operation_key">
               第 {{ item.storyboard_number }} 镜厂商接单结果待核实，请在厂商后台查单后决定是否重拍。
             </p>
-            <!-- 连贯帧模式 UI 暂时隐藏（保留变量与批量生成逻辑，后续可快速恢复） -->
-            <div v-if="false" class="batch-video-options" style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:13px;">
-              <el-checkbox v-model="videoFrameContiguity" size="small">
+            <div class="batch-video-options">
+              <el-checkbox v-model="videoFrameContiguity" size="small" :disabled="batchVideoRunning">
                 连贯帧模式（自动衔接相邻视频帧）
               </el-checkbox>
               <el-tooltip placement="top" :show-after="100">
                 <template #content>
-                  <div style="max-width:320px;line-height:1.7">
-                    <div style="font-weight:600;margin-bottom:4px">连贯帧模式说明</div>
-                    <div>启用后批量视频顺序生成，每条视频的<b>末帧</b>自动截取并作为下一条视频的<b>首帧参考图</b>，减少镜头切换的跳跃感。</div>
-                    <div style="margin-top:8px;font-weight:600">⚠️ 需要模型支持图生视频（i2v）</div>
-                    <div style="margin-top:4px">
-                      ✅ 支持：kling-video、kling-omni-video、wan2.2-kf2v-flash、wan2.6-i2v-flash<br/>
-                      ❌ 不支持（末帧将被忽略）：wan2.6-t2v、wan2.6-r2v-flash、wanx2.1-vace-plus 等纯文生视频模型
-                    </div>
-                    <div style="margin-top:8px;color:#faad14">如当前视频模型不支持 i2v，启用此选项不会报错，但末帧衔接不会生效。</div>
-                  </div>
+                  <div style="max-width:320px">经典分镜按镜序生成，用紧邻上镜当前视频的尾帧作为首帧。首镜或上镜缺片时沿用本镜主图。请选择支持首帧参考的模型。</div>
                 </template>
                 <el-icon style="color:#9ca3af;cursor:help"><QuestionFilled /></el-icon>
               </el-tooltip>
@@ -1679,7 +1669,7 @@
     <!-- 添加道具弹窗 -->
     <TakeReviewDialog v-if="reviewBoard" :key="reviewBoard.id" :board="reviewBoard" :episode-number="currentEpisode?.episode_number"
       @selection="selection => updateTakeSelection(reviewBoard, selection)" @close="reviewBoard = null"
-      @revise="onOpenSbPromptDialog" @reshoot="onGenerateSbVideo" />
+      @revise="onOpenVideoParamsDialog" @reshoot="onGenerateSbVideo" />
     <el-dialog v-model="showAddProp" title="添加道具" width="600px" @close="() => { addPropForm = { name: '', type: '', description: '', prompt: '' }; addPropAddRefImage = null }">
       <el-form label-width="90px">
         <el-form-item label="参考图">
@@ -2614,6 +2604,7 @@
 </template>
 
 <script setup>
+import { previousStoryboard, previousTakeUrl } from '@/utils/mediaUrl'
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
 import CreativeReviewPanel from '@/components/CreativeReviewPanel.vue'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
@@ -3745,10 +3736,7 @@ function getNextStoryboard(storyboardId) {
 
 /** 取上一个分镜（按 storyboard_number 顺序，用于“上镜尾帧”快速衔接） */
 function getPrevStoryboard(storyboardId) {
-  const list = store.storyboards || []
-  const idx = list.findIndex((s) => s.id === storyboardId)
-  if (idx === -1 || idx === 0) return null
-  return list[idx - 1]
+  return previousStoryboard(store.storyboards || [], storyboardId)
 }
 
 /** 辅助判断：当前分镜是否有“上一镜尾帧”可用于快速替换首帧 */
@@ -5419,7 +5407,7 @@ async function captureVideoLastFrame(videoUrl) {
     const timeout = setTimeout(() => { if (!captured) resolve(null) }, 12000)
     video.addEventListener('error', () => { clearTimeout(timeout); if (!captured) resolve(null) })
     video.addEventListener('loadedmetadata', () => {
-      video.currentTime = Math.max(0, video.duration - 0.5)
+      video.currentTime = Math.max(0, video.duration - 0.000001)
     })
     video.addEventListener('seeked', () => {
       if (captured) return
@@ -6864,6 +6852,7 @@ async function startBatchVideoGeneration() {
     // 只处理：有参考图（经典=分镜主图；全能=场景/角色/道具，不含经典主图）且 还没有已完成视频 的分镜
     const todo = boards.filter((sb) => {
       const vidList = sbVideos.value[sb.id] || []
+      if (getSbVideo(sb.id)) return false
       if (vidList.some((v) => v.status === 'completed' && recordHasPlayableVideoUrl(v))) return false
       if (isSbUniversalMode(sb.id)) {
         if (!sbCanSubmitVideo(sb)) return false
@@ -6882,7 +6871,6 @@ async function startBatchVideoGeneration() {
     // 连贯帧模式强制顺序（concurrency=1），普通模式并发
     const videoConcurrency = contiguity ? 1 : (pipelineVideoConcurrency.value || 2)
     let videoDoneCount = 0
-    let prevVideoItem = null  // 连贯帧：保存上一条已完成的视频记录
 
     let videoQueueIdx = 0
     const videoWorker = async () => {
@@ -6906,33 +6894,27 @@ async function startBatchVideoGeneration() {
           const firstFrameUrl = await getMainImageUrlForVideo(sb)
           const absoluteUrl = universal ? (omniRefs[0] || '') : toAbsoluteImageUrl(firstFrameUrl)
           // 连贯帧：提取上一条视频末帧作为参考（全能模式不走连贯帧替换）
+          const planned = batch.find(i => i.storyboard_id === sb.id)
+          if (planned.status === 'failed') throw new Error(planned.error_msg || '本次生成失败，可在分镜里核查后重拍')
           let contiguityFirstFrameUrl = absoluteUrl
-          if (contiguity && prevVideoItem && !universal) {
-            const prevVideoUrl = prevVideoItem.local_path
-              ? toAbsoluteImageUrl('/static/' + prevVideoItem.local_path.replace(/^\//, ''))
-              : prevVideoItem.video_url
+          if (contiguity && !universal && !planned.video_id) {
+            const prevVideoUrl = await previousTakeUrl(boards, sb.id, storyboardsAPI.get)
             if (prevVideoUrl) {
-              try {
-                const lastFrameBlob = await captureVideoLastFrame(prevVideoUrl)
-                if (lastFrameBlob) {
-                  const file = new File([lastFrameBlob], 'continuity_frame.jpg', { type: 'image/jpeg' })
-                  const uploadRes = await uploadAPI.uploadImage(file, { dramaId: dramaId.value })
-                  if (uploadRes?.local_path) {
-                    contiguityFirstFrameUrl = toAbsoluteImageUrl('/static/' + uploadRes.local_path.replace(/^\//, ''))
-                  }
-                }
-              } catch (_) {}
+              const lastFrameBlob = await captureVideoLastFrame(toAbsoluteImageUrl(prevVideoUrl))
+              if (!lastFrameBlob) throw new Error('无法读取前一镜采用视频的尾帧')
+              const file = new File([lastFrameBlob], 'continuity_frame.jpg', { type: 'image/jpeg' })
+              const uploaded = await uploadAPI.uploadImage(file, { dramaId: dramaId.value })
+              if (!uploaded?.local_path) throw new Error('前一镜尾帧上传失败')
+              contiguityFirstFrameUrl = toAbsoluteImageUrl('/static/' + uploaded.local_path.replace(/^\//, ''))
             }
           }
           const { first: vFirst, last: vLast } = sbVideoFirstLastUrls(sb, universal, contiguityFirstFrameUrl || undefined)
           let refUrls = universal
             ? (omniRefs.length ? omniRefs : undefined)
-            : (absoluteUrl ? [absoluteUrl] : undefined)
+            : (vFirst ? [vFirst] : undefined)
           if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
             refUrls = [...refUrls, vLast]
           }
-          const planned = batch.find(i => i.storyboard_id === sb.id)
-          if (planned.status === 'failed') throw new Error(planned.error_msg || '本次生成失败，可在分镜里核查后重拍')
           const res = planned.video_id ? planned : await videosAPI.create({
             operation_key: planned.operation_key,
             drama_id: dramaId.value,
@@ -6953,21 +6935,13 @@ async function startBatchVideoGeneration() {
             if (pollRes?.status === 'failed') {
               batchVideoErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${pollRes.error || '生成失败'}`)
               batchVideoProgress.value = { ...batchVideoProgress.value, failed: batchVideoProgress.value.failed + 1 }
-              prevVideoItem = null
-            } else if (contiguity && pollRes?.status === 'completed') {
-              // 连贯帧：保存本条视频用于下一条
-              prevVideoItem = getSbVideo(sb.id)
             }
           } else {
             await loadSingleStoryboardMedia(sb.id)
-            if (contiguity) {
-              prevVideoItem = getSbVideo(sb.id)
-            }
           }
         } catch (e) {
           batchVideoErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${e.message || '提交失败'}`)
           batchVideoProgress.value = { ...batchVideoProgress.value, failed: batchVideoProgress.value.failed + 1 }
-          if (contiguity) prevVideoItem = null
         } finally {
           generatingSbVideoIds.delete(sb.id)
         }
@@ -6988,9 +6962,9 @@ async function startBatchVideoGeneration() {
   }
 }
 
-function getFinalizeMergeOptions() {
+function getFinalizeMergeOptions(mode = 'complete') {
   return {
-    delivery_mode: 'complete',
+    delivery_mode: mode,
     burn_narration_subtitles: !!videoSubtitle.value,
     burn_dialogue_audio: !!videoBurnDialogue.value,
     watermark_text: videoWatermark.value ? String(videoWatermarkText.value || '').trim().slice(0, 200) : '',
@@ -7002,7 +6976,7 @@ async function previewDraft() {
   draftBusy.value = true
   draftPreview.value = null
   try {
-    const job = await dramaAPI.finalizeEpisode(episode, { delivery_mode: 'draft' })
+    const job = await dramaAPI.finalizeEpisode(episode, getFinalizeMergeOptions('draft'))
     const message = job.missing_shots?.length ? job.message : `草稿共 ${job.scenes_count} 镜`
     draftPreview.value = { episode, message }
     if (!job.task_id) return
