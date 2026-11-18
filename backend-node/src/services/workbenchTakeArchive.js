@@ -10,7 +10,7 @@ function choices(db, dramaId, root) {
     const selected = takes.resolveTake(db, sb, list);
     const options = list.filter(takes.publicMedia).map(v => ({
       id: v.id, episode_number: sb.episode_number, storyboard_number: sb.storyboard_number,
-      model: v.model, local_available: !!takes.localFile(root, v.local_path),
+      model: v.model, local_available: !!takes.localFile(root, takes.publicMedia(v).local_path),
       default_included: v.id === selected?.id || !!v.keep_in_archive || takes.reviews(db, v.id).length > 0,
     }));
     if (selected && selected.id == null || !selected && sb.adopted_video_generation_id != null) {
@@ -37,7 +37,7 @@ function packBoard(db, root, sb, extras, zip, episodeNumber) {
     const notes = row.id ? takes.reviews(db, row.id) : [];
     const extra = extras.delete(row.id);
     if (!isSelected && !extra && !row.keep_in_archive && !notes.length) continue;
-    const local = takes.localFile(root, row.local_path);
+    const local = takes.localFile(root, takes.publicMedia(row)?.local_path);
     if (!local) takes.fail(`${label}候选 #${row.id || '旧片'} 缺少可打包的本地视频，请先保存本地副本`, 422);
     const key = row.id == null ? 'legacy' : 'v' + row.id;
     const file = `media/videos/sb_${sb.id}_${key}${path.extname(local) || '.mp4'}`;

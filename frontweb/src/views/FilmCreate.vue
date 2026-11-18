@@ -227,6 +227,7 @@
                   <el-button type="primary" :loading="isStoryGenRunning" @click="onGenerateStory">
                     生成剧本
                   </el-button>
+                  <StoryProposalReview v-if="dramaId" :key="dramaId" :drama-id="dramaId" @saved="loadDrama" />
                   <el-button v-if="currentEpisode?.has_novel_source" plain @click="readNovelSource">查看本集原文</el-button>
                   <el-button plain @click="showNovelImport = true">
                     <el-icon><DocumentAdd /></el-icon>
@@ -2643,6 +2644,7 @@ import { propLibraryAPI } from '@/api/propLibrary'
 import { generationSettingsAPI } from '@/api/prompts'
 import { parseScriptIntoEpisodes } from '@/utils/scriptEpisodes'
 import NovelImportDialog from '@/components/NovelImportDialog.vue'
+import StoryProposalReview from '@/components/StoryProposalReview.vue'
 import { canUseUniversalOmniVideoApi } from '@/utils/videoOmniSupport'
 import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
 import StylePickerButton from '@/components/StylePickerButton.vue'

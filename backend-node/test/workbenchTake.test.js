@@ -116,12 +116,16 @@ test('archives the selected candidate set once', async t => {
 test('rejects stale selections and foreign takes', async t => {
   const ws = await takeWorkspace(t), [sb,other] = ws.shots;
   const a = ws.add(sb, 'a.mp4'), b = ws.add(sb, 'b.mp4'), elsewhere = ws.add(other, 'c.mp4');
+  ws.db.prepare("UPDATE video_generations SET video_url='/static/a.mp4',local_path=NULL WHERE id=?").run(a);
   const endpoint = '/storyboards/' + sb.id + '/takes/adoption';
   const results = await Promise.all([a,b].map(id => ws.error('PUT', endpoint, { video_generation_id: id, expected_revision: 0 })));
   assert.deepEqual(results.map(r => r.status).sort(), [200,409]);
   const board = await ws.request('GET', '/storyboards/' + sb.id);
   assert.equal((await ws.adopt(sb, board.adopted_video_generation_id)).take_revision, 1);
   assert.equal((await ws.error('PUT', endpoint, {video_generation_id: elsewhere, expected_revision: 1})).status, 400);
+  const choices = await ws.request('GET', '/dramas/' + ws.id + '/export-takes');
+  assert.ok(choices.find(v => v.id === a).local_available);
+  assert.ok((await archive(ws, [a])).board.video_takes.some(v => v.key === 'v' + a));
   const remote = ws.add(sb, null);
   ws.db.prepare("UPDATE video_generations SET video_url='https://example.invalid/remote.mp4' WHERE id=?").run(remote);
   await ws.adopt(sb, remote, 1);

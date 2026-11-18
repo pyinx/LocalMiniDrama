@@ -268,8 +268,8 @@ function measures(pairs, arm) {
   const usable = closed.filter((r) => Number.isInteger(r.final)).length;
   const submissions = records.reduce((n, r) => n + r.attempts.length, 0);
   function total(get) {
-    return tried.length && tried.every((r) => nonnegative(get(r)))
-      ? Number(tried.reduce((sum, r) => sum + get(r), 0).toFixed(6))
+    return records.every((r) => nonnegative(get(r)))
+      ? Number(records.reduce((sum, r) => sum + get(r), 0).toFixed(6))
       : null;
   }
   return {
@@ -298,6 +298,7 @@ function readBallot(dir, i) {
 function inspectPair(study, p, entry, ballots, root) {
   const issues = setupIssues(study, p);
   const votes = [];
+  const hashes = [];
   for (const arm of arms) {
     const r = p[arm];
     if (!r.attempts.length || r.final == null) issues.push(arm + ' 尚未完成试拍');
@@ -305,12 +306,16 @@ function inspectPair(study, p, entry, ballots, root) {
     if (Number.isInteger(r.final)) {
       const file = media(root, r);
       if (!file) issues.push(arm + ' 最终样片缺失');
-      else if (entry && mediaHash(file) !== entry.mediaHashes[arms.indexOf(arm)])
-        issues.push(arm + ' 样片在制盲后发生变化');
+      else {
+        const fileHash = mediaHash(file);
+        hashes.push(fileHash);
+        if (entry && fileHash !== entry.mediaHashes[arms.indexOf(arm)]) issues.push(arm + ' 样片在制盲后发生变化');
+      }
     }
     if (!nonnegative(r.repairMinutes) || costTypes.some((k) => !nonnegative(r.costs?.[k])))
       issues.push(arm + ' 费用或返修分钟未填全');
   }
+  if (hashes.length === 2 && hashes[0] === hashes[1]) issues.push('同一段的两组使用了相同文件，请核对样片');
   if (!entry) issues.push('缺少与当前清单匹配的盲评包');
   else
     for (const i of [0, 1]) {

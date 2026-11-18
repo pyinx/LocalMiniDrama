@@ -60,7 +60,7 @@ function addRenderedClip(ws, dramaId, shotId, size, color) {
 }
 
 async function verifyCut(ws, ep, size, colorOrder) {
-  const job = await ws.request('POST', '/episodes/' + ep.id + '/finalize', {});
+  const job = await ws.request('POST', '/episodes/' + ep.id + '/finalize', { delivery_mode: 'complete' });
   assert.equal(job.scenes_count, 2);
   let merge;
   const deadline = Date.now() + 20_000;
@@ -89,7 +89,9 @@ async function verifyProjectLifecycle(t, project) {
   const source = await openWorkbench(t);
   const dest = await openWorkbench(t);
   const storageConfig = t.mock.method(config, 'loadConfig', () => source.cfg);
-  const drama = await source.request('POST', '/dramas', { title: project.title, style: project.style });
+  const drama = await source.request('POST', '/dramas', {
+    title: project.title, style: project.style, metadata: { aspect_ratio: project.size.join(':') },
+  });
   const scripts = await scriptsFromSource(t, source, project);
   assert.deepEqual(scripts.map(ep => [ep.title, ep.script_content]), project.episodes);
   await source.request('PUT', '/dramas/' + drama.id + '/episodes', { episodes: scripts });

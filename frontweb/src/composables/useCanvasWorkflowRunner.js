@@ -1,6 +1,7 @@
 import { taskAPI } from '@/api/task'
 import { imagesAPI } from '@/api/images'
 import { videosAPI } from '@/api/videos'
+import { dispatchBatchVideo } from '@/utils/batchVideo'
 import request from '@/utils/request'
 import { storyboardImageUrl } from '@/utils/mediaUrl'
 import {
@@ -46,7 +47,7 @@ export async function runImageStep(drama, sb, genOpts) {
   }
 }
 
-export async function runVideoStep(drama, sb, genOpts) {
+function videoStepBody(drama, sb, genOpts) {
   const useFirstLast = dramaUsesFirstLastFrame(drama)
   const imagesBySbId = genOpts?.imagesBySbId || {}
   const { first, last } = sbVideoFirstLastUrls(sb, imagesBySbId, useFirstLast)
@@ -57,7 +58,7 @@ export async function runVideoStep(drama, sb, genOpts) {
   const absoluteFirst = toAbsoluteMediaUrl(imgPath)
   const absoluteLast = last ? toAbsoluteMediaUrl(last) : undefined
   const prompt = sb.video_prompt || sb.polished_prompt || sb.image_prompt || sb.description || ''
-  const res = await videosAPI.create({
+  return {
     drama_id: drama.id,
     storyboard_id: sb.id,
     prompt,
@@ -68,7 +69,15 @@ export async function runVideoStep(drama, sb, genOpts) {
     aspect_ratio: genOpts.aspectRatio,
     resolution: genOpts.videoResolution || undefined,
     duration: sb.duration || undefined,
-  })
+  }
+}
+
+export async function runVideoStep(drama, sb, genOpts, batchItem) {
+  const build = () => videoStepBody(drama, sb, genOpts)
+  const res = batchItem
+    ? await dispatchBatchVideo(batchItem, build, body => videosAPI.create(body))
+    : await videosAPI.create(build())
+  if (res?.status === 'completed') return
   if (res?.task_id) {
     const polled = await pollTaskSimple(res.task_id)
     if (polled.status !== 'completed') throw new Error(polled.error || '视频生成失败')

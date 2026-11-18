@@ -2,8 +2,8 @@
   <el-dialog :model-value="true" title="导入小说 / 长文" width="min(740px, 94vw)"
     :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" @close="emit('close')">
     <template v-if="!preview">
-      <el-input v-model="text" type="textarea" :rows="8" placeholder="粘贴正文，或选择 TXT / Markdown 文件" :disabled="busy" />
-      <div class="options"><input type="file" accept=".txt,.md,text/plain" :disabled="busy" @change="readFile" /></div>
+      <el-input v-model="text" type="textarea" :rows="8" placeholder="粘贴正文，或选择 TXT / Markdown 文件" :disabled="!!busy" />
+      <div class="options"><input type="file" accept=".txt,.md,text/plain" :disabled="!!busy" @change="readFile" /></div>
       <div class="options">
         <label>起始章 <el-input-number v-model="start" :min="1" :precision="0" size="small" /></label>
         <label>本批章数 <el-input-number v-model="limit" :min="1" :max="20" :precision="0" size="small" /></label>

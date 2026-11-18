@@ -101,15 +101,29 @@ async function importNovel(db, log, { text, title, maxChapters = 20, startChapte
     }
     result.push({
       index: startChapter + result.length, title: ch.title, content: ch.content.slice(0, 300),
-      script: aiSummarize ? parts.map(p => p.adaptation || ch.content.slice(p.start, p.end)).join('\n\n') : ch.content,
+      script: parts.some(p => p.adaptation) ? parts.map(p => p.adaptation || ch.content.slice(p.start, p.end)).join('\n\n') : ch.content,
       source: { text: ch.content, parts },
     });
   }
   return { chapters: result, total: chapters.length };
 }
 
+function novelSourceJson(source) {
+  const invalid = message => Object.assign(new Error(message), { status: 400 });
+  if (typeof source?.text !== 'string' || !source.text.trim() || !Array.isArray(source.parts)) throw invalid('缺少章节原文');
+  const parts = chapterParts(source.text);
+  if (parts.length !== source.parts.length) throw invalid('原文分段有变化，请重新预览');
+  for (const [i, part] of parts.entries()) {
+    const input = source.parts[i];
+    if (input?.start !== part.start || input.end !== part.end) throw invalid('原文范围不完整');
+    if (typeof input.adaptation === 'string' && input.adaptation.trim()) part.adaptation = input.adaptation.trim();
+    else if (input.error) part.error = '改编失败，保留此段原文';
+  }
+  return JSON.stringify({ text: source.text, parts });
+}
+
 // 对照作者在预览时看到的正文。只更新本次采用的集，保留分镜、成片、描述及时长。
-function applyNovelEpisodes(db, dramaId, rows) {
+function applySelectedEpisodes(db, dramaId, rows, sourceFor = (_row, current) => current?.novel_source ?? null) {
   const invalid = message => Object.assign(new Error(message), { status: 400 });
   const conflict = number => Object.assign(new Error('第' + number + '集在预览后有变化，请重新核对'), { status: 409 });
   if (!Array.isArray(rows) || !rows.length) throw invalid('请至少选择一集');
@@ -126,20 +140,10 @@ function applyNovelEpisodes(db, dramaId, rows) {
       numbers.add(n);
       if (typeof row.title !== 'string' || !row.title.trim() || typeof row.script_content !== 'string' ||
           !row.script_content.trim() || !Object.hasOwn(row, 'expected')) throw invalid('缺少集标题、正文或预览信息');
-      const source = row.source;
-      if (typeof source?.text !== 'string' || !source.text.trim() || !Array.isArray(source.parts)) throw invalid('缺少章节原文');
-      const parts = chapterParts(source.text);
-      if (parts.length !== source.parts.length) throw invalid('原文分段有变化，请重新预览');
-      for (let i = 0; i < parts.length; i++) {
-        const input = source.parts[i];
-        if (input?.start !== parts[i].start || input.end !== parts[i].end) throw invalid('原文范围不完整');
-        if (typeof input.adaptation === 'string' && input.adaptation.trim()) parts[i].adaptation = input.adaptation.trim();
-        else if (input.error) parts[i].error = '改编失败，保留此段原文';
-      }
-      const sourceJson = JSON.stringify({ text: source.text, parts });
       const matches = select.all(dramaId, n);
       if (matches.length > 1) throw conflict(n);
       const current = matches[0];
+      const sourceJson = sourceFor(row, current);
       if (current && current.title === row.title && current.script_content === row.script_content && current.novel_source === sourceJson) continue;
       if (current) {
         const expected = row.expected;
@@ -158,4 +162,8 @@ function applyNovelEpisodes(db, dramaId, rows) {
   }).immediate();
 }
 
-module.exports = { importNovel, detectChaptersByRules, adaptPart, applyNovelEpisodes };
+function applyNovelEpisodes(db, dramaId, rows) {
+  return applySelectedEpisodes(db, dramaId, rows, row => novelSourceJson(row.source));
+}
+
+module.exports = { importNovel, detectChaptersByRules, adaptPart, applyNovelEpisodes, applySelectedEpisodes };

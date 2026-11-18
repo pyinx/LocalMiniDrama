@@ -5,6 +5,7 @@ const taskService = require('./taskService');
 const dramaService = require('./dramaService');
 const { safeParseAIJSON } = require('../utils/safeJson');
 const loadConfig = require('../config').loadConfig;
+const { applySelectedEpisodes } = require('./novelImportService');
 
 async function generateStory(db, log, body) {
   const premise = (body.premise || body.prompt || body.text || '').trim();
@@ -93,46 +94,66 @@ async function generateStory(db, log, body) {
   };
 }
 
-async function processStoryGeneration(db, log, taskId, req) {
+function hasEpisodes(db, dramaId) {
+  return Boolean(db.prepare('SELECT 1 FROM episodes WHERE drama_id=? AND deleted_at IS NULL LIMIT 1').get(dramaId));
+}
+
+function listProposals(db, dramaId) {
+  const tasks = db.prepare(`SELECT id, completed_at, result FROM async_tasks
+    WHERE type='story_generation' AND resource_id=? AND status='completed' AND deleted_at IS NULL
+      AND CASE WHEN json_valid(result) THEN json_array_length(result,'$.proposals') > 0 END
+    ORDER BY completed_at DESC`).all(String(dramaId));
+  return tasks.map(({ id, completed_at, result }) => ({ id, completed_at, episodes: JSON.parse(result).proposals }));
+}
+
+function adoptProposal(db, dramaId, taskId, selections) {
+  return db.transaction(() => {
+    const task = taskService.getTask(db, taskId);
+    if (task?.type !== 'story_generation' || task.resource_id !== String(dramaId) || task.status !== 'completed') {
+      throw Object.assign(new Error('当前项目没有这份拟稿'), { status: 404 });
+    }
+    const result = JSON.parse(task.result);
+    if (!Array.isArray(selections) || !selections.length) throw Object.assign(new Error('请先选择拟采用的集'), { status: 400 });
+    const rows = selections.map(selection => {
+      const proposal = result.proposals?.find(ep => ep.episode_number === selection?.episode_number);
+      if (!proposal) throw Object.assign(new Error('拟稿已变化，请重新读取'), { status: 409 });
+      return { ...proposal, expected: selection.expected };
+    });
+    const applied = applySelectedEpisodes(db, dramaId, rows);
+    result.proposals = result.proposals.filter(ep => !applied.episode_numbers.includes(ep.episode_number));
+    db.prepare('UPDATE async_tasks SET result=? WHERE id=?').run(JSON.stringify(result), taskId);
+    return applied;
+  }).immediate();
+}
+
+async function processStoryGeneration(db, log, taskId, req, startedWithEpisodes) {
   taskService.updateTaskStatus(db, taskId, 'processing', 10, '正在生成剧本...');
   try {
     const result = await generateStory(db, log, req);
     const episodes = result?.episodes || [];
-    if (episodes.length === 0) {
+    if (!episodes.length || episodes.some(ep => !ep.content?.trim() || !Number.isSafeInteger(ep.episode) || ep.episode < 1)
+        || new Set(episodes.map(ep => ep.episode)).size !== episodes.length) {
       taskService.updateTaskError(db, taskId, 'AI 未能生成剧本');
       return;
     }
 
     const dramaId = Number(req.drama_id);
-    taskService.updateTaskStatus(db, taskId, 'processing', 75, '正在保存剧本...');
-
-    const saved = dramaService.saveEpisodes(db, log, dramaId, {
-      episodes: episodes.map((ep, i) => ({
-        episode_number: ep.episode ?? i + 1,
-        title: ep.title || `第${ep.episode ?? i + 1}集`,
-        script_content: ep.content || '',
-      })),
-    });
-    if (!saved) {
-      taskService.updateTaskError(db, taskId, '保存剧本失败：项目不存在');
-      return;
-    }
-
-    if (req.summary || req.genre || req.drama_style || req.metadata || req.title) {
-      dramaService.saveOutline(db, log, dramaId, {
-        title: req.title,
-        summary: req.summary,
-        genre: req.genre,
-        style: req.drama_style,
-        metadata: req.metadata,
-      });
-    }
-
-    taskService.updateTaskResult(db, taskId, {
-      drama_id: dramaId,
-      episode_count: episodes.length,
-    });
-    log.info('Story generation completed and saved', { task_id: taskId, drama_id: dramaId, episode_count: episodes.length });
+    const rows = episodes.map(ep => ({ episode_number: ep.episode, title: ep.title, script_content: ep.content }));
+    db.transaction(() => {
+      if (taskService.getTask(db, taskId)?.status !== 'processing') return;
+      const result = { drama_id: dramaId, episode_count: rows.length };
+      if (startedWithEpisodes || hasEpisodes(db, dramaId)) {
+        result.proposals = rows;
+      } else {
+        applySelectedEpisodes(db, dramaId, rows.map(row => ({ ...row, expected: null })));
+        if (req.summary || req.genre || req.drama_style || req.metadata || req.title) {
+          dramaService.saveOutline(db, log, dramaId, {
+            title: req.title, summary: req.summary, genre: req.genre, style: req.drama_style, metadata: req.metadata,
+          });
+        }
+      }
+      taskService.updateTaskResult(db, taskId, result);
+    }).immediate();
   } catch (err) {
     log.error('processStoryGeneration failed', { task_id: taskId, error: err.message });
     taskService.updateTaskError(db, taskId, err.message || '故事生成失败');
@@ -158,8 +179,10 @@ function startStoryGeneration(db, log, req) {
   }
 
   const task = taskService.createTask(db, log, 'story_generation', dramaId);
+  const startedWithEpisodes = hasEpisodes(db, dramaId);
   setImmediate(() => {
-    processStoryGeneration(db, log, task.id, req).catch((err) => {
+    if (taskService.getTask(db, task.id)?.status !== 'pending') return;
+    processStoryGeneration(db, log, task.id, req, startedWithEpisodes).catch((err) => {
       log.error('processStoryGeneration fatal', { error: err.message, task_id: task.id });
       taskService.updateTaskError(db, task.id, err.message || '故事生成失败');
     });
@@ -170,4 +193,6 @@ function startStoryGeneration(db, log, req) {
 module.exports = {
   generateStory,
   startStoryGeneration,
+  listProposals,
+  adoptProposal,
 };

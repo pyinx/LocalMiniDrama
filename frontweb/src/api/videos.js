@@ -1,4 +1,5 @@
 import request from '@/utils/request'
+import { dispatchBatchVideo } from '@/utils/batchVideo'
 
 export const videosAPI = {
   list(params) {
@@ -26,11 +27,7 @@ export const videosAPI = {
   async fillMissing(episodeId, body) {
     const items = await this.openBatch(episodeId, [body.storyboard_id])
     const item = items.find(i => i.storyboard_id === body.storyboard_id)
-    if (item.video_id) {
-      if (item.status === 'failed') throw new Error(item.error_msg || '本次生成失败，可在分镜里核查后重拍')
-      return { id: item.video_id, ...item }
-    }
-    return this.create({ ...body, operation_key: item.operation_key })
+    return dispatchBatchVideo(item, () => body, data => this.create(data))
   },
   /** 失败后复用已存上游 task 继续轮询，返回 video_generations 记录（含 task_id） */
   resumePoll(id) {

@@ -10,6 +10,41 @@ const { runMigrationsAndEnsure } = require('../src/db/migrate');
 const { setupRouter } = require('../src/routes');
 const ai = require('../src/services/aiClient');
 const { importNovel } = require('../src/services/novelImportService');
+const { openWorkbench } = require('./helpers/workbenchHttp');
+const { setTimeout: delay } = require('node:timers/promises');
+
+test('generated proposals preserve finalized episodes until individually adopted', async t => {
+  const ws = await openWorkbench(t);
+  const { id } = await ws.request('POST', '/dramas', { title: '三集定稿' });
+  const base = '/dramas/' + id;
+  const scripts = [1,2,3].map(i => ({ episode_number: i, title: '原稿' + i, script_content: '原文' + i }));
+  await ws.request('PUT', base + '/episodes', { episodes: scripts });
+  const eps = (await ws.request('GET', base)).episodes;
+  for (const ep of eps) await ws.request('POST', '/storyboards', { episode_id: ep.id, storyboard_number: 1, title: '定镜' });
+  const snapshot = (await ws.request('GET', base)).episodes;
+  t.mock.method(ai, 'generateText', async () => '纯文本单集拟稿');
+  const job = await ws.request('POST', '/generation/story', { drama_id: id, premise: '创意', episode_count: 3 });
+  let task;
+  for (let i = 0; i < 200; i++) {
+    task = await ws.request('GET', '/tasks/' + job.task_id);
+    if (['failed', 'completed'].includes(task.status)) break;
+    await delay(10);
+  }
+  assert.equal(task.status, 'completed', task.error);
+  assert.deepEqual((await ws.request('GET', base)).episodes, snapshot);
+  const [draft] = await ws.request('GET', base + '/story-proposals');
+  assert.equal(draft.episodes[0].script_content, '纯文本单集拟稿');
+  const url = base + '/story-proposals/' + draft.id;
+  const stale = await fetch(ws.url(url), { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodes: [{ episode_number: 1, expected: null }] }) });
+  assert.equal(stale.status, 409);
+  await ws.request('PUT', url, { episodes: [{ episode_number: 1, expected: snapshot[0] }] });
+  const adopted = (await ws.request('GET', base)).episodes;
+  assert.equal(adopted[0].script_content, '纯文本单集拟稿');
+  assert.deepEqual(adopted[0].storyboards, snapshot[0].storyboards);
+  assert.deepEqual(adopted.slice(1), snapshot.slice(1));
+  assert.deepEqual(await ws.request('GET', base + '/story-proposals'), []);
+});
 
 test('reports complete partial and failed coverage', async t => {
   const original = '雪'.repeat(1999) + '🌊' + '灯'.repeat(400) + '孩子推开门。';

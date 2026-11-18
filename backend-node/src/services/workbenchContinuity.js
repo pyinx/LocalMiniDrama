@@ -3,7 +3,7 @@
 const { createHash } = require('node:crypto');
 const { parseDramaMetadata } = require('../utils/dramaStyleMerge');
 const { catalog, creativeGuidance, directionOf, characterIds, scenarioFor, readLock } = require('./workbenchCreativeMethods');
-const { resolveTake, publicMedia } = require('./workbenchTakeService');
+const { resolveTake, publicMedia, localFile } = require('./workbenchTakeService');
 
 function failure(status, message) { return Object.assign(new Error(message), { status }); }
 
@@ -129,7 +129,7 @@ function openMediaReviews(db, dramaId) {
   return byShot;
 }
 
-function readWorkbench(db, id) {
+function readWorkbench(db, id, storageRoot = './data/storage') {
   const drama = project(db, id);
   const assets = projectAssets(db, drama.id);
   const reviews = openMediaReviews(db, drama.id);
@@ -141,7 +141,10 @@ function readWorkbench(db, id) {
   for (const shot of shots) {
     const item = describeShot(shot, drama, assets);
     const current = resolveTake(db, shot);
-    item.has_video = Boolean(current);
+    item.video_state = current?.local_path
+      ? (localFile(storageRoot, current.local_path) ? 'local' : 'missing')
+      : (current?.video_url ? 'remote' : 'missing');
+    item.has_video = item.video_state !== 'missing';
     item.current_take_id = current?.id ?? null;
     item.adopted_id = shot.adopted_video_generation_id ?? null;
     const notes = reviews.get(shot.id);

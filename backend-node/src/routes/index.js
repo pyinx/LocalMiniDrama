@@ -60,7 +60,7 @@ function setupRouter(cfg, db, log) {
       next(err);
     }
   };
-  r.get('/dramas/:id/creative-review', reviewRoute(req => workbench.readWorkbench(db, req.params.id)));
+  r.get('/dramas/:id/creative-review', reviewRoute(req => workbench.readWorkbench(db, req.params.id, cfg.storage?.local_path)));
   r.put('/dramas/:id/creative-direction', reviewRoute(req => workbench.updateDirection(db, req.params.id, req.body || {})));
   r.put('/dramas/:id/creative-review/:shot', reviewRoute(req => workbench.reviewShot(db, req.params.id, req.params.shot, req.body || {})));
   // 导出/导入（放在 :id 路由前，避免被 :id 捕获）
@@ -68,6 +68,10 @@ function setupRouter(cfg, db, log) {
   const multer = require('multer');
   const importUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
   const novel = require('../services/novelImportService');
+  const stories = require('../services/storyGenerationService');
+  r.get('/dramas/:id/story-proposals', reviewRoute(req => stories.listProposals(db, Number(req.params.id))));
+  r.put('/dramas/:id/story-proposals/:taskId', reviewRoute(req =>
+    stories.adoptProposal(db, Number(req.params.id), req.params.taskId, req.body?.episodes)));
   function novelError(res, err) {
     if (err.status === 400) return response.badRequest(res, err.message);
     if (err.status === 404) return response.notFound(res, err.message);

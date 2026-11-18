@@ -83,7 +83,8 @@ function adopt(db, cfg, sbId, body) {
   return db.transaction(() => {
     const sb = storyboard(db, sbId);
     const row = take(db, sbId, body.video_generation_id);
-    if (row.local_path && !localFile(cfg?.storage?.local_path || './data/storage', row.local_path)) {
+    const local = publicMedia(row).local_path;
+    if (local && !localFile(cfg?.storage?.local_path || './data/storage', local)) {
       fail('候选本地文件缺失或不在媒体目录内，请重新导入');
     }
     if (sb.adopted_video_generation_id !== row.id) {

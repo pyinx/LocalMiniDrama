@@ -102,6 +102,12 @@ export async function runGenerateStoryFromPremise({
         return { ok: false, error: pollRes?.error || '剧本生成失败' }
       }
 
+      const parsedResult = typeof pollRes.result === 'string' ? JSON.parse(pollRes.result) : pollRes.result || {}
+      if (parsedResult.proposals?.length) {
+        ElMessage.success(`已生成 ${parsedResult.proposals.length} 集拟稿，可在创作页「审阅拟稿」中逐集采用`)
+        onComplete?.({ episodeCount: parsedResult.episode_count, dramaId })
+        return { ok: true, dramaId, episodeCount: parsedResult.episode_count, pendingReview: true }
+      }
       savedCurrentEpisodeNumber.value = 1
 
       if (!skipPostLoad) {
@@ -114,9 +120,6 @@ export async function runGenerateStoryFromPremise({
         }
       }
 
-      const parsedResult = typeof pollRes?.result === 'string'
-        ? (() => { try { return JSON.parse(pollRes.result) } catch { return {} } })()
-        : (pollRes?.result || {})
       const n = (store.drama?.episodes || []).length || parsedResult.episode_count || 1
       if (!skipPostLoad) {
         ElMessage.success(n > 1 ? `剧本已生成，共 ${n} 集，已默认选中第1集` : '剧本已生成并已保存')

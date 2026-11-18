@@ -1,8 +1,9 @@
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { dramaAPI } from '@/api/drama'
 import { storyboardsAPI } from '@/api/storyboards'
 import { taskAPI } from '@/api/task'
+import { videosAPI } from '@/api/videos'
 import { parseDramaMetadata } from '@/utils/canvasLayout'
 import { getDramaGenerationOptions } from '@/utils/canvasWorkflow'
 import { runImageStep, runVideoStep } from '@/composables/useCanvasWorkflowRunner'
@@ -29,6 +30,8 @@ async function pollTask(taskId, onTick, maxAttempts = 450, interval = 2000) {
 
 /** 画布模式：当前集 AI 生成分镜 + 批量生图/生视频 */
 export function useCanvasEpisodeGenerate(deps) {
+  let active = true
+  onBeforeUnmount(() => { active = false })
   const {
     drama,
     filterEpisodeId,
@@ -227,12 +230,17 @@ export function useCanvasEpisodeGenerate(deps) {
     let ok = 0
     let failed = 0
     try {
+      const items = await videosAPI.openBatch(ep.id, todo.map(sb => sb.id))
+      const plan = new Map(items.map(item => [item.storyboard_id, item]))
       for (let i = 0; i < todo.length; i++) {
         const sb = todo[i]
+        if (!active || getEpisode()?.id !== ep.id) break
         episodeGenProgress.value = `批量生视频 ${i + 1}/${todo.length}：分镜 #${sb.storyboard_number ?? sb.id}`
         setSbBusy(sb, 'video', `${CANVAS_NODE_STATUS_LABELS.video} ${i + 1}/${todo.length}`)
         try {
-          await runVideoStep(drama.value, sb, getGenOpts())
+          const item = plan.get(sb.id)
+          if (!item) throw new Error('批次中缺少本镜，请刷新后继续')
+          await runVideoStep(drama.value, sb, getGenOpts(), item)
           ok++
           await refreshCanvas(true)
         } catch (e) {
@@ -242,6 +250,7 @@ export function useCanvasEpisodeGenerate(deps) {
           clearSbBusy(sb)
         }
       }
+      if (!active || getEpisode()?.id !== ep.id) return
       if (failed === 0) ElMessage.success(`批量生视频完成，共 ${ok} 镜`)
       else ElMessage.warning(`完成 ${ok} 镜，失败 ${failed} 镜`)
     } finally {

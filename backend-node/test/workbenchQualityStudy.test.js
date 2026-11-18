@@ -68,6 +68,15 @@ test('unshot, incomplete and discarded trials remain pending and retain submissi
   assert.equal(group.baseline.costs.video, 2.5);
   assert.equal(group.method.submissions, 1);
   assert.equal(report.status, '待测');
+  const pendingArm = f.study.pairs[1].baseline;
+  pendingArm.costs = { image: 3, review: 1, video: 0 };
+  pendingArm.repairMinutes = 5;
+  f.study.pairs[1].work = f.study.pairs[0].work;
+  f.study.pairs[1].segment = '镜二';
+  f.write('study.json', f.study);
+  const combined = f.run('report', 'study.json').summary[0].baseline;
+  assert.deepEqual(combined.costs, { image: 3, review: 1, video: 2.5 });
+  assert.equal(combined.repairMinutes, 12);
   f.study.pairs[0].controls.modelVersion = 'changed';
   f.write('study.json', f.study);
   assert.throws(() => f.run('blind', 'study.json', 'other'), /预登记/);
@@ -157,4 +166,7 @@ test('synthetic clips exercise blinded ballots, scope, disagreements and regress
   assert.match(f.run('report', 'study.json', 'packet').pairs[0].issues.join(' '), /制盲后发生变化/);
   fs.unlinkSync(path.join(f.root, f.study.pairs[0].method.attempts[0].file));
   assert.match(f.run('report', 'study.json', 'packet').pairs[0].issues.join(' '), /最终样片缺失/);
+  f.study.pairs[0].method.attempts[0].file = f.study.pairs[0].baseline.attempts[0].file;
+  f.write('study.json', f.study);
+  assert.match(f.run('report', 'study.json').pairs[0].issues.join(' '), /两组使用了相同文件/);
 });

@@ -21,10 +21,10 @@
             </select>
           </label>
           <table v-if="!episode">
-            <thead><tr><th>分集</th><th>视频就绪</th><th>待复核</th><th>缺项</th></tr></thead>
+            <thead><tr><th>分集</th><th>本地视频 / 镜数</th><th>待复核</th><th>缺项</th></tr></thead>
             <tbody><tr v-for="ep in data.episodes" :key="ep.id">
               <td><el-button link @click="episodeId = ep.id">第 {{ ep.number }} 集 · {{ ep.title }}</el-button></td>
-              <td>{{ ep.shots.filter(s => s.has_video).length }} / {{ ep.shots.length }}</td>
+              <td>{{ ep.shots.filter(s => s.video_state === 'local').length }} / {{ ep.shots.length }}<span v-if="ep.shots.some(s => s.video_state === 'remote')">（另有远程引用）</span></td>
               <td>{{ pendingShots(ep) || '无' }}</td>
               <td>{{ missing(ep) }}</td>
             </tr></tbody>
@@ -39,6 +39,7 @@
           </template>
           <article v-if="shot">
             <p>{{ shot.adopted_id ? (shot.has_video ? '当前采用 #' : '采用视频失效，请重选 #') + shot.adopted_id : shot.has_video ? '沿用旧镜视频' : '缺视频' }}</p>
+            <p v-if="shot.video_state === 'remote'">远程视频引用，交付时校验媒体。</p>
             <MediaReviewNotes :key="shot.id" :current="shot.current_review" :history="shot.history_reviews" />
             <template v-if="data.direction.enabled">
               <label class="field">本镜创作方法
