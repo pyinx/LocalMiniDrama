@@ -19,6 +19,21 @@ export const dramaAPI = {
   saveEpisodes(id, episodes) {
     return request.put(`/dramas/${id}/episodes`, { episodes })
   },
+  previewNovel(form) {
+    return request.post('/dramas/import-novel', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+  adaptNovelPart(data) {
+    return request.post('/dramas/adapt-novel-part', data)
+  },
+  applyNovelEpisodes(id, episodes) {
+    return request.put(`/dramas/${id}/novel-episodes`, { episodes })
+  },
+  createFromNovel(project, episodes, operationId) {
+    return request.post('/dramas/import-novel-project', { project, episodes, operation_id: operationId })
+  },
+  novelSource(id, episodeId) {
+    return request.get(`/dramas/${id}/episodes/${episodeId}/novel-source`)
+  },
   saveCharacters(id, data) {
     return request.put(`/dramas/${id}/characters`, data)
   },

@@ -140,6 +140,7 @@ function importDrama(db, cfg, log, zipBuffer) {
     }
   }
   metadata.storage_folder_label = storageLayout.sanitizeFolderLabel(title);
+  delete metadata.novel_creation_id;
   const metaStr = JSON.stringify(metadata);
 
   // 用事务包裹全部写入：任何步骤失败时整体回滚，避免部分导入
@@ -194,9 +195,9 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
   const episodeIdList = []; // 按顺序保存新集 id
   for (const ep of (data.episodes || [])) {
     const epInfo = db.prepare(
-      `INSERT INTO episodes (drama_id, episode_number, title, description, script_content, duration, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(dramaId, ep.episode_number || 1, ep.title || `第${ep.episode_number || 1}集`, ep.description || null, ep.script_content || null, ep.duration || 0, now, now);
+      `INSERT INTO episodes (drama_id, episode_number, title, description, script_content, novel_source, duration, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(dramaId, ep.episode_number || 1, ep.title || `第${ep.episode_number || 1}集`, ep.description || null, ep.script_content || null, ep.novel_source?.text ? JSON.stringify(ep.novel_source) : null, ep.duration || 0, now, now);
     episodeIdList.push(epInfo.lastInsertRowid);
   }
 

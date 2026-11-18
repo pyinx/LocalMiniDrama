@@ -1,110 +1,161 @@
-/**
- * 小说/长文章节导入服务
- * 功能：上传 txt/docx 内容 → AI 识别章节分割 → 自动填充各集剧本
- */
 const aiClient = require('./aiClient');
-const { safeParseAIJSON } = require('../utils/safeJson');
 
-/**
- * 简单的章节检测（不调用 AI，基于规则）
- * 识别常见章节标题格式
- */
+const PART_LIMIT = 2000;
+const heading = /^第\s*[〇零一二两三四五六七八九十百千万\d０-９]+\s*[章节集回]/u;
+const bracketHeading = /^[【《<＜［\[]\s*(第\s*[〇零一二两三四五六七八九十百千万\d０-９]+\s*[章节集回])\s*[】》>＞］\]]?\s*(.*)$/u;
+
 function detectChaptersByRules(text) {
-  const lines = text.split(/\r?\n/);
-  const chapterPatterns = [
-    /^第[零一二三四五六七八九十百千\d]+章/,
-    /^第[零一二三四五六七八九十百千\d]+节/,
-    /^Chapter\s+\d+/i,
-    /^CHAPTER\s+\d+/,
-    /^\d+[\.、]\s*.{2,20}$/,
-    /^【.{1,30}】$/,
-    /^「.{1,30}」$/,
-  ];
   const chapters = [];
-  let currentStart = 0;
-  let currentTitle = '序章';
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const isChapter = chapterPatterns.some((p) => p.test(line));
-    if (isChapter) {
-      if (i > currentStart) {
-        const content = lines.slice(currentStart, i).join('\n').trim();
-        if (content.length > 20) {
-          chapters.push({ title: currentTitle, content });
-        }
+  let title = '序章';
+  let lines = [];
+  function finish() {
+    const content = lines.join('\n').trim();
+    if (content) chapters.push({ title, content });
+    lines = [];
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const clean = line.trim();
+    const wrapped = clean.match(bracketHeading);
+    if (wrapped || heading.test(clean) || /^Chapter\s+\d+/i.test(clean) ||
+        /^\d+[.、]\s*.{2,20}$/u.test(clean) || /^(?:【.{1,30}】|「.{1,30}」)$/u.test(clean)) {
+      finish();
+      title = wrapped ? wrapped[1] : clean;
+      // 已定稿分集文本可将标题与正文写在同一行。
+      const episode = (wrapped ? wrapped[1] + wrapped[2] : clean).match(/^(第\s*[〇零一二两三四五六七八九十百千万\d０-９]+\s*集)\s*(.*)$/u);
+      if (episode) {
+        title = episode[1];
+        if (episode[2]) lines.push(episode[2]);
+      } else if (wrapped && wrapped[2]) {
+        lines.push(wrapped[2]);
       }
-      currentTitle = line;
-      currentStart = i + 1;
+    } else {
+      lines.push(line);
     }
   }
-  // 最后一章
-  const lastContent = lines.slice(currentStart).join('\n').trim();
-  if (lastContent.length > 20) {
-    chapters.push({ title: currentTitle, content: lastContent });
-  }
+  finish();
   return chapters;
 }
 
-/**
- * 用 AI 将章节内容摘要为剧本形式
- */
-async function summarizeChapterToScript(db, log, chapterTitle, chapterContent, dramaTitle) {
-  const maxLen = 2000;
-  const truncated = chapterContent.length > maxLen ? chapterContent.slice(0, maxLen) + '...' : chapterContent;
-  const userPrompt = `小说名称：${dramaTitle || '未知'}
-章节标题：${chapterTitle}
-
-章节原文（部分）：
-${truncated}
-
-请将上述章节内容改写为短剧剧本格式，包含：场景描述、角色对话、动作说明。输出为中文纯文本，不需要 JSON 格式，长度200-500字。`;
-
-  try {
-    const result = await aiClient.generateText(db, log, 'text', userPrompt, null, {
-      scene_key: 'novel_import',
-      max_tokens: 800,
-      temperature: 0.7,
-    });
-    return result || chapterContent.slice(0, 500);
-  } catch (err) {
-    log.warn('[小说导入] AI改写章节失败，使用原文截断', { error: err.message });
-    return chapterContent.slice(0, 500);
+function chapterParts(text) {
+  const parts = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + PART_LIMIT, text.length);
+    if (end < text.length) {
+      const slice = text.slice(start, end);
+      const boundary = Math.max(...['\n', '。', '！', '？'].map(mark => slice.lastIndexOf(mark)));
+      if (boundary >= PART_LIMIT / 2) end = start + boundary + 1;
+      else if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+    }
+    parts.push({ start, end });
+    start = end;
   }
+  return parts;
 }
 
-/**
- * 主入口：解析小说文本，返回章节列表
- * @returns {{ chapters: Array<{title, content, script}> }}
- */
-async function importNovel(db, log, { text, title, maxChapters, aiSummarize }) {
-  if (!text || !text.trim()) throw new Error('小说内容不能为空');
-
-  const chapters = detectChaptersByRules(text);
-  if (chapters.length === 0) {
-    // 没有检测到章节，整个文本作为一章
-    chapters.push({ title: title || '第一集', content: text.trim() });
+async function adaptPart(db, log, { text, title, chapter_title, previous }) {
+  if (typeof text !== 'string' || !text.trim() || text.length > PART_LIMIT) {
+    throw Object.assign(new Error('请选择一个完整的原文分段'), { status: 400 });
   }
+  const continuation = previous ? '\n前段剧本结尾（只用于衔接）：' + String(previous).slice(-280) : '';
+  const prompt = [
+    '小说：' + (title || '未命名'), '章节：' + chapter_title + continuation,
+    '待改编原文：', text,
+    '把本段改写成可拍摄的中文短剧。保留人物、因果、关键对白和段尾状态。用可见的行为表现转折。只输出本段剧本，不续写后文。',
+  ].join('\n');
+  const result = await aiClient.generateText(db, log, 'text', prompt, null, {
+    scene_key: 'novel_import', max_tokens: 1200, temperature: 0.7,
+  });
+  if (typeof result !== 'string' || !result.trim()) throw new Error('模型未返回本段剧本');
+  return result.trim();
+}
 
-  const limit = Math.min(maxChapters || 20, chapters.length);
+async function importNovel(db, log, { text, title, maxChapters = 20, startChapter = 1, aiSummarize }) {
+  if (typeof text !== 'string' || !text.trim()) throw Object.assign(new Error('小说内容不能为空'), { status: 400 });
+  if (!Number.isSafeInteger(maxChapters) || maxChapters < 1) {
+    throw Object.assign(new Error('章节数必须是正整数'), { status: 400 });
+  }
+  const chapters = detectChaptersByRules(text);
+  if (!chapters.length) chapters.push({ title: title || '第一集', content: text.trim() });
+  else if (chapters.length === 1 && chapters[0].title === '序章') chapters[0].title = title || '第一集';
+  if (!Number.isSafeInteger(startChapter) || startChapter < 1 || startChapter > chapters.length) {
+    throw Object.assign(new Error('起始章节超出范围，共 ' + chapters.length + ' 章'), { status: 400 });
+  }
   const result = [];
-
-  for (let i = 0; i < limit; i++) {
-    const ch = chapters[i];
-    let script = ch.content;
+  for (const ch of chapters.slice(startChapter - 1, startChapter - 1 + maxChapters)) {
+    const parts = chapterParts(ch.content);
     if (aiSummarize) {
-      script = await summarizeChapterToScript(db, log, ch.title, ch.content, title);
+      let previous = '';
+      for (const part of parts) {
+        try {
+          part.adaptation = await adaptPart(db, log, {
+            title, chapter_title: ch.title, text: ch.content.slice(part.start, part.end), previous,
+          });
+          previous = part.adaptation;
+        } catch (error) {
+          log.warn('[小说导入] 本段保留原文', { chapter: ch.title, start: part.start, error: error.message });
+          part.error = '改编失败，保留此段原文';
+          previous = '';
+        }
+      }
     }
     result.push({
-      index: i + 1,
-      title: ch.title,
-      content: ch.content.slice(0, 300),
-      script,
+      index: startChapter + result.length, title: ch.title, content: ch.content.slice(0, 300),
+      script: aiSummarize ? parts.map(p => p.adaptation || ch.content.slice(p.start, p.end)).join('\n\n') : ch.content,
+      source: { text: ch.content, parts },
     });
   }
-
   return { chapters: result, total: chapters.length };
 }
 
-module.exports = { importNovel, detectChaptersByRules };
+// 对照作者在预览时看到的正文。只更新本次采用的集，保留分镜、成片、描述及时长。
+function applyNovelEpisodes(db, dramaId, rows) {
+  const invalid = message => Object.assign(new Error(message), { status: 400 });
+  const conflict = number => Object.assign(new Error('第' + number + '集在预览后有变化，请重新核对'), { status: 409 });
+  if (!Array.isArray(rows) || !rows.length) throw invalid('请至少选择一集');
+  const numbers = new Set();
+  const select = db.prepare('SELECT id,title,script_content,novel_source,updated_at FROM episodes WHERE drama_id=? AND episode_number=? AND deleted_at IS NULL ORDER BY id');
+  return db.transaction(() => {
+    if (!db.prepare('SELECT id FROM dramas WHERE id=? AND deleted_at IS NULL').get(dramaId)) {
+      throw Object.assign(new Error('项目不存在'), { status: 404 });
+    }
+    const now = new Date().toISOString();
+    for (const row of rows) {
+      const n = row?.episode_number;
+      if (!Number.isSafeInteger(n) || n < 1 || numbers.has(n)) throw invalid('目标集号无效或重复');
+      numbers.add(n);
+      if (typeof row.title !== 'string' || !row.title.trim() || typeof row.script_content !== 'string' ||
+          !row.script_content.trim() || !Object.hasOwn(row, 'expected')) throw invalid('缺少集标题、正文或预览信息');
+      const source = row.source;
+      if (typeof source?.text !== 'string' || !source.text.trim() || !Array.isArray(source.parts)) throw invalid('缺少章节原文');
+      const parts = chapterParts(source.text);
+      if (parts.length !== source.parts.length) throw invalid('原文分段有变化，请重新预览');
+      for (let i = 0; i < parts.length; i++) {
+        const input = source.parts[i];
+        if (input?.start !== parts[i].start || input.end !== parts[i].end) throw invalid('原文范围不完整');
+        if (typeof input.adaptation === 'string' && input.adaptation.trim()) parts[i].adaptation = input.adaptation.trim();
+        else if (input.error) parts[i].error = '改编失败，保留此段原文';
+      }
+      const sourceJson = JSON.stringify({ text: source.text, parts });
+      const matches = select.all(dramaId, n);
+      if (matches.length > 1) throw conflict(n);
+      const current = matches[0];
+      if (current && current.title === row.title && current.script_content === row.script_content && current.novel_source === sourceJson) continue;
+      if (current) {
+        const expected = row.expected;
+        if (current.id !== expected?.id || current.title !== expected.title ||
+            current.script_content !== expected.script_content || current.updated_at !== expected.updated_at) throw conflict(n);
+        db.prepare('UPDATE episodes SET title=?,script_content=?,novel_source=?,updated_at=? WHERE id=?')
+          .run(row.title, row.script_content, sourceJson, now, current.id);
+      } else {
+        if (row.expected !== null) throw conflict(n);
+        db.prepare("INSERT INTO episodes(drama_id,episode_number,title,script_content,novel_source,status,created_at,updated_at) VALUES(?,?,?,?,?,'draft',?,?)")
+          .run(dramaId, n, row.title, row.script_content, sourceJson, now, now);
+      }
+    }
+    db.prepare('UPDATE dramas SET updated_at=? WHERE id=?').run(now, dramaId);
+    return { episode_numbers: [...numbers] };
+  }).immediate();
+}
+
+module.exports = { importNovel, detectChaptersByRules, adaptPart, applyNovelEpisodes };

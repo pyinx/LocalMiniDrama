@@ -56,10 +56,47 @@ function setupRouter(cfg, db, log) {
   r.get('/dramas/:id/export', drama.exportDrama);
   const multer = require('multer');
   const importUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+  const novel = require('../services/novelImportService');
+  function novelError(res, err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.error(res, 409, 'EPISODE_CHANGED', err.message);
+    log.error('novel import', { error: err.message });
+    return response.internalError(res, err.message);
+  }
+  r.post('/dramas/adapt-novel-part', async (req, res) => {
+    try { response.success(res, { adaptation: await novel.adaptPart(db, log, req.body || {}) }); }
+    catch (err) { novelError(res, err); }
+  });
+  r.put('/dramas/:id/novel-episodes', (req, res) => {
+    try { response.success(res, novel.applyNovelEpisodes(db, Number(req.params.id), req.body?.episodes)); }
+    catch (err) { novelError(res, err); }
+  });
+  r.post('/dramas/import-novel-project', (req, res) => {
+    try {
+      const { project, episodes, operation_id: operationId } = req.body || {};
+      if (!project?.title?.trim()) return response.badRequest(res, '请填写项目标题');
+      if (typeof operationId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(operationId)) return response.badRequest(res, '缺少建项操作标识');
+      const saved = db.transaction(() => {
+        const service = require('../services/dramaService');
+        const prior = db.prepare("SELECT id FROM dramas WHERE deleted_at IS NULL AND CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.novel_creation_id') END=?").get(operationId);
+        const drama = prior ? service.getDrama(db, prior.id) : service.createDrama(db, log, {
+          ...project, metadata: { ...project.metadata, novel_creation_id: operationId },
+        });
+        novel.applyNovelEpisodes(db, drama.id, episodes);
+        return drama;
+      }).immediate();
+      response.created(res, saved);
+    } catch (err) { novelError(res, err); }
+  });
+  r.get('/dramas/:id/episodes/:episodeId/novel-source', (req, res) => {
+    const row = db.prepare('SELECT e.novel_source FROM episodes e JOIN dramas d ON d.id=e.drama_id WHERE e.id=? AND d.id=? AND e.deleted_at IS NULL AND d.deleted_at IS NULL').get(req.params.episodeId, req.params.id);
+    if (!row?.novel_source) return response.notFound(res, '本集没有导入原文');
+    response.success(res, JSON.parse(row.novel_source));
+  });
   r.post('/dramas/import', importUpload.single('file'), drama.importDrama);
   r.post('/dramas/import-novel', importUpload.single('file'), async (req, res) => {
     try {
-      const novelImportService = require('../services/novelImportService');
       let text = '';
       if (req.file && req.file.buffer) {
         text = req.file.buffer.toString('utf8');
@@ -68,13 +105,12 @@ function setupRouter(cfg, db, log) {
       }
       if (!text.trim()) return response.badRequest(res, '请上传小说文本文件或提供 text 参数');
       const title = req.body?.title || '';
-      const maxChapters = Number(req.body?.max_chapters) || 20;
+      const maxChapters = Number(req.body?.max_chapters ?? 20);
       const aiSummarize = req.body?.ai_summarize === 'true' || req.body?.ai_summarize === true;
-      const result = await novelImportService.importNovel(db, log, { text, title, maxChapters, aiSummarize });
+      const result = await novel.importNovel(db, log, { text, title, maxChapters, startChapter: Number(req.body?.start_chapter ?? 1), aiSummarize });
       response.success(res, result);
     } catch (err) {
-      log.error('dramas import-novel', { error: err.message });
-      response.internalError(res, err.message);
+      novelError(res, err);
     }
   });
   r.get('/dramas/examples', drama.listExamples);

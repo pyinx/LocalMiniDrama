@@ -226,6 +226,7 @@
                   <el-button type="primary" :loading="isStoryGenRunning" @click="onGenerateStory">
                     生成剧本
                   </el-button>
+                  <el-button v-if="currentEpisode?.has_novel_source" plain @click="readNovelSource">查看本集原文</el-button>
                   <el-button plain @click="showNovelImport = true">
                     <el-icon><DocumentAdd /></el-icon>
                     导入小说
@@ -2569,45 +2570,12 @@
       </template>
     </el-dialog>
 
-    <!-- P1-2: 导入小说弹窗 -->
-    <el-dialog v-model="showNovelImport" title="导入小说/长文" width="600px" @close="novelImportReset">
-      <div class="novel-import-dialog">
-        <p style="color:#6b7280;font-size:13px;margin-bottom:12px">支持粘贴小说文本或上传 txt 文件，AI 自动识别章节并转换为剧本集数</p>
-        <el-tabs v-model="novelImportMode">
-          <el-tab-pane label="粘贴文本" name="text">
-            <el-input
-              v-model="novelText"
-              type="textarea"
-              :rows="10"
-              placeholder="粘贴小说正文，AI 会自动识别章节..."
-            />
-          </el-tab-pane>
-          <el-tab-pane label="上传文件" name="file">
-            <el-upload
-              drag
-              :auto-upload="false"
-              :on-change="onNovelFileChange"
-              accept=".txt,.md"
-              :show-file-list="false"
-            >
-              <el-icon class="el-icon--upload"><DocumentAdd /></el-icon>
-              <div class="el-upload__text">拖拽 .txt / .md 文件到此处，或<em>点击上传</em></div>
-            </el-upload>
-            <div v-if="novelFileName" style="margin-top:8px;font-size:13px;color:#409eff">已选择：{{ novelFileName }}</div>
-          </el-tab-pane>
-        </el-tabs>
-        <div class="novel-import-options" style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <div style="display:flex;align-items:center;gap:6px;font-size:13px">
-            <span>最多导入集数：</span>
-            <el-input-number v-model="novelMaxChapters" :min="1" :max="20" size="small" style="width:100px" />
-          </div>
-          <el-checkbox v-model="novelAiSummarize" size="small">AI 转换为剧本格式（会消耗 Token）</el-checkbox>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="showNovelImport = false">取消</el-button>
-        <el-button type="primary" :loading="novelImporting" @click="onImportNovel">开始导入</el-button>
-      </template>
+    <NovelImportDialog v-if="showNovelImport" :key="dramaId || 'new'" :project-id="dramaId"
+      :project="{ title: scriptTitle || '新故事', description: storyInput, genre: storyType, style: generationStyle,
+        metadata: { ...projectStylePromptMetadata(), story_style: storyStyle, aspect_ratio: projectAspectRatio || '16:9' } }"
+      @close="showNovelImport = false" @saved="onNovelSaved" />
+    <el-dialog v-model="showNovelSource" title="本集改编原文" width="min(700px, 94vw)">
+      <pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ novelSourceText }}</pre>
     </el-dialog>
 
     <!-- AI 配置弹窗（不跳转，避免本页内容丢失） -->
@@ -2654,7 +2622,8 @@ import { characterLibraryAPI } from '@/api/characterLibrary'
 import { sceneLibraryAPI } from '@/api/sceneLibrary'
 import { propLibraryAPI } from '@/api/propLibrary'
 import { generationSettingsAPI } from '@/api/prompts'
-import { parseScriptIntoEpisodes, episodesListToPlainScript } from '@/utils/scriptEpisodes'
+import { parseScriptIntoEpisodes } from '@/utils/scriptEpisodes'
+import NovelImportDialog from '@/components/NovelImportDialog.vue'
 import { canUseUniversalOmniVideoApi } from '@/utils/videoOmniSupport'
 import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
 import StylePickerButton from '@/components/StylePickerButton.vue'
@@ -2720,13 +2689,8 @@ const selectableScriptDramas = computed(() => {
 const selectPreviewEpisodeId = ref('')
 // P1-2: 小说导入
 const showNovelImport = ref(false)
-const novelImportMode = ref('text')
-const novelText = ref('')
-const novelFileName = ref('')
-const novelFileContent = ref('')
-const novelMaxChapters = ref(10)
-const novelAiSummarize = ref(false)
-const novelImporting = ref(false)
+const showNovelSource = ref(false)
+const novelSourceText = ref('')
 const scriptTitle = ref('')
 const selectedEpisodeId = ref(null)
 /** 保存剧本后用于恢复选中集（后端重插后 id 会变，用 episode_number 匹配） */
@@ -5162,87 +5126,22 @@ watch(
   { deep: true, immediate: true }
 )
 
-function novelImportReset() {
-  novelText.value = ''
-  novelFileName.value = ''
-  novelFileContent.value = ''
+async function onNovelSaved({ created, first, count }) {
+  if (created) store.setDrama(created)
+  showNovelImport.value = false
+  savedCurrentEpisodeNumber.value = first
+  selectedEpisodeId.value = null
+  await loadDrama()
+  if (created && route.params.id === 'new') await router.replace('/film/' + created.id)
+  ElMessage.success('已采用 ' + count + ' 集')
 }
 
-function onNovelFileChange(file) {
-  novelFileName.value = file.name
-  const reader = new FileReader()
-  reader.onload = (ev) => { novelFileContent.value = ev.target.result }
-  reader.readAsText(file.raw || file, 'utf-8')
-}
-
-async function onImportNovel() {
-  const text = novelImportMode.value === 'file' ? novelFileContent.value : novelText.value
-  if (!text?.trim()) {
-    ElMessage.warning('请输入或上传小说内容')
-    return
-  }
-  novelImporting.value = true
-  try {
-    const formData = new FormData()
-    if (novelImportMode.value === 'file' && novelFileContent.value) {
-      const blob = new Blob([novelFileContent.value], { type: 'text/plain' })
-      formData.append('file', blob, novelFileName.value || 'novel.txt')
-    } else {
-      formData.append('text', text)
-    }
-    formData.append('title', scriptTitle.value || '导入小说')
-    formData.append('max_chapters', String(novelMaxChapters.value))
-    formData.append('ai_summarize', String(novelAiSummarize.value))
-    const { default: axios } = await import('axios')
-    const baseURL = (await import('@/utils/request')).default.defaults.baseURL || '/api/v1'
-    const res = await axios.post(`${baseURL}/dramas/import-novel`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
-    let chapters = res.data?.data?.chapters || res.data?.chapters || []
-    if (!chapters.length) {
-      ElMessage.warning('未能识别到章节内容')
-      return
-    }
-    // 若后端只识别出 1 章，但正文里有多处「第N集」行首标题，用前端规则再拆（与保存剧本一致）
-    const clientParsed = parseScriptIntoEpisodes(text)
-    if (clientParsed.split && clientParsed.episodes.length > chapters.length) {
-      chapters = clientParsed.episodes.map((e, i) => ({
-        index: i + 1,
-        title: e.title,
-        content: e.script_content,
-        script: e.script_content,
-      }))
-    }
-    const toEpisodeRow = (ch, i) => ({
-      episode_number: i + 1,
-      title: (ch.title && String(ch.title).trim()) || '第' + (i + 1) + '集',
-      script_content: String(ch.script ?? ch.content ?? '').trimEnd(),
-      description: null,
-      duration: 0,
-    })
-    const rows = chapters.map(toEpisodeRow)
-    const plainScript = episodesListToPlainScript(
-      rows.map((r) => ({ title: r.title, script_content: r.script_content }))
-    )
-    if (store.dramaId && rows.length >= 2) {
-      await dramaAPI.saveEpisodes(store.dramaId, rows)
-      await loadDrama()
-      ElMessage.success(`已导入并拆分为 ${rows.length} 集`)
-    } else {
-      store.setScriptContent(plainScript || rows[0]?.script_content || '')
-      ElMessage.success(
-        rows.length >= 2
-          ? `已导入 ${rows.length} 个章节（保存剧本时将写入多集）`
-          : `成功导入 ${rows.length} 个章节，请继续编辑剧本`
-      )
-    }
-    showNovelImport.value = false
-    novelImportReset()
-  } catch (e) {
-    ElMessage.error(e.message || '导入失败')
-  } finally {
-    novelImporting.value = false
-  }
+async function readNovelSource() {
+  const episodeId = currentEpisodeId.value
+  const source = await dramaAPI.novelSource(store.dramaId, episodeId)
+  if (episodeId !== currentEpisodeId.value) return
+  novelSourceText.value = source.text
+  showNovelSource.value = true
 }
 
 async function onGenerateScript() {

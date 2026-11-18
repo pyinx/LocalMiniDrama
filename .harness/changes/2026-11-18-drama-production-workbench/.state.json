@@ -11,6 +11,12 @@
       "reqHash": "e84d56d76cf66d6cef357a195edf7b609f057a3b",
       "rev": "16a32d4+f667a32fcf9fc354",
       "status": "confirmed"
+    },
+    "2": {
+      "at": "2026-11-18T12:22:10Z",
+      "specHash": "d4027bdfde05efec4ab97481c0ae8944a96946f3",
+      "rev": "f862edc+40a0265b327b8e93",
+      "status": "confirmed"
     }
   },
   "contracts": [
@@ -126,6 +132,119 @@
         "deferred": []
       },
       "records": 2
+    },
+    {
+      "at": "2026-11-18T12:22:10Z",
+      "contract": {
+        "criteria": [
+          {
+            "id": "AC1",
+            "text": "一部原创竖屏双集作品、一部小说改编横屏双集作品，通过真实 API 与 FFmpeg 做成逐集视频；导入 ID 不同的新库后剧本文本与镜序保持，能再次生成同尺寸同顺序的成片。",
+            "keys": [
+              "test:one"
+            ],
+            "tests": [
+              "backend-node/test/workbench/multiProject.test.js::借潮灯 preserves two episode cuts across archive import",
+              "backend-node/test/workbench/multiProject.test.js::最后一碗 preserves two episode cuts across archive import"
+            ]
+          },
+          {
+            "id": "AC2",
+            "text": "创作者可从创意、小说、定稿剧本及原工程接续；长文可检查处理范围、失败章节与原文，已有剧本的改动可由作者采用。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/novelSourceCoverage.test.js::preserves unselected episodes and their bindings",
+              "backend-node/test/novelSourceCoverage.test.js::reports complete partial and failed coverage"
+            ]
+          },
+          {
+            "id": "AC3",
+            "text": "改换本集造型或场景状态只提示实际受影响的引用。项目事实、用户锁定的对白和外观能跨集复核。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchContinuity.test.js::scopes changes to referencing episodes"
+            ]
+          },
+          {
+            "id": "AC4",
+            "text": "常用按钮、画布与助手共用按任务选取的创作方法；在写实对话、动画动作、无对白停顿或群像镜头中可得到符合该任务的检查，并可人工放行。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchCreativeMethods.test.js::uses the same methods across entry points"
+            ]
+          },
+          {
+            "id": "AC5",
+            "text": "某镜采用 A 之后 B 迟到，详情、连帧、成片与工程包均继续采用 A。默认包包含采用、被审片引用、手动保留三类候选的并集；其他成功候选仅在勾选时加入。同一候选只出现一次。异库恢复后可重新采用包内候选，并发采用有可见冲突。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchTake.test.js::archives the selected candidate set once",
+              "backend-node/test/workbenchTake.test.js::keeps the adopted take across consumers and restore",
+              "backend-node/test/workbenchTake.test.js::rejects stale selections and foreign takes"
+            ]
+          },
+          {
+            "id": "AC6",
+            "text": "作者可按集、段和时间码记录真实媒体问题，选择改稿、换候选或重拍一段。旧媒体与审片意见可回看。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchReview.test.js::keeps notes on the reviewed take after a reshoot"
+            ]
+          },
+          {
+            "id": "AC7",
+            "text": "正式交付发现缺镜、坏片、失败的必需音轨或字幕时指出项目和镜号，保留上次可交付成片。草稿预览提示缺项。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchDelivery.test.js::preserves the last release on incomplete media"
+            ]
+          },
+          {
+            "id": "AC8",
+            "text": "重复提交、关页重开、重启、取消后能逐项恢复；厂商是否已接单不可判定时可核查，自动出站数不会翻倍。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchBatch.test.js::recovers without repeating uncertain dispatches"
+            ]
+          },
+          {
+            "id": "AC9",
+            "text": "用户可在项目、分集和镜头打开同一作品，看到进度、缺项、当前采用及待复核段，普通供应商和旧工程均可用。",
+            "keys": [
+              "build"
+            ],
+            "tests": [
+              "review"
+            ]
+          },
+          {
+            "id": "AC10",
+            "text": "质量方法按独立作品比较首发可用率、单可用段提交数、生成成本与人工返修时间；有画风、表演、动作和对白的盲评记录才能判断默认启用。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "review"
+            ]
+          }
+        ],
+        "deferred": []
+      },
+      "records": 4
     }
   ]
 }

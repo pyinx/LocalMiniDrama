@@ -86,6 +86,7 @@ function exportDrama(db, cfg, log, dramaId) {
 
   let metadata = {};
   try { metadata = drama.metadata ? (typeof drama.metadata === 'string' ? JSON.parse(drama.metadata) : drama.metadata) : {}; } catch (_) {}
+  delete metadata.novel_creation_id;
 
   // ---- 2. 读取所有剧集 ----
   const episodes = db.prepare(
@@ -219,6 +220,7 @@ function exportDrama(db, cfg, log, dramaId) {
         title: ep.title,
         description: ep.description,
         script_content: ep.script_content,
+        ...(ep.novel_source ? { novel_source: JSON.parse(ep.novel_source) } : {}),
         duration: ep.duration,
         storyboards: sbs.map(sb => {
           const igsForThis = allImagesBySb[sb.id] || [];

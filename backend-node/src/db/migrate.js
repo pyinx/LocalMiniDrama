@@ -120,6 +120,7 @@ function ensureAllColumns(database) {
     { name: 'episode_number', type: 'INTEGER DEFAULT 0' },
     { name: 'title',          type: 'TEXT DEFAULT \'\'' },
     { name: 'script_content', type: 'TEXT' },
+    { name: 'novel_source',   type: 'TEXT' },
     { name: 'description',    type: 'TEXT' },
     { name: 'duration',       type: 'INTEGER DEFAULT 0' },
     { name: 'video_url',      type: 'TEXT' },

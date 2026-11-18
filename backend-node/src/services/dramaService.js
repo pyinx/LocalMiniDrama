@@ -324,6 +324,7 @@ function rowToEpisode(r) {
     episode_number: r.episode_number,
     title: r.title,
     script_content: r.script_content,
+    has_novel_source: !!r.novel_source,
     description: r.description,
     duration: r.duration ?? 0,
     status: r.status || 'draft',
