@@ -80,18 +80,21 @@ function checkStructure(out, ir, caps) {
 }
 
 describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
-  for (const [family, target] of Object.entries(TARGETS)) {
-    it(`${family} structure`, () => {
-      const ir = irOf({ prop_refs: [{ prop_id: 9, state_id: null, alias: '协议' }] });
-      const ctx = ctxFor(target);
-      if (ctx.caps.duration.step > 1) { ir.shots[1].seconds = 7; ir.duration_s = 10; } // wan r2v: 5 或 10 秒
-      const out = compileSegment(ir, ctx);
-      assert.equal(out.family, family);
-      checkStructure(out, ir, ctx.caps);
-      if (family === 'jimeng') assert.ok(out.refs.every((r) => r.token === `{{${r.alias}}}`));
-      else assert.deepEqual(out.refs.map((r) => r.token), out.refs.map((_, i) => `@图片${i + 1}`));
-    });
+  function familyStructure(family) {
+    const target = TARGETS[family];
+    const ir = irOf({ prop_refs: [{ prop_id: 9, state_id: null, alias: '协议' }] });
+    const ctx = ctxFor(target);
+    if (ctx.caps.duration.step > 1) { ir.shots[1].seconds = 7; ir.duration_s = 10; } // wan r2v: 5 或 10 秒
+    const out = compileSegment(ir, ctx);
+    assert.equal(out.family, family);
+    checkStructure(out, ir, ctx.caps);
+    if (family === 'jimeng') assert.ok(out.refs.every((r) => r.token === `{{${r.alias}}}`));
+    else assert.deepEqual(out.refs.map((r) => r.token), out.refs.map((_, i) => `@图片${i + 1}`));
   }
+  it('seedance structure', () => familyStructure('seedance'));
+  it('minimax_h3 structure', () => familyStructure('minimax_h3'));
+  it('wan structure', () => familyStructure('wan'));
+  it('jimeng structure', () => familyStructure('jimeng'));
 
   it('audio flag follows caps', () => {
     for (const target of Object.values(TARGETS)) {
