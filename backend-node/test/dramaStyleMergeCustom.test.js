@@ -35,3 +35,26 @@ test('resolvedStreamStyleFromDrama skips bare custom', () => {
     'ink neon',
   );
 });
+
+test('legacy and saved snapshots survive catalog expansion', () => {
+  const row = {style: 'retro film', metadata: JSON.stringify({style_prompt_zh:'作者原来的描述',style_prompt_en:'author snapshot'})};
+  assert.equal(mergeCfgStyleWithDrama({}, row).style.default_style_en,'author snapshot');
+  assert.match(mergeCfgStyleWithDrama({}, {style:'retro film'}).style.default_style_zh,/胶片/);
+  assert.equal(resolvedStreamStyleFromDrama(null,{style:'自由文本'}),'自由文本');
+});
+
+test('custom style examples persist and legacy text can be completed', async t => {
+  const {openWorkbench} = require('./helpers/workbenchHttp');
+  const ws = await openWorkbench(t);
+  const {id} = await ws.request('POST','/dramas',{title:'旧项目',style:'custom',metadata:{style_prompt_zh:'水彩纸'}});
+  await ws.request('PUT','/dramas/'+id+'/outline',{summary:'其他修改'});
+  const old = await ws.request('GET','/dramas/'+id);
+  assert.equal(old.metadata.style_prompt_zh,'水彩纸');
+  const library = require('../src/services/customStyleLibrary');
+  const sample = require('node:fs').readFileSync(require.resolve('../../frontweb/public/style-thumbs/clay-stop-motion.webp'));
+  const snapshot = {id:require('crypto').randomUUID(), version:1, name:'水彩纸', negative:'油光', image:library.storeImage(ws.db,sample)};
+  await ws.request('PUT','/dramas/'+id+'/outline',{style:'custom',metadata:{custom_style:snapshot,style_prompt_zh:'水彩纸'}});
+  const saved = await ws.request('GET','/dramas/'+id);
+  assert.deepEqual(saved.metadata.custom_style,snapshot);
+  assert.equal(mergeCfgStyleWithDrama({},saved).style.default_style_zh,'水彩纸');
+});

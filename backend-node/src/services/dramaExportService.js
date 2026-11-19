@@ -84,6 +84,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   let metadata = {};
   try { metadata = drama.metadata ? (typeof drama.metadata === 'string' ? JSON.parse(drama.metadata) : drama.metadata) : {}; } catch (_) {}
   delete metadata.novel_creation_id;
+  if (drama.style === 'custom') require('./customStyleLibrary').pack(db, zip, metadata.custom_style);
 
   // ---- 2. 读取所有剧集 ----
   const episodes = db.prepare(
@@ -231,6 +232,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
     episodes: episodes.map(ep => {
       const sbs = storyboardsByEp[ep.id] || [];
       return {
+        ...require('./episodeCutArchive').packCuts(db,ep,sbs),
         episode_number: ep.episode_number,
         character_indices: episodeCast.all(ep.id).map(({ character_id }) => charIdToIndex[character_id]).filter(i => i !== undefined),
         title: ep.title,
@@ -246,6 +248,18 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
           const sbAudioFile = sb.audio_local_path
             ? `media/audio/sb_${sb.id}${extOf(sb.audio_local_path)}`
             : null;
+          const selected = require('./episodeSound').soundOf(sb);
+          let adoptedSound = selected && { source: selected.source };
+          if (selected?.source === 'dub') {
+            const file = localFile(storagePath, selected.path);
+            if (!file || require('./episodeSound').mediaDigest(file) !== selected.sha256) {
+              throw new Error('第 ' + sb.storyboard_number + ' 镜采用的配音缺失或已变化');
+            }
+            const entry = selected.path === sb.audio_local_path ? sbAudioFile
+              : 'media/audio/sb_' + sb.id + '_adopted' + extOf(selected.path);
+            if (entry !== sbAudioFile) zip.addFile(entry, fs.readFileSync(file));
+            adoptedSound = { source: 'dub', file: entry, sha256: selected.sha256 };
+          }
           const sbNarrationAudioFile = sb.narration_audio_local_path
             ? `media/audio/sb_${sb.id}_narration${extOf(sb.narration_audio_local_path)}`
             : null;
@@ -308,6 +322,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
             image_file: sbImageFile,
             ...takeArchive.packBoard(db, storagePath, sb, extras, zip, ep.episode_number),
             ...(sb.creative_review_lock != null && { creative_review_lock: sb.creative_review_lock }),
+            ...(adoptedSound && { adopted_sound: adoptedSound }),
             audio_file: sbAudioFile,
             narration_audio_file: sbNarrationAudioFile,
             // 完整分镜图片历史（含首尾帧），导入后可恢复 getSbAllImages + 绑定

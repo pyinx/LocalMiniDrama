@@ -1,0 +1,142 @@
+{
+  "slug": "2026-11-19-style-catalog-media-qc",
+  "tier": "T2",
+  "schema": 2,
+  "status": "done",
+  "created": "2026-11-19T02:20:06Z",
+  "baseRef": "c103623",
+  "gates": {
+    "2": {
+      "at": "2026-11-19T02:37:57Z",
+      "specHash": "3c4a6f96f5f249b4b5baaf8b14c479504d874282",
+      "rev": "c103623+6886a6f46ec52e7a",
+      "status": "confirmed"
+    }
+  },
+  "contracts": [
+    {
+      "at": "2026-11-19T02:37:57Z",
+      "contract": {
+        "criteria": [
+          {
+            "id": "AC1",
+            "text": "所核对的 45+11 个源条目各有归属。新增目录有可用样张、可复述的差异、稳定唯一标识及中英文描述；同义名称不会产生第二张卡。",
+            "keys": [
+              "build",
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/generationStylePresets.test.js::catalog entries resolve consistently across both clients",
+              "frontweb/test/styleOptions.test.js::every source style maps to a reviewed catalog entry or tag"
+            ]
+          },
+          {
+            "id": "AC2",
+            "text": "两个入口可按中英文名、别名及标签找到同一项；无结果有提示，清空可恢复列表，自定义仍可选择或取消。",
+            "keys": [
+              "build",
+              "test"
+            ],
+            "tests": [
+              "frontweb/test/styleOptions.test.js::aliases and tags find unique options"
+            ]
+          },
+          {
+            "id": "AC3",
+            "text": "旧的 39 个值、完整提示词快照、自定义、空值和旧自由文本仍可读取，原工程再次打开及导入导出后保留创作者的选择与描述。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/dramaStyleMergeCustom.test.js::legacy and saved snapshots survive catalog expansion",
+              "backend-node/test/workbenchArchiveIdentity.test.js::project style survives archive round trip"
+            ]
+          },
+          {
+            "id": "AC4",
+            "text": "同一项目的角色、场景、分镜和视频提示保有同一媒介特征，允许镜头按剧情改变时间、光位与动作；代表性的近邻风格在同题样张及短镜头中可辨。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchCreativeMethods.test.js::catalog style persists through asset and shot guidance"
+            ]
+          },
+          {
+            "id": "AC5",
+            "text": "FFmpeg 方案列出每项的入口、所有者、误报处理、平台依赖、失败降级和验证样片，现有正式交付规则有明确归属。",
+            "keys": [],
+            "tests": [
+              "review"
+            ]
+          },
+          {
+            "id": "AC6",
+            "text": "每个可选内置画风在两个入口都显示能代表该画风的图片，旧目录与新增目录均覆盖。别名指向同一卡。独立项各有对应样图，网页及桌面离线可读。",
+            "keys": [
+              "build",
+              "test"
+            ],
+            "tests": [
+              "frontweb/test/styleOptions.test.js::every built-in style has a distinct decodable example image"
+            ]
+          },
+          {
+            "id": "AC7",
+            "text": "新建自定义画风须有描述和可预览的有效示例图。确认后两个入口显示同一图文，重启后可见；取消、无效图片和失败重试保留原选择。旧工程的纯文本画风可继续使用，显示补图入口。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/dramaStyleMergeCustom.test.js::custom style examples persist and legacy text can be completed"
+            ]
+          },
+          {
+            "id": "AC8",
+            "text": "工程包带上采用的自定义示例图；换到空白存储导入后离线能显示，文件内容与原图一致，旧格式包依然可导入。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/workbenchArchiveIdentity.test.js::portable archive restores the adopted custom style image"
+            ]
+          },
+          {
+            "id": "AC9",
+            "text": "上传图片并点击反推，可预览和分别编辑正向风格描述、建议的反向词。上传图可直接作为示例；模型未配置、返回无效、请求失败或晚到时保留已有草稿与原图。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/customStyleLibrary.test.js::image analysis returns editable style prompts without replacing user edits"
+            ]
+          },
+          {
+            "id": "AC10",
+            "text": "作者可用正向词及可选反向词生成候选样图。支持原生反向参数的模型实收相应字段，能力不足时生成前看到限制。采纳后才更新图文。重复点击、生成失败和切换草稿时保持原图与已编辑内容。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/customStyleLibrary.test.js::generation sends style negatives according to the resolved model"
+            ]
+          },
+          {
+            "id": "AC11",
+            "text": "保存的自定义画风可以在另一项目中选用。库从第一版更新到第二版后，采用第一版的项目在重启及工程包往返后仍显示其原示例图，并用当时的正反向词生成。项目主动采用新版时才更新。",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/customStyleLibrary.test.js::projects keep adopted style versions when the library advances",
+              "backend-node/test/workbenchArchiveIdentity.test.js::import keeps the adopted style prompts and image despite library name collisions"
+            ]
+          }
+        ],
+        "deferred": []
+      },
+      "records": 0
+    }
+  ],
+  "doneAt": "2026-11-19T03:35:00Z"
+}

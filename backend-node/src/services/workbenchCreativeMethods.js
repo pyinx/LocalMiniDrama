@@ -15,6 +15,8 @@ function directionOf(drama) {
 
 function styleAdvice(drama) {
   const { zh, en, legacy } = styleFieldsFromDramaRow(drama);
+  const family = require('../constants/generationStylePresets').presetFamily(legacy);
+  if (family && catalog.styles[family]) return catalog.styles[family];
   const style = zh || en || legacy;
   if (/动画|漫画|卡通|线稿|anime|cartoon|cel.shad|2d animation/i.test(style)) return catalog.styles.drawn;
   if (/写实|实拍|纪录|真人|photoreal|realistic|documentary/i.test(style)) return catalog.styles.live;
@@ -65,13 +67,13 @@ function readLock(raw) {
   return typeof raw === 'string' ? JSON.parse(raw) : raw;
 }
 
-function creativeGuidance(drama, task, shot, castSize) {
+function creativeGuidance(drama, task, shot, castSize, projectStyle = drama) {
   const setting = directionOf(drama);
   if (!Object.hasOwn(catalog.tasks, task)) throw new Error('未知创作任务');
   if (!setting.enabled) return { version: catalog.version, advice: [], checks: [] };
   const lock = readLock(shot?.creative_review_lock);
   const advice = [catalog.tasks[task]];
-  if (task !== 'story') advice.push(styleAdvice(drama));
+  if (task !== 'story') advice.push(styleAdvice(projectStyle));
   const checks = [];
   if (['story', 'storyboard', 'frame', 'video'].includes(task)) {
     if (shot) {
@@ -90,7 +92,7 @@ function creativeGuidance(drama, task, shot, castSize) {
   return { version: catalog.version, advice, checks };
 }
 
-function withCreativeGuidance(db, prompt, dramaId, task, storyboardId) {
+function withCreativeGuidance(db, prompt, dramaId, task, storyboardId, projectStyle) {
   if (!Number(dramaId) || !task) return prompt;
   const drama = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(Number(dramaId));
   if (!drama || !directionOf(drama).enabled) return prompt;
@@ -105,7 +107,7 @@ function withCreativeGuidance(db, prompt, dramaId, task, storyboardId) {
     if (task === 'video' && shot.segment_ir) return prompt;
     castSize = effectiveCast(shot, projectCast(db, dramaId, shot.id)).length;
   }
-  const { version, advice } = creativeGuidance(drama, task, shot, castSize);
+  const { version, advice } = creativeGuidance(drama, task, shot, castSize, projectStyle);
   return [prompt, '创作参考 v' + version + '（以作者要求为准）', ...advice].filter(Boolean).join('\n');
 }
 

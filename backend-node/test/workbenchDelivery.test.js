@@ -55,7 +55,7 @@ test('preserves the last release on incomplete media', async t => {
   assert.match(bad.error_msg, /春水.*第 2 镜/);
   assert.equal(published(), release.merged_url);
   db.prepare("UPDATE video_generations SET local_path='good.mp4' WHERE storyboard_id=?").run(b);
-  db.prepare("UPDATE storyboards SET dialogue='船来了' WHERE id=?").run(b);
+  db.prepare("UPDATE storyboards SET dialogue='船来了', audio_local_path='missing-dub.mp3' WHERE id=?").run(b);
   const draftResult = async options => {
     const job = finalize('draft', options);
     const row = await finish(job);

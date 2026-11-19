@@ -104,3 +104,15 @@ test('uses actual project or library cast for the director, assistant and genera
   db.exec("UPDATE character_libraries SET deleted_at=NULL WHERE id=3; UPDATE storyboards SET characters='[]' WHERE id=20");
   inspect('dialogue');
 });
+
+test('catalog style persists through asset and shot guidance', () => {
+  const {resolveStylePreset} = require('../src/constants/generationStylePresets');
+  const {mergeCfgStyleWithDrama} = require('../src/utils/dramaStyleMerge');
+  for (const [style,family] of [['shadow puppetry','other'],['vintage cel','drawn'],['hong kong film','live']]) {
+    const drama = {style,metadata:{creative_direction:{enabled:true}}};
+    assert.equal(mergeCfgStyleWithDrama({},drama).style.default_style_zh,resolveStylePreset(style).zh);
+    for (const task of ['character','scene','frame','video']) {
+      assert.ok(creativeGuidance(drama,task).advice.includes(catalog.styles[family]));
+    }
+  }
+});

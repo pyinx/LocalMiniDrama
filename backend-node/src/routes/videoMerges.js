@@ -16,7 +16,8 @@ function routes(db, log) {
     create: (req, res) => {
       try {
         const body = req.body || {};
-        if (body.delivery_mode || body.merge_options?.delivery_mode) {
+        const internal = ['delivery_mode','reliable_render','edit_plan','edit_revision','audition_pair','audition_inputs','audition_canvas','logical_order'];
+        if (body.delivery_mode || internal.some(key => Object.hasOwn(body.merge_options || {},key))) {
           return response.badRequest(res, '请选择剧集并通过该集的 finalize 接口创建交付任务');
         }
         const rec = videoMergeService.create(db, log, body);

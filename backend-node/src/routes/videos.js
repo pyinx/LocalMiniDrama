@@ -29,7 +29,12 @@ function routes(db, log, cfg) {
         }
         const provider = body.provider || 'chatfire';
         let prompt = body.prompt || '';
-        const style = (body.style || '').toString().trim();
+        const row = storyboardId && dramaId ? db.prepare('SELECT style,metadata FROM dramas WHERE id=?').get(dramaId) : null;
+        const { zh, en, legacy } = require('../utils/dramaStyleMerge').styleFieldsFromDramaRow(row);
+        const catalog = require('../constants/generationStylePresets');
+        const catalogStyle = catalog.presetFamily(legacy) ? catalog.resolveStylePreset(legacy)?.zh : '';
+        const style = (body.style || zh || en || catalogStyle || '').toString().trim();
+        const styleNegative = row?.style === 'custom' ? require('../utils/dramaStyleMerge').parseDramaMetadata(row)?.custom_style?.negative || null : null;
         if (style) {
           const baseLower = String(prompt || '').toLowerCase();
           const styleLower = style.toLowerCase();
@@ -80,7 +85,7 @@ function routes(db, log, cfg) {
             if (existing) {
               if (existing.deleted_at || existing.drama_id !== dramaId || existing.storyboard_id !== storyboardId) return { conflict: true };
               if (!planned) {
-                const inputs = { prompt, provider, model, duration, aspect_ratio: aspectRatio, resolution, seed,
+                const inputs = { prompt, style_negative: styleNegative, provider, model, duration, aspect_ratio: aspectRatio, resolution, seed,
                   camera_fixed: cameraFixed, watermark, image_url: imageUrl, first_frame_url: firstFrameUrl,
                   last_frame_url: lastFrameUrl, reference_image_urls: refImagesJson };
                 if (Object.entries(inputs).some(([key, value]) => existing[key] !== value)) return { conflict: true };
@@ -90,9 +95,9 @@ function routes(db, log, cfg) {
           }
           const task = taskService.createTask(db, log, 'video_generation', String(dramaId));
           const inserted = db.prepare(
-            `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, status, task_id, created_at, updated_at, operation_key, dispatch_state)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, 'queued')`
-          ).run(dramaId, storyboardId, provider, prompt, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, task.id, now, now, operation);
+            `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, style_negative, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, status, task_id, created_at, updated_at, operation_key, dispatch_state)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, 'queued')`
+          ).run(dramaId, storyboardId, provider, prompt, styleNegative, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, task.id, now, now, operation);
           return { id: inserted.lastInsertRowid };
         }).immediate();
         if (result.conflict) return response.error(res, 409, 'VIDEO_OPERATION_CONFLICT', '原提交内容已变化或记录已删除，请核查后重新发起');

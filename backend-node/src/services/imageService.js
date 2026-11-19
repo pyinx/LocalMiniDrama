@@ -554,8 +554,8 @@ function create(db, log, req) {
   }
   const useFirstFrameLayoutLock = resolveUseFirstFrameLayoutLock(req, frameType);
   const info = db.prepare(
-    `INSERT INTO image_generations (storyboard_id, drama_id, scene_id, provider, prompt, negative_prompt, model, frame_type, reference_images, use_first_frame_layout_lock, size, status, task_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+    `INSERT INTO image_generations (storyboard_id, drama_id, scene_id, provider, prompt, negative_prompt, model, frame_type, reference_images, use_first_frame_layout_lock, size, style_snapshot, status, task_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
   ).run(
     req.storyboard_id ?? null,
     Number(req.drama_id) || 0,
@@ -568,6 +568,7 @@ function create(db, log, req) {
     refImagesJson,
     useFirstFrameLayoutLock,
     reqSize,
+    JSON.stringify(imageClient.readProjectStyle(db, req.drama_id)),
     taskId,
     now,
     now
@@ -1128,11 +1129,9 @@ async function processImageGeneration(db, log, imageGenId) {
     const loadConfig = require('../config').loadConfig;
     const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
     let cfg = loadConfig();
+    const projectStyle = row.style_snapshot ? JSON.parse(row.style_snapshot) : imageClient.readProjectStyle(db, row.drama_id);
     if (row.drama_id) {
-      try {
-        const dr = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(row.drama_id);
-        cfg = mergeCfgStyleWithDrama(cfg, dr || {});
-      } catch (_) {}
+      cfg = mergeCfgStyleWithDrama(cfg, projectStyle);
     }
     const filesBaseUrl = (cfg.storage && cfg.storage.base_url) ? String(cfg.storage.base_url).replace(/\/$/, '') : '';
     const storageLocalPath = path.isAbsolute(cfg.storage?.local_path)
@@ -1378,7 +1377,8 @@ async function processImageGeneration(db, log, imageGenId) {
       files_base_url: filesBaseUrl,
       storage_local_path: storageLocalPath,
       system_prompt: apiSystemPrompt,
-      negative_prompt: row.negative_prompt || undefined,
+      user_negative_prompt: row.negative_prompt || undefined,
+      project_style: projectStyle,
       frame_identity_lock: isFrameIdentityLock,
     });
     log.info('[图生] Step4 图生 API 返回', { id: imageGenId, api_ms: Date.now() - tApi, has_error: !!result.error, elapsed: elapsed() });

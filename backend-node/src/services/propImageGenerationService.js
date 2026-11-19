@@ -7,6 +7,10 @@ const uploadService = require('./uploadService');
 const storageLayout = require('./storageLayout');
 const { aspectRatioToSize } = require('./imageService');
 
+function preferredImageProvider(model, cfg) {
+  return model ? undefined : cfg?.ai?.default_image_provider;
+}
+
 function appendPrompt(base, extra) {
   const add = (extra || '').toString().trim();
   if (!add) return (base || '').toString().trim();
@@ -34,12 +38,8 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
   const loadConfig = require('../config').loadConfig;
   const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
   let cfg = loadConfig();
-  if (prop.drama_id) {
-    try {
-      const dr = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(prop.drama_id);
-      cfg = mergeCfgStyleWithDrama(cfg, dr || {});
-    } catch (_) {}
-  }
+  const projectStyle = opts?.project_style ?? imageClient.readProjectStyle(db, prop.drama_id);
+  cfg = mergeCfgStyleWithDrama(cfg, projectStyle);
   const styleOverride = (opts && opts.style) ? String(opts.style).trim() : '';
   const baseStyle = styleOverride || (cfg?.style?.default_style_en || cfg?.style?.default_style || '');
   let style = '';
@@ -62,7 +62,7 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
   const fullPrompt = appendPrompt(String(prop.prompt).trim(), style);
   // 与角色/场景一致：使用前端「图片生成模型」选择的 model；未传时用 YAML default_image_provider 兜底
   const model = (opts && opts.model) ? String(opts.model).trim() || null : null;
-  const preferredProvider = !model && cfg?.ai?.default_image_provider ? cfg.ai.default_image_provider : null;
+  const preferredProvider = preferredImageProvider(model, cfg);
   const userNeg = imageClient.resolveAssetUserNegativeForApi(model, prop.negative_prompt);
 
   let result;
@@ -70,6 +70,7 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
     result = await imageClient.callImageApi(db, log, {
       prompt: fullPrompt,
       prop_id: prop.id,
+      project_style: projectStyle,
       size: imageSize,
       drama_id: prop.drama_id,
       model: model || undefined,
@@ -157,8 +158,9 @@ function generatePropImage(db, log, propId, opts) {
   }
 
   const task = taskService.createTask(db, log, 'prop_image_generation', String(propId));
+  const options = { ...opts, project_style: imageClient.readProjectStyle(db, prop.drama_id) };
   setImmediate(() => {
-    processPropImageGeneration(db, log, task.id, propId, opts || {}).catch((err) => {
+    processPropImageGeneration(db, log, task.id, propId, options).catch((err) => {
       log.error('processPropImageGeneration fatal', { error: err.message, task_id: task.id });
     });
   });
@@ -166,6 +168,7 @@ function generatePropImage(db, log, propId, opts) {
 }
 
 module.exports = {
+  preferredImageProvider,
   generatePropImage,
   processPropImageGeneration,
 };

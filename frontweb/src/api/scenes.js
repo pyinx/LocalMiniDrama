@@ -1,3 +1,4 @@
+import { checkStyleModel } from './stylePreflight'
 import request from '@/utils/request'
 
 export const sceneAPI = {
@@ -13,7 +14,8 @@ export const sceneAPI = {
   create(data) {
     return request.post('/scenes', data)
   },
-  generateImage(data) {
+  async generateImage(data) {
+    await checkStyleModel('scene', data.scene_id, data.model)
     return request.post('/scenes/generate-image', data)
   },
   update(sceneId, data) {
@@ -37,7 +39,8 @@ export const sceneAPI = {
   putRefImage(sceneId, refImagePath) {
     return request.put(`/scenes/${sceneId}`, { ref_image: refImagePath ?? null })
   },
-  generateFourViewImage(sceneId, model, style) {
+  async generateFourViewImage(sceneId, model, style) {
+    await checkStyleModel('scene', sceneId, model)
     return request.post(`/scenes/${sceneId}/generate-four-view-image`, { model, style })
   }
 }

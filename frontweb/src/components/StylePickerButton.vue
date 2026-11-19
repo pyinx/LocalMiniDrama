@@ -7,7 +7,7 @@
       @click="visible = true"
     >
       <template v-if="displayLabel">
-        <span class="spt-swatch" :style="triggerSwatchStyle" />
+        <img v-if="activeImage" class="spt-swatch" :src="activeImage" alt="" /><span v-else class="spt-swatch" :style="triggerSwatchStyle" />
         <span class="spt-label">{{ displayLabel }}</span>
       </template>
       <span v-else class="spt-placeholder">{{ placeholder }}</span>
@@ -38,11 +38,11 @@
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
         <span v-if="modelValue" class="spd-selected-hint">
-          已选：{{ getStyleLabel(modelValue) || displayLabel }}
+          已选：{{ displayLabel }}
         </span>
       </div>
 
-      <div class="spd-body">
+      <div class="spd-body" v-loading="saving">
         <template v-for="group in filteredGroups" :key="group.label">
           <div class="spd-group-title">{{ group.label }}</div>
           <div class="spd-grid">
@@ -51,7 +51,7 @@
               :key="opt.value"
               class="spd-item"
               :class="{ 'is-active': modelValue === opt.value }"
-              @click="select(opt)"
+                @click="select(opt)"
             >
               <div class="spd-thumb" :style="thumbStyle(opt)">
                 <img
@@ -69,6 +69,19 @@
           </div>
         </template>
 
+        <template v-if="visibleLibrary.length">
+          <div class="spd-group-title">我的画风</div>
+          <div class="spd-grid">
+            <button v-for="item in visibleLibrary" :key="item.id" type="button" class="spd-item" @click="useCustom(item)">
+              <div class="spd-thumb"><img :src="imageUrl(item.image)" :alt="item.name" loading="lazy" /></div>
+              <span class="spd-name">{{ item.name }} · v{{ item.version }}</span>
+            </button>
+          </div>
+        </template>
+        <div v-if="isCustom && customSnapshot" class="spd-group-title">当前项目 · {{ customSnapshot.name }} v{{ customSnapshot.version }}
+          <img :src="imageUrl(customSnapshot.image)" :alt="customSnapshot.name" style="width:64px;vertical-align:middle" />
+          <el-button @click="editCurrent">编辑此画风</el-button>
+        </div>
         <template v-if="showCustomSection">
           <div class="spd-group-title">其他</div>
           <div class="spd-grid">
@@ -80,28 +93,15 @@
               <div class="spd-thumb" :style="{ background: CUSTOM_SWATCH }">
                 <span class="spd-thumb-text">自定</span>
               </div>
-              <div class="spd-name">自定义</div>
+              <div class="spd-name">{{ isCustom && !customSnapshot ? '给已有画风补图' : '创建自定义画风' }}</div>
               <div v-if="modelValue === CUSTOM_STYLE_VALUE" class="spd-check">✓</div>
             </div>
           </div>
         </template>
 
-        <div v-if="showCustomEditor" class="spd-custom-editor">
-          <el-input
-            v-model="customDraft"
-            type="textarea"
-            :rows="4"
-            maxlength="500"
-            show-word-limit
-            placeholder="描述画面风格，例如：赛博朋克水墨，霓虹灯映在宣纸上…"
-          />
-          <div class="spd-custom-actions">
-            <el-button @click="showCustomEditor = false">取消</el-button>
-            <el-button type="primary" @click="confirmCustom">确认</el-button>
-          </div>
-        </div>
+        <CustomStyleEditor v-if="showCustomEditor" :key="editorKey" :initial="editing" @cancel="showCustomEditor = false" @save="useCustom" />
 
-        <div v-if="filteredGroups.length === 0 && !showCustomSection" class="spd-empty">没有匹配的风格</div>
+        <div v-if="filteredGroups.length === 0 && !showCustomSection && !visibleLibrary.length" class="spd-empty">没有匹配的风格</div>
       </div>
 
       <template #footer>
@@ -113,26 +113,36 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import CustomStyleEditor from './CustomStyleEditor.vue'
+import request from '@/utils/request'
 import { ArrowDown, CircleClose, Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { CUSTOM_STYLE_VALUE, getStyleLabel } from '@/constants/styleOptions'
+import { CUSTOM_STYLE_VALUE, searchStyleGroups } from '@/constants/styleOptions'
 
 const CUSTOM_SWATCH = 'linear-gradient(135deg,#5b8def,#2dd4bf)'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
+  customSnapshot: Object,
+  adopt: Function,
   customPrompt: { type: String, default: '' },
   options: { type: Array, default: () => [] },
   placeholder: { type: String, default: '图片/视频风格' },
 })
 
-const emit = defineEmits(['update:modelValue', 'update:customPrompt', 'change'])
+const emit = defineEmits(['update:modelValue', 'update:customPrompt', 'update:customSnapshot', 'change'])
 
 const visible = ref(false)
+const saving = ref(false)
 const search = ref('')
 const showCustomEditor = ref(false)
-const customDraft = ref('')
+const editing = ref(null), editorKey = ref(0), library = ref([])
+const imageUrl = hash => '/api/v1/style-library/images/' + hash
+watch(visible, async open => {
+  if (open) { try { library.value = await request.get('/style-library') } catch { library.value = [] } }
+})
+const visibleLibrary = computed(() => library.value.filter(item => item.name.toLowerCase().includes(search.value.trim().toLowerCase())))
+const activeImage = computed(() => isCustom.value && props.customSnapshot?.image ? imageUrl(props.customSnapshot.image) : selectedOption.value?.thumb)
 
 const allOptions = computed(() => props.options.flatMap((g) => g.options))
 const selectedOption = computed(() => allOptions.value.find((o) => o.value === props.modelValue) || null)
@@ -140,7 +150,7 @@ const selectedOption = computed(() => allOptions.value.find((o) => o.value === p
 const isCustom = computed(() => props.modelValue === CUSTOM_STYLE_VALUE)
 
 const displayLabel = computed(() => {
-  if (isCustom.value) return '自定义'
+  if (isCustom.value) return props.customSnapshot?.name || '自定义'
   return selectedOption.value?.label || ''
 })
 
@@ -155,13 +165,7 @@ const showCustomSection = computed(() => {
   return '自定义'.includes(kw) || 'custom'.includes(kw) || kw.includes('自定义') || kw.includes('custom')
 })
 
-const filteredGroups = computed(() => {
-  const kw = search.value.trim().toLowerCase()
-  if (!kw) return props.options
-  return props.options
-    .map((g) => ({ ...g, options: g.options.filter((o) => o.label.toLowerCase().includes(kw) || o.value.toLowerCase().includes(kw)) }))
-    .filter((g) => g.options.length > 0)
-})
+const filteredGroups = computed(() => searchStyleGroups(props.options, search.value))
 
 function thumbStyle(opt) {
   if (opt.thumb) return {}
@@ -172,39 +176,59 @@ function swatchStyle(opt) {
   return { background: opt?.color || 'linear-gradient(135deg,#667eea,#764ba2)' }
 }
 
-function openCustomEditor() {
-  customDraft.value = props.customPrompt || ''
+function editCurrent() {
+  const snapshot = props.customSnapshot
+  const local = library.value.find(x => x.id === snapshot.id)
+  editing.value = { ...snapshot, positive: props.customPrompt }
+  if (!local || local.version !== snapshot.version || local.image !== snapshot.image || local.positive !== props.customPrompt || local.negative !== snapshot.negative || local.name !== snapshot.name) {
+    delete editing.value.id
+    delete editing.value.version
+  }
+  editorKey.value++
   showCustomEditor.value = true
 }
 
-function confirmCustom() {
-  const text = customDraft.value.trim()
-  if (!text) {
-    ElMessage.warning('请填写画风描述')
-    return
-  }
-  emit('update:customPrompt', text)
+function openCustomEditor() {
+  editing.value = isCustom.value && !props.customSnapshot ? { positive: props.customPrompt } : {}
+  editorKey.value++
+  showCustomEditor.value = true
+}
+async function useCustom(item) {
+  const { positive, ...snapshot } = item
+  if (!(await persist(CUSTOM_STYLE_VALUE, positive, snapshot))) return
+  emit('update:customSnapshot', snapshot)
+  emit('update:customPrompt', positive)
   emit('update:modelValue', CUSTOM_STYLE_VALUE)
   emit('change', CUSTOM_STYLE_VALUE)
   showCustomEditor.value = false
   visible.value = false
 }
-
-function select(opt) {
+async function persist(value, positive, snapshot) {
+  if (saving.value) return false
+  saving.value = true
+  try { await props.adopt?.(value, positive, snapshot); return true }
+  catch { return false } finally { saving.value = false }
+}
+async function select(opt) {
+  if (!(await persist(opt.value, '', null))) return
+  emit('update:customSnapshot', null)
   emit('update:modelValue', opt.value)
   emit('change', opt.value)
   showCustomEditor.value = false
   visible.value = false
 }
 
-function clearSelection() {
+async function clearSelection() {
+  if (!(await persist('', '', null))) return false
+  emit('update:customSnapshot', null)
   emit('update:modelValue', '')
   emit('update:customPrompt', '')
   emit('change', '')
+  return true
 }
 
-function clearAndClose() {
-  clearSelection()
+async function clearAndClose() {
+  if (!(await clearSelection())) return
   showCustomEditor.value = false
   visible.value = false
 }

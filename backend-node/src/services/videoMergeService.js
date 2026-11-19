@@ -5,7 +5,7 @@ const { getFfmpegPath, getFfprobePath, hasLocalFfmpeg } = require('../utils/ffmp
 const storageLayout = require('./storageLayout');
 
 function list(db, query) {
-  let sql = 'FROM video_merges WHERE deleted_at IS NULL';
+  let sql = "FROM video_merges WHERE deleted_at IS NULL AND json_extract(merge_options,'$.audition_pair') IS NULL";
   const params = [];
   if (query.episode_id) {
     sql += ' AND episode_id = ?';
@@ -20,6 +20,10 @@ function list(db, query) {
 }
 
 function rowToItem(r) {
+  let mode = null;
+  let firstSource = null;
+  try { mode = JSON.parse(r.merge_options || '{}')?.delivery_mode || null; } catch {}
+  try { firstSource = JSON.parse(r.scenes || '[]')?.[0]?.video_url; } catch {}
   return {
     id: r.id,
     episode_id: r.episode_id,
@@ -28,6 +32,8 @@ function rowToItem(r) {
     provider: r.provider,
     status: r.status,
     merged_url: r.merged_url,
+    delivery_mode: mode,
+    encoded_output: r.status === 'completed' && Boolean(r.merged_url) && r.merged_url !== firstSource && !/^https?:\/\//i.test(r.merged_url),
     duration: r.duration ?? undefined,
     task_id: r.task_id,
     error_msg: r.error_msg ?? undefined,
@@ -211,17 +217,17 @@ async function processVideoMerge(db, log, mergeId, baseUrl) {
   }
 }
 
-async function inspectDeliveryClip(file, label, requireAudio = false) {
+async function inspectDeliveryClip(file, label, requireAudio = false, verifyDecode = true) {
   try {
-    const { stdout } = await execFile(getFfprobePath(), ['-v', 'error', '-show_entries',
-      'stream=codec_type,width,height,sample_aspect_ratio,avg_frame_rate,duration:stream_side_data=rotation:stream_tags=rotate:format=duration', '-of', 'json', file]);
+    const { stdout } = await execFile(getFfprobePath(), ['-v', 'error',
+      '-show_streams', '-show_format', '-show_data_hash', 'sha256', '-of', 'json', file]);
     const info = JSON.parse(stdout);
     const video = info.streams.find(s => s.codec_type === 'video');
     const seconds = Number(video?.duration) || Number(info.format?.duration);
     if (!video?.width || !video.height || !(seconds > 0)) throw new Error('缺少有效视频流');
     const hasAudio = info.streams.some(s => s.codec_type === 'audio');
     if (requireAudio && !hasAudio) throw new Error('缺少必需音轨');
-    await execFile(getFfmpegPath(), ['-v', 'error', '-xerror', '-i', file, '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-']);
+    if (verifyDecode) await execFile(getFfmpegPath(), ['-v', 'error', '-xerror', '-i', file, '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-']);
     const [n, d] = (video.avg_frame_rate || '').split('/').map(Number);
     const [pixelW, pixelH] = (video.sample_aspect_ratio || '').split(':').map(Number);
     const sar = pixelW > 0 && pixelH > 0 ? pixelW / pixelH : 1;
@@ -233,6 +239,9 @@ async function inspectDeliveryClip(file, label, requireAudio = false) {
     const ratio = (displayWidth * cos + video.height * sin) / (displayWidth * sin + video.height * cos);
     return {
       seconds, ratio, frame: n && d ? d / n : 0.04, hasAudio,
+      codec: video.codec_name, encoding: [video.codec_name, video.profile, video.pix_fmt, video.color_space, video.level, video.extradata_hash].join('/'),
+      constantRate: n > 0 && d > 0 && n / d <= 240 && video.avg_frame_rate === video.r_frame_rate ? video.avg_frame_rate : null,
+      audioSeconds: Number(info.streams.find(s => s.codec_type === 'audio')?.duration),
       width: sin > cos ? video.height : video.width, height: sin > cos ? video.width : video.height,
       layout: [video.width, video.height, sar, rotation].join('/'),
     };
@@ -245,6 +254,8 @@ async function renderMerge(db, log, r, baseUrl, work) {
   const { tempDir } = work;
   const mergeId = r.id;
   const mergeOpts = JSON.parse(r.merge_options || '{}');
+  const legacyEpisode = !mergeOpts.delivery_mode && mergeOpts.reliable_render === true;
+  if (legacyEpisode) mergeOpts.delivery_mode = 'draft';
   const mode = mergeOpts.delivery_mode;
   const complete = mode === 'complete';
   const taskId = r.task_id;
@@ -281,8 +292,11 @@ async function renderMerge(db, log, r, baseUrl, work) {
   const [ratioW, ratioH] = String(mergeOpts.aspect_ratio || '').replace('：', ':').split(':').map(Number);
   const expectedRatio = ratioW > 0 && ratioH > 0 ? ratioW / ratioH : null;
   let firstInfo;
-  let mixedLayout = false;
+  let parts = [];
+  let previewSeam = null;
+  let cutPlan;
   for (let i = 0; i < scenes.length; i++) {
+    if (mergeOpts.audition_pair && !mergeOpts.audition_pair.some(ref => ref.id === scenes[i].scene_id)) continue;
     const p = await resolveVideoToLocalPath(
       scenes[i].video_url,
       baseUrl,
@@ -299,22 +313,22 @@ async function renderMerge(db, log, r, baseUrl, work) {
         if (!p) throw new Error(label + '找不到视频文件');
         info = await inspectDeliveryClip(p, label);
       } catch (err) {
-        if (complete) throw err;
+        if (mergeOpts.audition_pair) throw new Error(label + '无法试听：' + err.message);
+        if (complete) {
+          const plan = mergeOpts.edit_plan;
+          if (plan) require('./episodeCutPlan').markPending(db,episodeId,plan,plan.cuts.filter(c => [c.left.id,c.right.id].includes(sc.scene_id)));
+          throw err;
+        }
         draftWarnings.push(err.message);
         continue;
       }
-      if (firstInfo && Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(label + '画幅与首镜不一致');
+      if (!legacyEpisode && firstInfo && Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(label + '画幅与首镜不一致');
       if (complete && expectedRatio && Math.abs(info.ratio - expectedRatio) > 0.01) throw new Error(label + '画幅与项目设置不一致');
-      if (firstInfo && firstInfo.layout !== info.layout) mixedLayout = true;
+      const digest = complete ? require('./episodeSound').mediaDigest(p) : null;
+      if (complete && sc.video_digest && digest !== sc.video_digest) throw new Error(label + '采用片内容已变化，请重新交付');
+      parts.push({ file: p, shot: sc, info, digest });
       firstInfo ||= info;
       sc.duration = info.seconds;
-      if (mergeOpts.burn_dialogue_audio && (sc.sound.dialogue?.trim() || sc.sound.audio_local_path)) {
-        const audio = sc.sound.audio_local_path;
-        if (!audio || !fs.existsSync(path.resolve(storageRoot, audio))) {
-          if (complete) throw new Error(label + '缺少对白配音');
-          draftWarnings.push(label + '缺少对白配音，草稿中该镜对白为静音');
-        }
-      }
     }
     if (p) {
       localPaths.push(p);
@@ -324,6 +338,46 @@ async function renderMerge(db, log, r, baseUrl, work) {
   if (mode === 'draft') {
     if (!usableScenes.length) throw new Error(draftWarnings.join('；') || '没有可预览的镜头');
     scenes = usableScenes;
+    const order = mergeOpts.logical_order || [];
+    for (let i=1; i<scenes.length; i++) {
+      const previous = scenes[i-1], next = scenes[i];
+      if (order.indexOf(next.scene_id) > order.indexOf(previous.scene_id)+1) {
+        draftWarnings.push('第 ' + previous.storyboard_number + ' → ' + next.storyboard_number + ' 镜为缺镜后的临时跳接');
+      }
+    }
+  }
+
+  const edit = require('./episodeCutPlan');
+  const plan = mergeOpts.edit_plan;
+  if (plan && (plan.cuts.length || mergeOpts.audition_pair)) {
+    const inputs = new Map((mergeOpts.audition_inputs || []).map(s => [s.id,s]));
+    for (const p of parts) inputs.set(p.shot.scene_id,edit.inputOf(p.shot,p.info,p.file,p.digest));
+    const order = mergeOpts.logical_order || scenes.map(s => s.scene_id);
+    cutPlan = edit.compile(plan,order.map(id => inputs.get(id) || {id}));
+    if (cutPlan.stale.length) {
+      if (!mergeOpts.audition_pair) edit.markPending(db,episodeId,plan,cutPlan.stale);
+      const labels = cutPlan.stale.map(c => [c.left,c.right].map(s => scenes.find(row => row.scene_id === s.id)?.storyboard_number ?? ('ID ' + s.id)).join('→'));
+      const message = '接缝 ' + labels.join('、') + ' 的采用素材或镜序已变化，请复核或恢复';
+      if (complete) throw new Error(message);
+      draftWarnings.push(message);
+    }
+    const hz = edit.frameRate(cutPlan.fps);
+    for (const part of parts) {
+      const row = cutPlan.rows.find(s => s.id === part.shot.scene_id);
+      part.range = { ...row, fps:cutPlan.fps };
+      part.shot.duration = row.frames / hz;
+      part.shot.edit_range = part.range;
+    }
+    if (mergeOpts.audition_pair) {
+      const [left,right] = mergeOpts.audition_pair;
+      const index = cutPlan.rows.findIndex(s => s.id === left.id);
+      if (!edit.matches(cutPlan.rows[index],left) || !edit.matches(cutPlan.rows[index+1],right)
+        || cutPlan.rows[index].sound_key !== left.sound_key || cutPlan.rows[index+1].sound_key !== right.sound_key) throw new Error('相邻采用片或声音已变化，请重新试听');
+      parts = parts.filter(p => p.shot.scene_id === left.id || p.shot.scene_id === right.id);
+      if (parts.length !== 2) throw new Error('试听需要两侧完整、可解码的采用片');
+      scenes = parts.map(p => p.shot);
+      previewSeam = scenes[0].duration;
+    }
   }
 
   const ffmpegAvailable = hasLocalFfmpeg();
@@ -344,25 +398,17 @@ async function renderMerge(db, log, r, baseUrl, work) {
       : path.join(storageRoot, 'videos', 'merged');
     if (!fs.existsSync(mergedDir)) fs.mkdirSync(mergedDir, { recursive: true });
     const outputFileName = `merged_${mergeId}_${Date.now()}.mp4`;
-    if (mode) work.outputDir = fs.mkdtempSync(path.join(mergedDir, 'cut-'));
-    const outputPath = path.join(work.outputDir || mergedDir, outputFileName);
-    // A concatenated stream can carry only one rotation matrix and sample aspect ratio.
-    // FFmpeg autorotates each input while encoding these mixed clips to one layout.
-    if (mixedLayout) {
-      const width = Math.ceil(firstInfo.width / 2) * 2;
-      const height = Math.ceil(firstInfo.height / 2) * 2;
-      const filter = `scale=${width}:${height},setsar=${firstInfo.ratio * height / width}:max=10000`;
-      for (let i = 0; i < localPaths.length; i++) {
-        const normalized = path.join(tempDir, `upright-${i}.mp4`);
-        await execFile(getFfmpegPath(), ['-v', 'error', '-i', localPaths[i], '-map', '0:v:0', '-map', '0:a?',
-          '-vf', filter, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
-          '-c:a', 'aac', '-ar', '44100', '-ac', '2', normalized]).catch(err => {
-          throw new Error(`第 ${usableScenes[i].storyboard_number ?? usableScenes[i].scene_id} 镜画幅转换失败：${err.stderr || err.message}`);
-        });
-        localPaths[i] = normalized;
-      }
+    const parent = mergeOpts.audition_pair ? path.join(mergedDir,'auditions') : mergedDir;
+    if (mode) {
+      fs.mkdirSync(parent,{recursive:true});
+      work.outputDir = fs.mkdtempSync(path.join(parent,'cut-'));
     }
-    const ok = runFfmpegConcat(localPaths, outputPath, log);
+    const outputPath = path.join(work.outputDir || mergedDir, outputFileName);
+    let ok;
+    if (mode) {
+      await require('./episodeMediaRender').renderDeliveryShots(parts, mergeOpts.audition_canvas || firstInfo, mergeOpts, storageRoot, tempDir, outputPath, draftWarnings);
+      ok = true;
+    } else ok = runFfmpegConcat(localPaths, outputPath, log);
     if (ok && fs.existsSync(outputPath)) {
       mergedRelativePath = path.relative(storageRoot, outputPath).replace(/\\/g, '/');
       log.info('Video merge completed (ffmpeg)', { merge_id: mergeId, episode_id: episodeId, output: mergedRelativePath });
@@ -373,7 +419,7 @@ async function renderMerge(db, log, r, baseUrl, work) {
   if (mode && !mergedRelativePath) throw new Error(`第 ${shotRange} 镜无法合成，请检查 FFmpeg 和源文件`);
   const postNeed =
     !!mergeOpts.burn_narration_subtitles
-    || !!mergeOpts.burn_dialogue_audio
+    || (!mode && !!mergeOpts.burn_dialogue_audio)
     || !!(mergeOpts.watermark_text && String(mergeOpts.watermark_text).trim());
   if (mergedRelativePath && ffmpegAvailable && postNeed) {
     const mergedAbsPath = path.join(storageRoot, mergedRelativePath.replace(/\//g, path.sep));
@@ -404,32 +450,69 @@ async function renderMerge(db, log, r, baseUrl, work) {
 
   if (mode) {
     totalDuration = scenes.reduce((sum, sc) => sum + sc.duration, 0);
-    const wantsAudio = mergeOpts.burn_dialogue_audio || mergeOpts.burn_narration_subtitles;
-    const info = await inspectDeliveryClip(path.join(storageRoot, mergedRelativePath), `第 ${shotRange} 镜合成结果`, complete && wantsAudio);
-    if (!complete && wantsAudio && !info.hasAudio) draftWarnings.push(`第 ${shotRange} 镜草稿未包含所选音轨`);
+    const info = await inspectDeliveryClip(path.join(storageRoot, mergedRelativePath), `第 ${shotRange} 镜合成结果`, true);
+    if (!Number.isFinite(info.audioSeconds) || Math.abs(info.audioSeconds - totalDuration) > Math.max(info.frame, 0.025) + 0.002) {
+      throw new Error(`第 ${shotRange} 镜合成后主声轨时长不符`);
+    }
     if (Math.abs(info.seconds - totalDuration) > Math.max(firstInfo.frame, info.frame) + 0.001 ||
-        Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(`第 ${shotRange} 镜合成后画幅或时长不符`);
+        Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(`第 ${shotRange} 镜合成后画幅或时长不符（实际 ${info.seconds} 秒，预期 ${totalDuration} 秒）`);
   }
 
+  if (previewSeam != null) {
+    const movie = path.join(storageRoot,mergedRelativePath);
+    const hz = edit.frameRate(cutPlan.fps);
+    const radius = Math.max(1,Math.round(hz * 2));
+    const seamFrame = Math.round(previewSeam * hz);
+    const start = Math.max(0,seamFrame - radius);
+    const end = Math.min(Math.round(totalDuration * hz),seamFrame + radius);
+    const window = path.join(work.outputDir,'audition.mp4');
+    await execFile(getFfmpegPath(), ['-v','error','-i',movie,'-vf','trim=start_frame=' + start + ':end_frame=' + end + ',setpts=PTS-STARTPTS',
+      '-af','atrim=start=' + start/hz + ':end=' + end/hz + ',asetpts=PTS-STARTPTS','-c:v','libx264','-crf','18','-c:a','aac',window]);
+    fs.unlinkSync(movie);
+    mergedRelativePath = path.relative(storageRoot,window).split(path.sep).join('/');
+    previewSeam = (seamFrame - start) / hz;
+    totalDuration = (end-start) / hz;
+  }
   const finalMergedUrl = mergedRelativePath || mergedUrlFallback;
   db.transaction(() => {
+    if ((complete || mergeOpts.audition_pair) && mergeOpts.edit_revision != null && edit.readPlan(db,episodeId).revision !== mergeOpts.edit_revision) {
+      throw new Error('剪辑版本已变化，请重新试听或交付');
+    }
+    if ((complete || mergeOpts.audition_pair) && parts.some(p => require('./episodeSound').mediaDigest(p.file) !== (p.digest || p.range.digest))) throw new Error('采用片内容已变化，请重新试听或交付');
+    if (complete || mergeOpts.audition_pair) {
+      const fresh = require('./dramaService').episodeDeliveryInputs(db, episodeId, baseUrl, mergeOpts);
+      const expected = complete ? fresh : fresh.filter(s => s.video_url);
+      if (snapshot !== JSON.stringify(expected)) throw new Error(`第 ${shotRange} 镜的采用、顺序或声音资料已变化，请重新试听或交付`);
+    }
     if (complete) {
-      const fresh = require('./dramaService').episodeDeliveryInputs(db, episodeId, baseUrl);
-      if (snapshot !== JSON.stringify(fresh)) throw new Error(`第 ${shotRange} 镜的采用、顺序或声音资料已变化，请重新交付`);
       const later = db.prepare("SELECT id FROM video_merges WHERE episode_id = ? AND id > ? AND status = 'completed' AND COALESCE(json_extract(merge_options, '$.delivery_mode'),'') <> 'draft' LIMIT 1").get(episodeId, mergeId);
       if (later) throw new Error('已有较新的成片发布');
     }
     db.prepare(
       'UPDATE video_merges SET status = ?, merged_url = ?, duration = ?, completed_at = ?, error_msg = ? WHERE id = ?'
     ).run('completed', finalMergedUrl, Math.round(totalDuration) || null, now, null, mergeId);
-    if (complete || (!mode && !hasPublishedDelivery(db, episodeId))) {
+    if (complete || ((legacyEpisode || !mode) && !hasPublishedDelivery(db, episodeId))) {
       db.prepare('UPDATE episodes SET video_url = ?, status = ?, updated_at = ? WHERE id = ?').run(finalMergedUrl, 'completed', now, episodeId);
     }
     if (taskId) taskService.updateTaskResult(db, taskId, {
       merge_id: mergeId, video_url: finalMergedUrl, duration: Math.round(totalDuration),
       ...(mode === 'draft' ? { warnings: draftWarnings, scenes_count: scenes.length } : {}),
+      ...(previewSeam != null && { seam_seconds: previewSeam }),
     });
   })();
+  if (previewSeam != null) {
+    const parent = path.dirname(work.outputDir);
+    const expired = db.prepare(`SELECT id,merged_url FROM video_merges WHERE episode_id=? AND deleted_at IS NULL
+      AND status='completed' AND json_type(merge_options,'$.audition_pair')='array' ORDER BY id DESC LIMIT -1 OFFSET 12`).all(episodeId);
+    for (const item of expired) {
+      const folder = path.dirname(path.resolve(storageRoot,item.merged_url));
+      if (path.dirname(folder) !== parent || !path.basename(folder).startsWith('cut-')) continue;
+      try {
+        fs.rmSync(folder,{recursive:true,force:true});
+        deleteById(db,log,item.id);
+      } catch (err) { log.warn('清理旧试听失败',{merge_id:item.id,error:err.message}); }
+    }
+  }
   if (!mergedRelativePath) {
     log.info('Video merge completed (first-clip fallback)', { merge_id: mergeId, episode_id: episodeId });
   }
@@ -444,4 +527,5 @@ module.exports = {
   processVideoMerge,
   buildConcatArgs,
   runFfmpegConcat,
+  resolveVideoToLocalPath, inspectDeliveryClip,
 };

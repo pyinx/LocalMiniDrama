@@ -202,13 +202,13 @@
                   class="story-textarea"
                 />
                 <div class="row gap" style="margin-top: 10px; flex-wrap: wrap;">
-                  <el-select v-model="storyStyle" placeholder="故事风格" clearable style="width: 120px" @change="() => saveProjectSettings(false)">
+                  <el-select v-model="storyStyle" placeholder="故事风格" clearable style="width: 120px" @change="() => saveProjectSettings()">
                     <el-option label="现代" value="modern" />
                     <el-option label="古风" value="ancient" />
                     <el-option label="奇幻" value="fantasy" />
                     <el-option label="日常" value="daily" />
                   </el-select>
-                  <el-select v-model="storyType" placeholder="剧本类型" clearable style="width: 120px" @change="() => saveProjectSettings(false)">
+                  <el-select v-model="storyType" placeholder="剧本类型" clearable style="width: 120px" @change="() => saveProjectSettings()">
                     <el-option label="剧情" value="drama" />
                     <el-option label="喜剧" value="comedy" />
                     <el-option label="冒险" value="adventure" />
@@ -360,7 +360,7 @@
       <section class="section card pipeline-section">
         <div class="one-click-actions">
           <span class="one-click-label">🚀 一键全流程</span>
-          <el-select v-model="projectAspectRatio" style="width: 130px" @change="() => saveProjectSettings(false)">
+          <el-select v-model="projectAspectRatio" style="width: 130px" @change="() => saveProjectSettings()">
             <el-option label="16:9 横屏" value="16:9" />
             <el-option label="9:16 竖屏" value="9:16" />
             <el-option label="3:4 竖版" value="3:4" />
@@ -368,7 +368,7 @@
             <el-option label="4:3" value="4:3" />
             <el-option label="21:9 宽银幕" value="21:9" />
           </el-select>
-          <el-select v-model="videoClipDuration" style="width: 105px" @change="() => saveProjectSettings(false)">
+          <el-select v-model="videoClipDuration" style="width: 105px" @change="() => saveProjectSettings()">
             <el-option label="4秒/段" :value="4" />
             <el-option label="5秒/段" :value="5" />
             <el-option label="8秒/段" :value="8" />
@@ -383,8 +383,9 @@
           <StylePickerButton
             v-model="generationStyle"
             v-model:custom-prompt="customStylePrompt"
+            v-model:custom-snapshot="customStyleSnapshot"
             :options="generationStyleOptions"
-            @change="() => saveProjectSettings(true)"
+            :adopt="adoptProjectStyle"
           />
           <el-button
             type="primary"
@@ -836,10 +837,10 @@
           <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
             首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
           </el-checkbox>
-          <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings(false)">
+          <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings()">
             全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
           </el-checkbox>
-          <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings(false)">
+          <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
             生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
           </el-checkbox>
           <el-button
@@ -1512,6 +1513,7 @@
               <el-button v-if="sb.resolved_video || getSbAllVideos(sb.id).length || sb.adopted_video_generation_id" size="small" @click="reviewBoard = sb">
                 {{ sb.adopted_video_generation_id ? '已采用 #' + sb.adopted_video_generation_id + ' · 审片' : '选择采用版与审片' }}
               </el-button>
+              <el-button v-if="sb.resolved_video && getNextStoryboard(sb.id)" size="small" link @click="seamEditor?.open(sb.id)">与下一镜对听</el-button>
               <!-- 视频历史条：有多条历史时显示，点击可切换 -->
               <div v-if="getVideoStripItems(sb.id).length" class="sb-videos-strip">
                 <el-tooltip content="历史视频：点击采用此候选" placement="top" :show-arrow="false">
@@ -1533,6 +1535,13 @@
                 <el-tooltip v-if="getNextStoryboard(sb.id)" content="提取本视频尾帧，设为下一个分镜的首帧" placement="top">
                   <el-button size="small" :loading="linkingTailFrameIds.has(sb.id)" @click="onLinkTailFrameToNext(sb)">尾帧衔接</el-button>
                 </el-tooltip>
+                <label>本镜声音
+                  <select :value="sb.sound_source || 'auto'" :disabled="savingShotSound[sb.id]" @change="onShotSound(sb, $event)">
+                    <option value="auto">跟随整集</option><option value="original">原声</option>
+                    <option value="dub" :disabled="!sbDialogueAudioRelPath(sb)">采用配音</option><option value="mute">静音</option>
+                  </select>
+                </label>
+                <el-button v-if="sb.sound_source === 'dub' && sbDialogueAudioRelPath(sb)" size="small" link :disabled="savingShotSound[sb.id]" @click="saveShotSound(sb, 'dub')">采用当前配音</el-button>
                 <el-tooltip v-if="sb.dialogue" content="对白配音（TTS）" placement="top">
                   <el-button size="small" :loading="ttsSbIds.has(sb.id)" @click="onTtsSbDialogue(sb)">
                     对白配音
@@ -1606,7 +1615,7 @@
           <el-form-item label="对白烧录">
             <div class="video-option-row">
               <el-switch v-model="videoBurnDialogue" />
-              <span v-if="videoBurnDialogue" class="video-option-hint">开启后，将把各镜「配音」生成的对白 TTS 按分镜时长对齐并混入整集成片（无对白音频的分镜为静音）。可与「字幕」旁白同时开启，两条音轨会叠混。</span>
+              <span v-if="videoBurnDialogue" class="video-option-hint">跟随整集的镜头使用已有配音，其余保留原声。单镜选择优先，旁白可独立叠加。</span>
             </div>
           </el-form-item>
           <el-form-item label="水印">
@@ -1640,6 +1649,9 @@
           正式交付整集
         </el-button>
         <el-button size="large" :loading="draftBusy" :disabled="!currentEpisodeId || !storyboards.length" @click="previewDraft">草稿预览</el-button>
+        <EpisodeSeamEditor v-if="currentEpisodeId" ref="seamEditor" :key="currentEpisodeId" :episode-id="Number(currentEpisodeId)" :options="getFinalizeMergeOptions('draft')" />
+        <DeliveryLoudness v-if="store.dramaId && currentEpisodeId" :key="store.dramaId + '/' + currentEpisodeId"
+          :drama-id="Number(store.dramaId)" :episode-id="Number(currentEpisodeId)" :episodes="store.drama?.episodes" />
         <div v-if="draftPreview?.episode === currentEpisodeId" class="video-preview-wrap">
           <p>{{ draftPreview.message }}</p>
           <video v-if="draftPreview.url" :src="draftPreview.url" controls />
@@ -2606,6 +2618,8 @@
 <script setup>
 import { previousStoryboard, previousTakeUrl } from '@/utils/mediaUrl'
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
+import DeliveryLoudness from '@/components/DeliveryLoudness.vue'
+import EpisodeSeamEditor from '@/components/EpisodeSeamEditor.vue'
 import CreativeReviewPanel from '@/components/CreativeReviewPanel.vue'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 const creativeReviewPanel = ref(null)
@@ -2718,48 +2732,32 @@ const isStoryGenRunning = computed(() => {
 })
 const generationStyle = ref('')
 const customStylePrompt = ref('')
+const customStyleSnapshot = ref(null)
 const projectAspectRatio = ref('16:9')
 const videoClipDuration = ref(5)
 
-/** 根据 value 查找样式选项对象 */
-function _findStyleOption(val) {
-  for (const group of generationStyleOptions) {
-    const found = group.options.find(o => o.value === val)
-    if (found) return found
-  }
-  return null
-}
-
-/** 传给图像/视频 AI 用的英文 prompt（效果最好）；
- *  找不到 promptEn 时降级到 prompt，再降级到原始值；
- *  custom 时返回用户填写的自定义描述，避免把字面量 "custom" 写入提示词 */
 function getSelectedStylePrompt() {
-  const val = (generationStyle.value || '').toString().trim()
-  if (!val) return undefined
-  if (val === CUSTOM_STYLE_VALUE) {
-    const text = (customStylePrompt.value || '').toString().trim()
-    return text || undefined
-  }
-  const opt = _findStyleOption(val)
-  if (opt) return opt.promptEn || opt.prompt || val
-  return val
+  const meta = projectStylePromptMetadata()
+  return meta.style_prompt_en || meta.style_prompt_zh || undefined
 }
 
-/** 中文风格描述（用于界面展示或中文场景提示词拼接） */
 function getSelectedStylePromptZh() {
-  const val = (generationStyle.value || '').toString().trim()
-  if (!val) return undefined
-  if (val === CUSTOM_STYLE_VALUE) {
-    const text = (customStylePrompt.value || '').toString().trim()
-    return text || undefined
+  const meta = projectStylePromptMetadata()
+  return meta.style_prompt_zh || meta.style_prompt_en || undefined
+}
+
+async function adoptProjectStyle(value, positive, snapshot) {
+  if (!store.dramaId) return
+  const metadata = stylePromptMetadataForSave(value, positive, snapshot)
+  await dramaAPI.saveOutline(store.dramaId, { style: value, metadata })
+  if (store.drama) {
+    store.drama.style = value
+    store.drama.metadata = { ...store.drama.metadata, ...metadata, custom_style: snapshot }
   }
-  const opt = _findStyleOption(val)
-  if (opt) return opt.prompt || opt.promptEn || val
-  return val
 }
 
 function projectStylePromptMetadata() {
-  return stylePromptMetadataForSave(generationStyle.value, customStylePrompt.value)
+  return stylePromptMetadataForSave(generationStyle.value, customStylePrompt.value, customStyleSnapshot.value, store.drama)
 }
 
 const scriptContent = computed({
@@ -3605,7 +3603,7 @@ function onStoryboardUseFirstLastFrameChange() {
     gridMode.value = 'single'
     ElMessage.info('首尾帧模式已开启，序列图已切换为单张')
   }
-  saveProjectSettings(false)
+  saveProjectSettings()
 }
 
 function uploadingSbImageSlot(sbId) {
@@ -4578,6 +4576,7 @@ async function loadDrama() {
     storyStyle.value = (d.metadata && d.metadata.story_style) ? d.metadata.story_style : ''
     storyType.value = d.genre || ''
     generationStyle.value = d.style || ''
+    customStyleSnapshot.value = d.metadata?.custom_style || null
     if ((d.style || '') === CUSTOM_STYLE_VALUE) {
       customStylePrompt.value = (d.metadata?.style_prompt_zh || d.metadata?.style_prompt_en || '').toString()
     } else {
@@ -4973,11 +4972,7 @@ async function saveScriptToBackend(content) {
   return { created: false }
 }
 
-/**
- * @param {boolean} includeGenerationStyle - 仅在选择「画面风格」为 true：写入 dramas.style 与 style_prompt_*。
- * 其它项目设置改为 false，避免界面未刷新时仍用旧的 generationStyle 覆盖外部已更新的画风（如直接调 API PUT outline）。
- */
-async function saveProjectSettings(includeGenerationStyle = false) {
+async function saveProjectSettings() {
   if (!store.dramaId) return
   const metadata = {
     story_style: storyStyle.value || undefined,
@@ -4988,15 +4983,9 @@ async function saveProjectSettings(includeGenerationStyle = false) {
     storyboard_use_first_last_frame: !!storyboardUseFirstLastFrame.value,
     last_frame_use_first_layout_lock: !!lastFrameUseFirstLayoutLock.value,
   }
-  if (includeGenerationStyle) {
-    Object.assign(metadata, projectStylePromptMetadata())
-  }
   const payload = {
     genre: storyType.value || undefined,
     metadata,
-  }
-  if (includeGenerationStyle) {
-    payload.style = generationStyle.value || undefined
   }
   dramaAPI.saveOutline(store.dramaId, payload).catch(e => console.error('Settings auto-save failed', e))
 }
@@ -5011,6 +5000,8 @@ async function onGenerateStory() {
     scriptTitle: scriptTitle.value,
     generationStyle: generationStyle.value,
     customStylePrompt: customStylePrompt.value,
+    customStyleSnapshot: customStyleSnapshot.value,
+    projectStyleMetadata: projectStylePromptMetadata(),
     projectAspectRatio: projectAspectRatio.value,
     store,
     router,
@@ -5450,6 +5441,22 @@ async function onUpscaleSbImage(sb) {
 function normalizeAudioRelPath(raw) {
   const s = String(raw != null ? raw : '').trim().replace(/^\//, '')
   return s
+}
+
+const seamEditor = ref(null)
+const savingShotSound = ref({})
+async function saveShotSound(sb, source) {
+  savingShotSound.value[sb.id] = true
+  try {
+    const result = await storyboardsAPI.update(sb.id, { sound_source: source })
+    sb.sound_source = result.sound_source
+  } catch (e) { ElMessage.error(e.message || '声音选择保存失败') }
+  finally { savingShotSound.value[sb.id] = false }
+}
+async function onShotSound(sb, event) {
+  const control = event.target
+  await saveShotSound(sb, control.value)
+  control.value = sb.sound_source || 'auto'
 }
 
 /** 对白 TTS 相对路径 */
@@ -8039,6 +8046,7 @@ function applyRouteToStore() {
     scriptStoryboardStyle.value = ''
     generationStyle.value = ''
     customStylePrompt.value = ''
+    customStyleSnapshot.value = null
   }
 }
 

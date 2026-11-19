@@ -556,6 +556,7 @@ async function processVideoGeneration(db, log, videoGenId) {
     }
     const result = await videoClient.callVideoApi(db, log, {
       prompt: row.prompt,
+      style_negative: row.style_negative || undefined,
       model: row.model,
       duration: effectiveDuration,
       aspect_ratio: rowForAspect.aspect_ratio,
