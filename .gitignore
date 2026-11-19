@@ -33,3 +33,4 @@ exports
 # hx: scratch state and local evidence are not worth reviewing
 .harness/.tmp/
 .harness/changes/*/records/
+.harness/changes/
