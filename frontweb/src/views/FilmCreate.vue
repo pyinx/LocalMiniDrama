@@ -1913,6 +1913,9 @@
             />
           </div>
         </el-form-item>
+        <el-form-item v-if="editPropForm.id" label="道具状态">
+          <VariantEditor kind="prop_state" :parent-id="editPropForm.id" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showEditProp = false">取消</el-button>
@@ -1993,6 +1996,9 @@
               style="font-size:12px"
             />
           </div>
+        </el-form-item>
+        <el-form-item v-if="editSceneForm.id" label="场景版本">
+          <VariantEditor kind="scene_state" :parent-id="editSceneForm.id" />
         </el-form-item>
       </el-form>
       <template #footer>

@@ -23,6 +23,18 @@
       </el-input>
     </div>
 
+    <div class="seg-ir-row seg-ir-row--2">
+      <span class="seg-ir-cast-name">场景版本</span>
+      <el-select v-model="form.scene.state_id" size="small" placeholder="母版（场景主图）" clearable @change="dirty = true" @visible-change="(o) => o && loadSceneStates()">
+        <el-option v-for="st in sceneStates" :key="st.id" :label="st.name" :value="st.id" />
+      </el-select>
+    </div>
+    <div v-for="p in form.prop_refs" :key="'p' + p.prop_id" class="seg-ir-row seg-ir-row--2">
+      <span class="seg-ir-cast-name">道具 · {{ p.alias }}</span>
+      <el-select v-model="p.state_id" size="small" placeholder="初始状态（道具主图）" clearable @change="dirty = true" @visible-change="(o) => o && loadPropStates(p.prop_id)">
+        <el-option v-for="st in propStates[p.prop_id] || []" :key="st.id" :label="st.name" :value="st.id" />
+      </el-select>
+    </div>
     <div class="seg-ir-sub">出场与造型</div>
     <div v-for="c in form.cast" :key="c.character_id" class="seg-ir-row seg-ir-row--2">
       <span class="seg-ir-cast-name">{{ c.alias }}</span>
@@ -157,6 +169,22 @@ async function loadWardrobes(characterId) {
   } catch (_) {}
 }
 for (const c of form.value.cast || []) if (c.wardrobe_id != null) loadWardrobes(c.character_id)
+
+const sceneStates = ref([])
+async function loadSceneStates() {
+  try {
+    sceneStates.value = (await variantsAPI.list('scene_state', form.value.scene.scene_id)) || []
+  } catch (_) {}
+}
+if (form.value.scene && form.value.scene.state_id != null) loadSceneStates()
+
+const propStates = ref({})
+async function loadPropStates(propId) {
+  try {
+    propStates.value = { ...propStates.value, [propId]: (await variantsAPI.list('prop_state', propId)) || [] }
+  } catch (_) {}
+}
+for (const p of form.value.prop_refs || []) if (p.state_id != null) loadPropStates(p.prop_id)
 
 const castAliases = computed(() => (form.value.cast || []).map((c) => c.alias))
 const totalSeconds = computed(() => form.value.shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0))

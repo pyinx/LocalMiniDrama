@@ -115,3 +115,31 @@ describe('POST /videos rejects bad IR before any request (AC5)', () => {
     }
   });
 });
+
+describe('IR binds variant images (AC12)', () => {
+  const { createIrTestDb, noopLog } = require('./helpers/segmentIrFixtures');
+  const storyboardService = require('../src/services/storyboardService');
+  const segmentCompileService = require('../src/services/segmentCompileService');
+  const aiConfigService = require('../src/services/aiConfigService');
+
+  it('binds wardrobe and scene state images', () => {
+    const { db, ids } = createIrTestDb();
+    const now = new Date().toISOString();
+    db.prepare("UPDATE characters SET image_url = 'http://cdn/lin-base.png' WHERE id = ?").run(ids.linId);
+    db.prepare("UPDATE scenes SET image_url = 'http://cdn/room-master.png' WHERE id = ?").run(ids.sceneId);
+    const wid = Number(db.prepare("INSERT INTO character_wardrobes (character_id, name, change_phrase, image_url, created_at, updated_at) VALUES (?, '西装', '深灰西装', 'http://cdn/lin-suit.png', ?, ?)").run(ids.linId, now, now).lastInsertRowid);
+    const sid = Number(db.prepare("INSERT INTO scene_states (scene_id, name, kind, state_phrase, image_url, created_at, updated_at) VALUES (?, '夜', 'portrait', '夜晚', 'http://cdn/room-night.png', ?, ?)").run(ids.sceneId, now, now).lastInsertRowid);
+    const ir = sampleIr({ sceneId: ids.sceneId, linId: ids.linId, hrId: ids.hrId });
+    ir.cast[0].wardrobe_id = wid;
+    ir.scene.state_id = sid;
+    storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, ir);
+    const saved = aiConfigService.listConfigs;
+    aiConfigService.listConfigs = () => [{ id: 1, service_type: 'video', is_active: true, is_default: true, provider: 'minimax', api_protocol: 'minimax_h3', base_url: 'https://api', api_key: 'k', model: ['MiniMax-H3'], default_model: 'MiniMax-H3' }];
+    try {
+      const r = segmentCompileService.compileStoryboard(db, ids.sbIr);
+      const urls = Object.fromEntries(r.compiled.refs.map((x) => [x.alias, x.url]));
+      assert.equal(urls['林远'], 'http://cdn/lin-suit.png', 'wardrobe image, not the base');
+      assert.equal(urls['会议室'], 'http://cdn/room-night.png', 'scene state image, not the master');
+    } finally { aiConfigService.listConfigs = saved; }
+  });
+});

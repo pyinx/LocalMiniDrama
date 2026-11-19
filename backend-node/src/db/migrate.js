@@ -538,6 +538,38 @@ function ensureAllColumns(database) {
   } catch (e) {
     console.warn('character_wardrobes init failed:', e.message);
   }
+  // --- 场景状态（状态版本 / 竖屏主机位 / 反打；母版 = 场景主图）与道具状态（初始状态 = 道具主图） ---
+  try {
+    database.exec(`CREATE TABLE IF NOT EXISTS scene_states (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      scene_id     INTEGER NOT NULL,
+      name         TEXT NOT NULL DEFAULT '',
+      kind         TEXT NOT NULL DEFAULT 'state',
+      state_phrase TEXT,
+      prompt       TEXT,
+      image_url    TEXT,
+      local_path   TEXT,
+      sort_order   INTEGER DEFAULT 0,
+      created_at   TEXT,
+      updated_at   TEXT,
+      deleted_at   TEXT
+    )`);
+    database.exec(`CREATE TABLE IF NOT EXISTS prop_states (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      prop_id      INTEGER NOT NULL,
+      name         TEXT NOT NULL DEFAULT '',
+      state_phrase TEXT,
+      prompt       TEXT,
+      image_url    TEXT,
+      local_path   TEXT,
+      sort_order   INTEGER DEFAULT 0,
+      created_at   TEXT,
+      updated_at   TEXT,
+      deleted_at   TEXT
+    )`);
+  } catch (e) {
+    console.warn('scene_states / prop_states init failed:', e.message);
+  }
 
   // --- global_settings（全局键值设置表） ---
   try {

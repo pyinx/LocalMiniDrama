@@ -292,6 +292,14 @@ function setupRouter(cfg, db, log) {
   r.put('/wardrobes/:id', wardrobes.update);
   r.delete('/wardrobes/:id', wardrobes.remove);
   r.post('/wardrobes/:id/generate-image', wardrobes.generateImage);
+  for (const [kind, parentPath, itemPath] of [['scene_state', '/scenes/:id/states', '/scene-states'], ['prop_state', '/props/:id/states', '/prop-states']]) {
+    const v = variants(kind);
+    r.get(parentPath, v.list);
+    r.post(parentPath, v.create);
+    r.put(`${itemPath}/:id`, v.update);
+    r.delete(`${itemPath}/:id`, v.remove);
+    r.post(`${itemPath}/:id/generate-image`, v.generateImage);
+  }
   r.delete('/storyboards/:id', storyboards.delete);
   r.post('/storyboards/:id/props', prop.associateProps);
   r.post('/storyboards/:id/frame-prompt', storyboards.framePrompt);

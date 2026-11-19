@@ -29,6 +29,51 @@ const KINDS = {
         .filter(Boolean)
         .join('\n'),
   },
+  scene_state: {
+    table: 'scene_states',
+    parentTable: 'scenes',
+    parentCol: 'scene_id',
+    parentLabel: '场景',
+    storageCategory: 'scenes',
+    size: (row) => (row.kind === 'portrait' ? '1024x1792' : '1792x1024'),
+    schema: z.object({
+      name: z.string().trim().min(1),
+      kind: z.enum(['state', 'portrait', 'reverse']).default('state'),
+      state_phrase: z.string().trim().min(1),
+      sort_order: z.number().int().optional(),
+    }),
+    columns: ['name', 'kind', 'state_phrase', 'sort_order'],
+    // 场景图用完整风格句（含光的倾向）
+    buildPrompt: (parent, row, style) =>
+      [
+        style.video,
+        A.sceneStateLead(parent.location || '场景'),
+        A.sceneStateChange(row.state_phrase),
+        row.kind === 'portrait' ? A.scenePortrait : null,
+        row.kind === 'reverse' ? A.sceneReverse : null,
+        A.sceneEmpty,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+  },
+  prop_state: {
+    table: 'prop_states',
+    parentTable: 'props',
+    parentCol: 'prop_id',
+    parentLabel: '道具',
+    storageCategory: 'props',
+    size: '1024x1024',
+    schema: z.object({
+      name: z.string().trim().min(1),
+      state_phrase: z.string().trim().min(1),
+      sort_order: z.number().int().optional(),
+    }),
+    columns: ['name', 'state_phrase', 'sort_order'],
+    buildPrompt: (parent, row, style) =>
+      [style.asset, A.propStateLead(parent.name || '道具'), String(parent.description || '').trim(), A.propStateChange(row.state_phrase)]
+        .filter(Boolean)
+        .join('\n'),
+  },
 };
 
 function kindOf(kind) {
@@ -132,7 +177,7 @@ function generateImage(db, log, kind, id, opts = {}) {
   if (!parent) throw codedError('not_found', `${k.parentLabel}已不存在`);
   const cfg = cfgNow();
   const baseUrl = k.baseImage ? k.baseImage(db, cfg, parent, row) : toPublicUrl(cfg, parent.image_url, parent.local_path);
-  if (!baseUrl) throw codedError('base_image_missing', `请先为${k.parentLabel}「${parent.name || parent.location}」生成基础图，变体要以它为参考`);
+  if (!baseUrl) throw codedError('base_image_missing', `请先为${k.parentLabel}「${parent.name || parent.location}」生成主图，变体要以它为参考`);
   const drama = db.prepare('SELECT style, metadata FROM dramas WHERE id = ?').get(parent.drama_id);
   const style = deriveStyleSentences((mergeCfgStyleWithDrama(cfg, drama || {}).style || {}).default_style_zh || '');
   const prompt = k.buildPrompt(parent, row, style);
@@ -141,7 +186,7 @@ function generateImage(db, log, kind, id, opts = {}) {
     drama_id: parent.drama_id,
     prompt,
     model: opts.model || undefined,
-    size: k.size,
+    size: typeof k.size === 'function' ? k.size(row) : k.size,
     quality: 'standard',
     provider: 'openai',
     reference_image_urls: [baseUrl],
