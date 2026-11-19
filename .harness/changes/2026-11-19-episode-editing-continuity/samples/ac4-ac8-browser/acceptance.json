@@ -1,0 +1,80 @@
+{
+  "浏览器": "Chrome 157.0.8103.79 browser interactions passed",
+  "运行环境": "回环地址、随机端口、独立临时 SQLite 与存储、正式前端构建；不调用模型。",
+  "前端测试": {
+    "修复前": [
+      "✔ maps original and trial playheads to source time (16320.912625ms)",
+      "✖ auditions accepts and restores a seam (8.080667ms)",
+      "✖ a missing neighbor cannot select or audition a different seam (2.828458ms)",
+      "✖ saving freezes cut points until the persisted plan is loaded (2.989459ms)",
+      "✖ shows available tail and restores synchronous sound (1.702458ms)"
+    ],
+    "修复后": [
+      "✔ auditions accepts and restores a seam (13.9335ms)",
+      "✔ a missing neighbor cannot select or audition a different seam (1.462792ms)",
+      "✔ saving freezes cut points until the persisted plan is loaded (1.193083ms)",
+      "✔ shows available tail and restores synchronous sound (2.983417ms)",
+      "ℹ pass 46",
+      "ℹ fail 0"
+    ]
+  },
+  "浏览器操作": [
+    "原版暂停；再点听原版，原视频继续播放。",
+    "未剪时尾音不可启用；输入前镜结束 1.2 秒、后镜开始 0.4 秒；启用上一句说完，显示并采用 0.35 秒。后镜对白在 0.75 秒处开始。",
+    "听试剪、关闭、正式交付；重开重做试剪；仅延迟真实 PUT 的发送，验证前后镜标点、帧步进和尾音均锁定；释放、保存、关闭，正式交付。",
+    "重开读回已采用的 0.35 秒；关闭尾音试听同步切。恢复完整源段，正式交付；重开看到完整源段、零余量及空剪法。",
+    "延迟真实试听请求的应答；在 1.08 秒版等待期间修改为 1.4 秒；旧应答到达后采用仍禁用，新版播放后才可采用。",
+    "打开空集出现提示；加入单镜并从制作页播放草稿。另一集 1→2→3→4 缺第 2 镜，由第 1 镜进入时没有已选接缝、无播放器、未发送试听请求。"
+  ],
+  "素材": "蓝、红各 2 秒，25 fps。系统本地中文语音读出「我没怪你」「我知道」，各从 0.95 秒和 0.75 秒开始。只衡量技术兑现，观众理解需另行验收。",
+  "实际请求": [
+    "2026-11-19T09:32:23.322Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:32:23.658Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:32:26.430Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:32:30.369Z [INFO] POST /api/v1/episodes/1/finalize",
+    "2026-11-19T09:32:31.629Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:32:31.720Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:32:33.743Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:32:37.084Z [INFO] PUT /api/v1/episodes/1/edit",
+    "2026-11-19T09:32:37.747Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:32:38.024Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:32:49.039Z [INFO] POST /api/v1/episodes/1/finalize",
+    "2026-11-19T09:32:53.755Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:32:54.283Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:01.999Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:05.699Z [INFO] PUT /api/v1/episodes/1/edit",
+    "2026-11-19T09:33:05.919Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:33:06.292Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:14.738Z [INFO] POST /api/v1/episodes/1/finalize",
+    "2026-11-19T09:33:21.259Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:33:21.541Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:25.205Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:33:25.872Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:33:26.248Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:29.321Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:30.286Z [INFO] POST /api/v1/episodes/1/edit/audition",
+    "2026-11-19T09:33:31.878Z [INFO] GET /api/v1/episodes/1/edit",
+    "2026-11-19T09:33:32.876Z [INFO] GET /api/v1/episodes/2/edit",
+    "2026-11-19T09:33:33.893Z [INFO] GET /api/v1/episodes/2/edit",
+    "2026-11-19T09:33:35.473Z [INFO] POST /api/v1/episodes/2/finalize",
+    "2026-11-19T09:33:38.884Z [INFO] GET /api/v1/episodes/3/edit"
+  ],
+  "解码对照": {
+    "方法": "整片逐帧按蓝红主色验切点。单声道 8 kHz 16-bit PCM 比较波形。",
+    "原版与未采用交付": "50 蓝 + 50 红，4.00 秒，波形相关系数 0.999788。",
+    "试剪与采用交付": "30 蓝 + 40 红，2.80 秒，波形相关系数 0.999643。",
+    "尾音开关": "关闭后同为 70 帧，1.22–1.52 秒开关波形差 RMS 3253.88，1.65–2.35 秒后句相关系数 0.99899。",
+    "恢复后": "恢复交付与未采用交付两个 MP4 的 SHA-256 完全一致。"
+  },
+  "文件SHA256": {
+    "adopted.mp4": "9bd06872a8799a7402b3c1a7ed11ca7dedba766aa6e2e01467a534fb871107c0",
+    "missing.png": "d4f69746d3141151377640f8f74ecda007b347f743be479c4d6448bf887d1cd8",
+    "original.mp4": "15fc3c498ae9ba4dc2227a5b3a0b9d21193eb7807f7837c92f661ca25fccfb27",
+    "restored.mp4": "6f2ae968c9464c108e57f7444b288259a659f379df693c4945935190b814603f",
+    "sync.mp4": "8a31816b55d2acd2ad8fc9bd1b5358c88efc4a81cbf57d44024a2f8aa3859966",
+    "tail.mp4": "6ead84690be0f6b466687e6223d17af593a474edc0f1b57454acd9afb175cdff",
+    "trial.png": "14a0bb792eb0c09c1e5c1dfd48acf9b85fe56580884a7e03f6763e413011bf88",
+    "unadopted.mp4": "6f2ae968c9464c108e57f7444b288259a659f379df693c4945935190b814603f",
+    "zero.png": "03c310391af52be7c97f9bce448f72cf7236e5b4c26427aeb503fa8559f38cf0"
+  }
+}

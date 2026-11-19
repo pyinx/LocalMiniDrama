@@ -1,3 +1,4 @@
+const { createHash } = require('crypto');
 const { mediaDigest } = require('./episodeSound');
 
 function fail(message, status = 422) { throw Object.assign(new Error(message), { status }); }
@@ -8,12 +9,16 @@ function readPlan(db, episodeId) {
   return row.edit_plan ? JSON.parse(row.edit_plan) : { revision: 0, cuts: [], fps: null };
 }
 
-function inputOf(shot, info, file, digest) {
+async function inputOf(shot, info, file, options, root, digest) {
+  const bounds = await require('./episodeMediaRender').tailBounds(shot,info,options,root);
+  const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   return {
     id: shot.scene_id, number: shot.storyboard_number, take: shot.effective_take_id ?? null,
     duration_us: Math.round(info.seconds * 1e6), fps: info.constantRate,
+    ...bounds,
+    tail_sound_key:hash([bounds,shot.sound?.selected?.source,shot.sound?.dub_digest,shot.sound?.narration_digest]),
     digest: digest || mediaDigest(file),
-    sound_key: require('crypto').createHash('sha256').update(JSON.stringify(shot.sound)).digest('hex'),
+    sound_key: hash([shot.sound,shot.segment_ir]),
   };
 }
 
@@ -45,7 +50,9 @@ function compile(plan, inputs) {
   for (const cut of plan.cuts) {
     const index = rows.findIndex(s => s.id === cut.left.id);
     const left = rows[index], right = rows[index+1];
-    if (cut.pending || !matches(left,cut.left) || !matches(right,cut.right)) {
+    const changedSound = cut.tail_us && (cut.left.tail_sound_key !== left?.tail_sound_key ||
+      cut.right.tail_sound_key !== right?.tail_sound_key);
+    if (cut.pending || changedSound || !matches(left,cut.left) || !matches(right,cut.right)) {
       stale.push(cut);
       continue;
     }
@@ -64,7 +71,20 @@ function compile(plan, inputs) {
     row.frames = frame - row.startFrame;
     if (!row.frames) fail('第 ' + row.number + ' 镜没有可输出的画面');
   }
-  return { fps, rows, stale, frames: frame };
+  const invalidTails = [];
+  for (const cut of plan.cuts) {
+    if (!cut.tail_us || stale.includes(cut)) continue;
+    const left = rows.find(row => row.id === cut.left.id);
+    const right = rows.find(row => row.id === cut.right.id);
+    const room = [left.audio_end_us - left.out_us, right.out_us - right.in_us, Math.floor(right.frames * 1e6 / hz)];
+    for (const speech of right.speech_ranges_us) {
+      if (speech.end_us > right.in_us) room.push(speech.start_us - right.in_us);
+    }
+    if (left.out_us < left.audio_start_us || cut.tail_us > Math.min(...room)) {
+      invalidTails.push('第 ' + left.number + ' → ' + right.number + ' 镜尾音超出可用余量或与下一句冲突，请缩短或关闭尾音');
+    } else left.tail_us = cut.tail_us;
+  }
+  return { fps, rows, stale, invalidTails, frames: frame };
 }
 
 function propose(plan, inputs, body) {
@@ -78,11 +98,15 @@ function propose(plan, inputs, body) {
   if (action !== 'restore' && (inputs[index].sound_key !== left.sound_key || inputs[index+1].sound_key !== right.sound_key)) fail('声源已变化，请重新试听',409);
   if (action === 'original') return plan;
   const cuts = plan.cuts.filter(c => c !== existing);
-  if (action === 'trim' && (body.out_us !== inputs[index].duration_us || body.in_us !== 0)) {
-    cuts.push({ left: reference(inputs[index]), right: reference(inputs[index+1]), out_us: body.out_us, in_us: body.in_us });
+  const tail_us = body.tail_us === undefined ? 0 : body.tail_us;
+  if (!Number.isSafeInteger(tail_us) || tail_us < 0) fail('尾音时长必须为非负整数微秒');
+  if (action === 'trim' && (tail_us || body.out_us !== inputs[index].duration_us || body.in_us !== 0)) {
+    const side = input => ({...reference(input), ...(tail_us && {tail_sound_key:input.tail_sound_key})});
+    cuts.push({ left: side(inputs[index]), right: side(inputs[index+1]), out_us: body.out_us, in_us: body.in_us, tail_us });
   }
   const result = { revision: plan.revision, cuts, fps: cuts.length ? rateOf(plan,inputs) : null };
-  compile(result, inputs);
+  const {invalidTails} = compile(result, inputs);
+  if (action === 'trim' && invalidTails.length) fail(invalidTails.join('；'));
   return result;
 }
 

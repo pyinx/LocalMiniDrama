@@ -1,0 +1,21 @@
+{
+  "id": "008",
+  "kind": "run",
+  "ac": "AC9",
+  "rev": "a277d92+024ed4b037f1ab7b",
+  "at": "2026-11-19T09:40:32Z",
+  "key": "test",
+  "cmd": "cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js",
+  "template": "cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js",
+  "exit": 0,
+  "durationMs": 105585,
+  "revBefore": "a277d92+024ed4b037f1ab7b",
+  "tests": {
+    "format": "tap",
+    "pass": 409,
+    "fail": 0,
+    "skip": 0,
+    "todo": 0
+  },
+  "log": "008-test.log"
+}

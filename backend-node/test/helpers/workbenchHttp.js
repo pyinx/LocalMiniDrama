@@ -19,6 +19,8 @@ async function openWorkbench(t) {
   app.use('/static', express.static(storage));
   app.use('/api/v1', setupRouter(cfg, db, console));
   const server = app.listen(0, '127.0.0.1');
+  // Synchronous media probes can outlast the default keep-alive timeout between test requests.
+  server.keepAliveTimeout = 0;
   await once(server, 'listening');
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = 'http://127.0.0.1:' + server.address().port;

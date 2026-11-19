@@ -37,14 +37,19 @@ function buildTimeline(segments) {
  * 逐句摆放：在所在镜头内依次排开；放不下就加速（至多 1.25 倍），仍放不下给出告警。
  * @param {(line, seg) => number} durationOf 句子时长（秒）：原生人声段用估算，配音段用实际 TTS 时长
  */
-function planDialogueLines(timeline, durationOf) {
+function planDialogueLines(timeline, durationOf, protectDialogue = false) {
   const placements = [];
   const warnings = [];
   timeline.forEach((seg, si) => {
     seg.shots.forEach(({ start_s, end_s, shot }, k) => {
       let cursor = start_s;
       shot.lines.forEach((line, j) => {
-        const raw = Math.max(0.2, Number(durationOf(line, seg)) || 0.2);
+        const measured = Number(durationOf(line, seg));
+        const protectedLine = protectDialogue && !seg.native;
+        const raw = protectedLine ? measured : Math.max(0.2, measured || 0.2);
+        if (protectedLine && cursor + raw > end_s + 0.000001) {
+          throw new Error(`第 ${seg.number ?? si + 1} 镜逐句配音「${line.text}」超过可用时长，请调整镜头或配音`);
+        }
         const window = Math.max(0.2, end_s - cursor);
         const tempo = raw > window ? Math.min(raw / window, MAX_TEMPO) : 1;
         const dur = raw / tempo;
@@ -52,7 +57,16 @@ function planDialogueLines(timeline, durationOf) {
           warnings.push({ level: 'warn', code: 'line_overflows_shot', where: { storyboard_id: seg.storyboard_id, path: `shots.${k}.lines.${j}` }, msg: `「${line.text}」需要 ${raw.toFixed(1)} 秒，加速到 ${MAX_TEMPO} 倍后仍超出镜头剩余的 ${window.toFixed(1)} 秒` });
         }
         const visibleStart = seg.edit_range ? Math.max(seg.start_s, cursor) : cursor;
-        const visibleEnd = seg.edit_range ? Math.min(cursor + dur, seg.visibleEnd) : cursor + dur;
+        // A held voice follows its source sentence past the picture cut. Cards and
+        // sentences starting after the out-point still follow the picture range.
+        let speechEnd = seg.visibleEnd;
+        if (seg.edit_range?.tail_us && cursor < seg.origin + seg.edit_range.out_us / 1e6) {
+          speechEnd = seg.start_s + seg.clip_s + seg.edit_range.tail_us / 1e6;
+        }
+        const visibleEnd = seg.edit_range ? Math.min(cursor + dur, speechEnd) : cursor + dur;
+        if (protectedLine && (visibleStart > cursor + 0.000001 || visibleEnd < cursor + raw - 0.000001)) {
+          throw new Error(`第 ${seg.number ?? si + 1} 镜逐句配音「${line.text}」被剪点截断，请调整剪点或配音`);
+        }
         if (visibleEnd > visibleStart) placements.push({ segment: si, storyboard_id: seg.storyboard_id, native: seg.native, line, start_s: visibleStart, duration_s: visibleEnd - visibleStart, offset_s: visibleStart - cursor, raw_s: raw, tempo });
         cursor += dur + LINE_GAP;
       });
@@ -106,6 +120,23 @@ function toSrt(cues) {
   return cues.map((c, i) => `${i + 1}\n${ts(c.start)} --> ${ts(c.end)}\n${c.text}\n`).join('\n');
 }
 
+// FFmpeg emits canonical SRT when demuxing the optional subtitle tracks.
+function windowSrt(text, start, end) {
+  function seconds(stamp) {
+    const [h,m,s,ms] = stamp.split(/[:,]/).map(Number);
+    return h * 3600 + m * 60 + s + ms / 1000;
+  }
+  const cues = [];
+  for (const block of text.trim().split(/\r?\n\s*\r?\n/)) {
+    const [,time,...lines] = block.split(/\r?\n/);
+    if (!time) continue;
+    const [from,to] = time.split(' --> ').map(seconds);
+    const a = Math.max(start,from), b = Math.min(end,to);
+    if (b > a) cues.push({start:a - start,end:b - start,text:lines.join('\n')});
+  }
+  return toSrt(cues);
+}
+
 /** 台词字幕：每句按字数比例分给各行；内心独白、旁白、画外音用斜体 */
 function buildDialogueSrt(placements) {
   const cues = [];
@@ -138,4 +169,4 @@ function buildCardsSrt(timeline) {
   return toSrt(cues.sort((a, b) => a.start - b.start));
 }
 
-module.exports = { buildTimeline, planDialogueLines, estimatedLineSeconds, splitSubtitleText, buildDialogueSrt, buildCardsSrt, MAX_TEMPO };
+module.exports = { buildTimeline, planDialogueLines, estimatedLineSeconds, splitSubtitleText, buildDialogueSrt, buildCardsSrt, windowSrt, MAX_TEMPO };

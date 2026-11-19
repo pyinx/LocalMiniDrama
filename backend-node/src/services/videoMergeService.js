@@ -227,7 +227,8 @@ async function inspectDeliveryClip(file, label, requireAudio = false, verifyDeco
     const video = info.streams.find(s => s.codec_type === 'video');
     const seconds = Number(video?.duration) || Number(info.format?.duration);
     if (!video?.width || !video.height || !(seconds > 0)) throw new Error('缺少有效视频流');
-    const hasAudio = info.streams.some(s => s.codec_type === 'audio');
+    const audioStream = info.streams.find(s => s.codec_type === 'audio');
+    const hasAudio = !!audioStream;
     if (requireAudio && !hasAudio) throw new Error('缺少必需音轨');
     if (verifyDecode) await execFile(getFfmpegPath(), ['-v', 'error', '-xerror', '-i', file, '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-']);
     const [n, d] = (video.avg_frame_rate || '').split('/').map(Number);
@@ -243,7 +244,9 @@ async function inspectDeliveryClip(file, label, requireAudio = false, verifyDeco
       seconds, ratio, frame: n && d ? d / n : 0.04, hasAudio,
       codec: video.codec_name, encoding: [video.codec_name, video.profile, video.pix_fmt, video.color_space, video.level, video.extradata_hash].join('/'),
       constantRate: n > 0 && d > 0 && n / d <= 240 && video.avg_frame_rate === video.r_frame_rate ? video.avg_frame_rate : null,
-      audioSeconds: Number(info.streams.find(s => s.codec_type === 'audio')?.duration),
+      subtitleCount: info.streams.filter(s => s.codec_type === 'subtitle').length,
+      audioSeconds: Number(audioStream?.duration),
+      audioStart: (Number(audioStream?.start_time) || 0) - (Number(info.format?.start_time) || 0),
       width: sin > cos ? video.height : video.width, height: sin > cos ? video.width : video.height,
       layout: [video.width, video.height, sar, rotation].join('/'),
     };
@@ -283,16 +286,17 @@ async function renderMerge(db, log, r, baseUrl, work) {
   const storageRoot = getStorageRoot();
 
   const localPaths = [];
-  const draftWarnings = [];
+  const draftWarnings = (mergeOpts.audition_inputs || []).filter(input => !input.digest && !scenes.some(sc => sc.scene_id === input.id))
+    .map(input => '第 ' + input.number + ' 镜缺少视频');
   const usableScenes = [];
   const [ratioW, ratioH] = String(mergeOpts.aspect_ratio || '').replace('：', ':').split(':').map(Number);
   const expectedRatio = ratioW > 0 && ratioH > 0 ? ratioW / ratioH : null;
   let firstInfo;
-  let parts = [];
+  const parts = [];
   let previewSeam = null;
+  let previewPair;
   let cutPlan;
   for (let i = 0; i < scenes.length; i++) {
-    if (mergeOpts.audition_pair && !mergeOpts.audition_pair.some(ref => ref.id === scenes[i].scene_id)) continue;
     const p = await resolveVideoToLocalPath(
       scenes[i]?.video_url,
       baseUrl,
@@ -309,7 +313,7 @@ async function renderMerge(db, log, r, baseUrl, work) {
         if (!p) throw new Error(label + '找不到视频文件');
         info = await inspectDeliveryClip(p, label);
       } catch (err) {
-        if (mergeOpts.audition_pair) throw new Error(label + '无法试听：' + err.message);
+        if (mergeOpts.audition_pair?.some(ref => ref.id === sc.scene_id)) throw new Error(label + '无法试听：' + err.message);
         if (complete) {
           const plan = mergeOpts.edit_plan;
           if (plan) require('./episodeCutPlan').markPending(db,episodeId,plan,plan.cuts.filter(c => [c.left.id,c.right.id].includes(sc.scene_id)));
@@ -352,14 +356,25 @@ async function renderMerge(db, log, r, baseUrl, work) {
   const edit = require('./episodeCutPlan');
   const plan = mergeOpts.edit_plan;
   if (plan && (plan.cuts.length || mergeOpts.audition_pair)) {
-    const inputs = new Map((mergeOpts.audition_inputs || []).map(s => [s.id,s]));
-    for (const p of parts) inputs.set(p.shot.scene_id,edit.inputOf(p.shot,p.info,p.file,p.digest));
+    const inputs = new Map();
+    for (const p of parts) {
+      const input = await edit.inputOf(p.shot,p.info,p.file,mergeOpts,storageRoot,p.digest);
+      if (mergeOpts.audition_pair) {
+        const before = mergeOpts.audition_inputs.find(row => row.id === input.id);
+        if (!edit.matches(input,before) || input.sound_key !== before.sound_key) throw new Error('采用片或声音已变化，请重新试听');
+      }
+      inputs.set(input.id,input);
+    }
     const order = mergeOpts.logical_order || scenes.map(s => s.scene_id);
     cutPlan = edit.compile(plan,order.map(id => inputs.get(id) || {id}));
+    if (cutPlan.invalidTails.length) {
+      if (complete || mergeOpts.audition_pair) throw new Error(cutPlan.invalidTails.join('；'));
+      draftWarnings.push(...cutPlan.invalidTails);
+    }
     if (cutPlan.stale.length) {
       if (!mergeOpts.audition_pair) edit.markPending(db,episodeId,plan,cutPlan.stale);
       const labels = cutPlan.stale.map(c => [c.left,c.right].map(s => scenes.find(row => row.scene_id === s.id)?.storyboard_number ?? ('ID ' + s.id)).join('→'));
-      const message = '接缝 ' + labels.join('、') + ' 的采用素材或镜序已变化，请复核或恢复';
+      const message = '接缝 ' + labels.join('、') + ' 的采用素材、声源或镜序已变化，请复核或恢复';
       if (complete) throw new Error(message);
       draftWarnings.push(message);
     }
@@ -375,14 +390,13 @@ async function renderMerge(db, log, r, baseUrl, work) {
       const index = cutPlan.rows.findIndex(s => s.id === left.id);
       if (!edit.matches(cutPlan.rows[index],left) || !edit.matches(cutPlan.rows[index+1],right)
         || cutPlan.rows[index].sound_key !== left.sound_key || cutPlan.rows[index+1].sound_key !== right.sound_key) throw new Error('相邻采用片或声音已变化，请重新试听');
-      parts = parts.filter(p => p.shot.scene_id === left.id || p.shot.scene_id === right.id);
-      if (parts.length !== 2) throw new Error('试听需要两侧完整、可解码的采用片');
-      scenes = parts.map(p => p.shot);
-      previewSeam = scenes[0].duration;
+      previewPair = [cutPlan.rows[index],cutPlan.rows[index+1]];
+      previewSeam = previewPair[1].startFrame / hz;
     }
   }
   let totalDuration = scenes.reduce((sum, sc) => sum + sc.duration, 0);
-  const postKind = choosePostProcessor(db, scenes, mergeOpts);
+  const episodeOrder = mergeOpts.logical_order?.map(scene_id => ({scene_id})) || scenes;
+  const postKind = choosePostProcessor(db, episodeOrder, mergeOpts);
   log.info('Video merge: ffmpeg check', {
     merge_id: mergeId,
     has_ffmpeg: ffmpegAvailable,
@@ -408,7 +422,7 @@ async function renderMerge(db, log, r, baseUrl, work) {
     const outputPath = path.join(work.outputDir || mergedDir, outputFileName);
     let ok;
     if (mode) {
-      await require('./episodeMediaRender').renderDeliveryShots(parts, mergeOpts.audition_canvas || firstInfo, mergeOpts, storageRoot, tempDir, outputPath, draftWarnings);
+      await require('./episodeMediaRender').renderDeliveryShots(parts, firstInfo, mergeOpts, storageRoot, tempDir, outputPath, draftWarnings);
       ok = true;
     } else ok = runFfmpegConcat(localPaths, outputPath, log);
     if (ok && fs.existsSync(outputPath)) {
@@ -419,23 +433,14 @@ async function renderMerge(db, log, r, baseUrl, work) {
 
   const shotRange = scenes.map(s => s.storyboard_number ?? s.scene_id).join('、');
   if (mode && !mergedRelativePath) throw new Error(`第 ${shotRange} 镜无法合成，请检查 FFmpeg 和源文件`);
-  const stages = [];
-  if (postKind === 'structured' && mode) {
-    const narration = mergeOpts.burn_narration_subtitles && scenes.some(sc => sc.sound?.narration?.trim());
-    if (narration || mergeOpts.watermark_text) {
-      stages.push({ kind: 'legacy', options: { ...mergeOpts, burn_narration_subtitles: narration } });
-    }
-  }
-  if (postKind) stages.push({ kind: postKind, options: mergeOpts });
-  for (const { kind, options } of stages) {
-    if (!mergedRelativePath) break;
+  if (postKind && mergedRelativePath) {
     const mergedAbsPath = path.join(storageRoot, mergedRelativePath);
-    const runPost = kind === 'structured'
+    const runPost = postKind === 'structured'
       ? require('./structuredEpisodePost').runStructuredEpisodePost
       : require('./mergedEpisodePostProcess').runMergedEpisodePostProcess;
     let post;
     try {
-      post = await runPost(db, log, { mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts: options });
+      post = await runPost(db, log, { mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts });
     } catch (err) {
       if (mode !== 'draft') throw err;
       post = { ok: false, error: err.message };
@@ -447,18 +452,19 @@ async function renderMerge(db, log, r, baseUrl, work) {
     if (post.ok && post.relativePath) {
       mergedRelativePath = post.relativePath;
       log.info('Video merge: merged episode post-process', { merge_id: mergeId, out: mergedRelativePath });
-    } else if (complete) {
+    } else if (complete || mergeOpts.audition_pair) {
       throw new Error(`第 ${shotRange} 镜后期失败：${post.error || '未生成成片'}`);
     } else if (mode === 'draft') {
       draftWarnings.push(`第 ${shotRange} 镜后期失败，草稿使用后期处理前的合成片：${post.error || '未生成后期文件'}`);
-      break;
     } else if (post.error && post.error !== 'NO_POST_OPTS') {
       log.warn('Video merge: post-process skipped', { merge_id: mergeId, err: post.error });
     }
   }
 
+  let subtitleCount = 0;
   if (mode) {
     const info = await inspectDeliveryClip(path.join(storageRoot, mergedRelativePath), `第 ${shotRange} 镜合成结果`, true);
+    subtitleCount = info.subtitleCount;
     if (!Number.isFinite(info.audioSeconds) || Math.abs(info.audioSeconds - totalDuration) > Math.max(info.frame, 0.025) + 0.002) {
       throw new Error(`第 ${shotRange} 镜合成后主声轨时长不符`);
     }
@@ -471,10 +477,20 @@ async function renderMerge(db, log, r, baseUrl, work) {
     const hz = edit.frameRate(cutPlan.fps);
     const radius = Math.max(1,Math.round(hz * 2));
     const seamFrame = Math.round(previewSeam * hz);
-    const start = Math.max(0,seamFrame - radius);
-    const end = Math.min(Math.round(totalDuration * hz),seamFrame + radius);
+    const start = Math.max(previewPair[0].startFrame,seamFrame - radius);
+    const end = Math.min(seamFrame + previewPair[1].frames,seamFrame + radius);
     const window = path.join(work.outputDir,'audition.mp4');
-    await execFile(getFfmpegPath(), ['-v','error','-i',movie,'-vf','trim=start_frame=' + start + ':end_frame=' + end + ',setpts=PTS-STARTPTS',
+    const subtitles = [];
+    for (let i = 0; i < subtitleCount; i++) {
+      const {stdout} = await execFile(getFfmpegPath(), ['-v','error','-i',movie,'-map','0:s:'+i,'-f','srt','-']);
+      const text = require('./episodeSubtitles').windowSrt(stdout,start/hz,end/hz);
+      if (!text) continue;
+      const sub = path.join(tempDir,'window-'+i+'.srt');
+      fs.writeFileSync(sub,text);
+      subtitles.push(sub);
+    }
+    await execFile(getFfmpegPath(), ['-v','error','-i',movie,...subtitles.flatMap(f => ['-i',f]),
+      '-map','0:v:0','-map','0:a:0',...subtitles.flatMap((_,i) => ['-map',(i+1)+':s']),'-c:s','mov_text','-vf','trim=start_frame=' + start + ':end_frame=' + end + ',setpts=PTS-STARTPTS',
       '-af','atrim=start=' + start/hz + ':end=' + end/hz + ',asetpts=PTS-STARTPTS','-c:v','libx264','-crf','18','-c:a','aac',window]);
     fs.unlinkSync(movie);
     mergedRelativePath = path.relative(storageRoot,window).split(path.sep).join('/');

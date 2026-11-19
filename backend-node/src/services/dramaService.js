@@ -786,6 +786,7 @@ function episodeDeliveryInputs(db, episodeId, baseUrl, options = {}) {
       take_id: sb.adopted_video_generation_id ?? null, effective_take_id: take?.id ?? null,
       video_url: takeUrl(take,baseUrl), duration: Number(sb.duration) || 5,
       ...(options.delivery_mode === 'complete' && { video_digest: localVideoDigest(root,take) }),
+      ...(sb.segment_ir && {segment_ir:sb.segment_ir}),
       sound: require('./episodeSound').soundSnapshot(sb, options, root),
     };
   });
@@ -826,7 +827,7 @@ function finalizeEpisode(db, log, episodeId, baseUrl, body = {}, audition = null
     merge_options: {
       delivery_mode: mode, reliable_render: true,
       ...(mode && { edit_revision: plan.revision, edit_plan: audition?.plan || plan, logical_order: inputs.map(s => s.scene_id) }),
-      ...(audition && { audition_pair: audition.pair, audition_inputs:audition.inputs, audition_canvas:audition.canvas }),
+      ...(audition && { audition_pair: audition.pair, audition_inputs:audition.inputs }),
       aspect_ratio: mode ? aspectRatio : undefined,
       burn_narration_subtitles: !!(body && body.burn_narration_subtitles),
       burn_dialogue_audio: !!(body && body.burn_dialogue_audio),

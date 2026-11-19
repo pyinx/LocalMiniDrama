@@ -172,6 +172,40 @@ test('preview and delivery honor the same cut', async t => {
   assert.equal(pixels(fileOf(ws,await ws.finish('complete'))).length,1+Math.round(fresh.shots[1].duration_us*25/1e6));
 });
 
+test('keeps rotated mixed-rate cuts on the cumulative output frame grid', async t => {
+  const ws = await mediaWorkspace(t, [0, 0]);
+  const rates = ['25', '30', '30000/1001', '30', '25', '30'];
+  const colors = ['white', 'black', 'white', 'black', 'white', 'black'];
+  for (const [i, rate] of rates.entries()) {
+    const name = `clip-${i}.mp4`;
+    if (i >= 2) {
+      const shot = await ws.request('POST', '/storyboards', { episode_id: ws.episode, storyboard_number: i + 1 });
+      await ws.adopt(shot, ws.add(shot, name));
+    }
+    const rotated = i === 1;
+    const file = path.join(ws.storage, name);
+    const src = rotated ? path.join(ws.storage, 'landscape.mp4') : file;
+    ffmpeg(['-y', '-f', 'lavfi', '-i', `color=${colors[i]}:s=${rotated ? '128x72' : '72x128'}:r=${rate}:d=1`, '-c:v', 'libx264', src]);
+    if (rotated) ffmpeg(['-y', '-display_rotation', '90', '-i', src, '-c', 'copy', file]);
+  }
+  // Individually rounding five 12.55-frame spans would shift the last cut by two frames.
+  for (let i = 0; i < rates.length - 1; i++) {
+    const state = await ws.read();
+    assert.equal(state.fps, '25/1');
+    await ws.request('PUT', ws.editUrl, change(state, i, 502000, 0));
+  }
+  const movie = fileOf(ws, await ws.finish('complete'));
+  const stream = JSON.parse(execFileSync(getFfprobePath(), ['-v', 'error', '-select_streams', 'v:0', '-show_streams', '-of', 'json', movie])).streams[0];
+  assert.deepEqual([stream.width, stream.height], [72, 128]);
+  const frames = pixels(movie);
+  assert.equal(frames.length, Math.round(25 * (5 * 0.502 + 1)));
+  for (let i = 1; i < rates.length; i++) {
+    const cut = Math.round(25 * i * 0.502);
+    assert.equal(frames[cut - 1] > 128, colors[i - 1] === 'white', `镜头 ${i} 的最后一帧`);
+    assert.equal(frames[cut] > 128, colors[i] === 'white', `镜头 ${i + 1} 的第一帧`);
+  }
+});
+
 test('remaps timed cues from one cut plan', async t => {
   const ws = await mediaWorkspace(t,[440,0,660]);
   ffmpeg(['-f','lavfi','-i','sine=frequency=1000:duration=0.4',path.join(ws.storage,'speech.wav')]);
@@ -233,6 +267,46 @@ test('restores adopted cuts and invalidates changed inputs', async t => {
   fileOf(ws,await ws.finish('complete'));
   fs.copyFileSync(path.join(ws.storage,'clip-0.mp4'),path.join(ws.storage,'clip-2.mp4'));
   assert.equal((await ws.finish('complete')).status,'failed','同路径换片需要复核');
+});
+
+test('a late export cannot publish over the new edit, and a reordered pair needs review', async t => {
+  const ws = await mediaWorkspace(t, [440, 660]);
+  await ws.request('PUT', ws.editUrl, change(await ws.read(), 0, 1500000, 0));
+  const media = require('../src/services/episodeMediaRender');
+  const render = media.renderDeliveryShots;
+  let signalEntry, resumeRender;
+  const entered = new Promise(resolve => { signalEntry = resolve; });
+  const resumed = new Promise(resolve => { resumeRender = resolve; });
+  let first = true;
+  t.mock.method(media, 'renderDeliveryShots', async (...args) => {
+    if (first) {
+      first = false;
+      signalEntry();
+      await resumed;
+    }
+    return render(...args);
+  });
+  const slow = ws.finish('complete');
+  let newest;
+  try {
+    await Promise.race([entered, slow.then(() => assert.fail('旧任务未进入渲染'))]);
+    await ws.request('PUT', ws.editUrl, change(await ws.read(), 0, 1200000, 0));
+    newest = await ws.finish('complete');
+    fileOf(ws, newest);
+  } finally {
+    resumeRender();
+  }
+  const older = await slow;
+  assert.equal(older.status, 'failed');
+  assert.match(older.error_msg, /剪辑版本已变化/);
+  const setNumber = ws.db.prepare('UPDATE storyboards SET storyboard_number=? WHERE id=?');
+  setNumber.run(3, ws.boards[0].id);
+  const reordered = await ws.read();
+  assert.deepEqual(reordered.shots.map(s => s.id), [ws.boards[1].id, ws.boards[0].id]);
+  assert.equal(reordered.cuts[0].pending, true);
+  assert.equal((await ws.finish('complete')).status, 'failed');
+  assert.equal(ws.db.prepare('SELECT video_url FROM episodes WHERE id=?').get(ws.episode).video_url, newest.merged_url);
+  assert.ok(pixels(fileOf(ws, newest)).length > 0);
 });
 
 test('keeps a pending cut portable after repeated imports with a deleted shot', () => {
@@ -300,7 +374,11 @@ test('composes structured cues from the accepted revision', async t => {
   assert.equal(pcm.length, 4000);
   assert.ok(pcm.every(byte => byte === 0), '显式静音镜在结构化后期中保持安静');
 
+  ir.shots[0].lines = [];
+  ir.shots[1].lines = ir.shots[1].lines.slice(0, 1);
+  ws.db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(ir), ws.boards[1].id);
   await ws.update(1, { sound_source: 'auto' });
+  await ws.request('PUT', ws.editUrl, change(await ws.read(), 0, 1200000, 750000));
   const tts = t.mock.method(require('../src/services/ttsService'), 'synthesize', async (_db, _log, req) => {
     const local_path = 'line-' + Buffer.from(req.text).toString('hex') + '.wav';
     ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=880:duration=0.4', path.join(req.storage_base, local_path)]);
@@ -312,4 +390,120 @@ test('composes structured cues from the accepted revision', async t => {
   assert.ok(tts.mock.callCount() > 0);
   const speech = ffmpeg(['-ss', '1.25', '-i', dubbedFile, '-t', '0.15', '-af', 'bandpass=f=880:w=12', '-ar', '8000', '-ac', '1', '-f', 's16le', '-']);
   assert.ok(speech.some((_, i) => i % 2 === 0 && Math.abs(speech.readInt16LE(i)) > 500), '裁后接缝应能听到对应的逐句配音');
+});
+
+function hasTone(file,start,hz) {
+  const pcm = ffmpeg(['-ss',String(start),'-i',file,'-t','0.1','-map','0:a:0','-ar','8000','-ac','1','-f','s16le','-']);
+  let re=0,im=0;
+  for (let i=0; i<pcm.length/2;i++) {
+    const phase=2*Math.PI*hz*i/8000, sample=pcm.readInt16LE(i*2);
+    re+=sample*Math.cos(phase); im+=sample*Math.sin(phase);
+  }
+  return Math.hypot(re,im)/(pcm.length/2)>100;
+}
+
+test('extends available sound over a picture cut', async t => {
+  const ws = await mediaWorkspace(t, [440,660]);
+  const sceneId = ws.db.prepare("INSERT INTO scenes (drama_id,location,time) VALUES (?,'会议室','日')").run(ws.id).lastInsertRowid;
+  const insertActor = ws.db.prepare('INSERT INTO characters (drama_id,name) VALUES (?,?)');
+  const hrId = insertActor.run(ws.id,'人事').lastInsertRowid;
+  const linId = insertActor.run(ws.id,'林远').lastInsertRowid;
+  const ir = require('./helpers/segmentIrFixtures').sampleIr({sceneId,hrId,linId});
+  ir.shots[0].lines = [];
+  ws.db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(ir),ws.boards[1].id);
+  const leftIr = structuredClone(ir);
+  leftIr.shots[1].lines = [leftIr.shots[1].lines[0]];
+  leftIr.shots[1].lines[0].text = '上一句仍在说话。';
+  ws.db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(leftIr),ws.boards[0].id);
+  const initial = await ws.read();
+  assert.equal(initial.shots[0].audio_end_us,2000000);
+  assert.equal(initial.shots[0].mixed_audio,true);
+  assert.equal(initial.shots[1].speech_ranges_us[0].start_us,750000);
+  const cut = change(initial,0,1200000,400000);
+  for (const tail_us of [350001,-1,1.5,'5',null]) {
+    assert.equal((await ws.error('PUT',ws.editUrl,{...cut,tail_us})).status,422);
+  }
+  const sync = pixels(path.join(ws.storage,(await ws.audition(cut)).video_url));
+  const proposed = {...cut,tail_us:350000};
+  const trial = path.join(ws.storage,(await ws.audition(proposed)).video_url);
+  await ws.request('PUT',ws.editUrl,proposed);
+  assert.equal((await ws.read()).cuts[0].tail_us,350000);
+  for (const file of [trial,fileOf(ws,await ws.finish('complete'))]) {
+    assert.deepEqual(pixels(file),sync);
+    assert.ok(hasTone(file,1.30,440) && hasTone(file,1.30,660));
+    assert.ok(!hasTone(file,1.65,440) && hasTone(file,1.65,660));
+  }
+  const captioned = fileOf(ws,await ws.finish('complete',{dialogue_subtitles:true}));
+  const subdir = path.dirname(captioned);
+  const srt = fs.readFileSync(path.join(subdir,fs.readdirSync(subdir).find(f => f.endsWith('.srt'))),'utf8');
+  assert.match(srt,/00:00:00,750 --> 00:00:01,550\s+上一句仍在说话/);
+  assert.match(srt,/00:00:01,550 --> .*\s+是因为绩效吗/);
+  const {buffer} = require('../src/services/dramaExportService').exportDrama(ws.db,ws.cfg,console,ws.id);
+  const dest = await require('./helpers/workbenchHttp').openWorkbench(t);
+  const restored = require('../src/services/dramaImportService').importDrama(dest.db,dest.cfg,console,buffer);
+  const copy = dest.db.prepare('SELECT edit_plan FROM episodes WHERE drama_id=? ORDER BY episode_number').get(restored.drama_id);
+  assert.equal(JSON.parse(copy.edit_plan).cuts[0].tail_us,350000);
+  const ep = dest.db.prepare('SELECT id FROM episodes WHERE drama_id=? ORDER BY episode_number').get(restored.drama_id);
+  assert.equal((await dest.request('GET','/episodes/'+ep.id+'/edit')).cuts[0].pending,undefined);
+  await ws.request('PUT',ws.editUrl,{...cut,revision:(await ws.read()).revision,tail_us:0});
+  const off = fileOf(ws,await ws.finish('complete'));
+  assert.deepEqual(pixels(off),sync);
+  assert.equal(hasTone(off,1.30,440),false);
+  const full = change(await ws.read(),0,2000000,0);
+  assert.equal((await ws.error('PUT',ws.editUrl,{...full,tail_us:1})).status,422);
+  ffmpeg(['-f','lavfi','-i','sine=frequency=880:duration=1.45',path.join(ws.storage,'dub.wav')]);
+  await ws.update(1,{audio_local_path:'dub.wav',sound_source:'dub'});
+  assert.equal((await ws.error('PUT',ws.editUrl,{...change(await ws.read(),0,1200000,0),tail_us:1})).status,422);
+  await ws.update(1,{sound_source:'original'});
+  await ws.update(0,{audio_local_path:'dub.wav',sound_source:'dub'});
+  const dubbed = {...change(await ws.read(),0,1200000,0),tail_us:250000};
+  await ws.request('PUT',ws.editUrl,dubbed);
+  const file = fileOf(ws,await ws.finish('complete'));
+  assert.ok(hasTone(file,1.27,880) && !hasTone(file,1.27,440));
+  ffmpeg(['-f','lavfi','-i','sine=frequency=1000:duration=2.25',path.join(ws.storage,'long-dub.wav')]);
+  await ws.update(0,{audio_local_path:'long-dub.wav',sound_source:'dub'});
+  const longDub = {...change(await ws.read(),0,2000000,0),tail_us:250000};
+  assert.equal((await ws.error('PUT',ws.editUrl,{...longDub,tail_us:100000})).status,422);
+  await ws.request('PUT',ws.editUrl,longDub);
+  assert.ok(hasTone(fileOf(ws,await ws.finish('complete')),2.05,1000));
+  await ws.update(0,{sound_source:'original'});
+  assert.equal((await ws.read()).cuts[0].pending,true);
+  assert.equal((await ws.finish('complete')).status,'failed');
+  await ws.request('PUT',ws.editUrl,{...dubbed,revision:(await ws.read()).revision,action:'restore'});
+  assert.equal((await ws.read()).cuts.length,0);
+  assert.equal(hasTone(fileOf(ws,await ws.finish('complete')),2.1,880),false);
+});
+
+
+test('auditions the seam on the episode mix with preceding tails and continuous music', async t => {
+  const ws = await mediaWorkspace(t,[440,0,660]);
+  const ir = require('./helpers/segmentIrFixtures').sampleIr({sceneId:1,hrId:1,linId:2});
+  ws.db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(ir),ws.boards[0].id);
+  const music = path.join(ws.storage,'music.wav');
+  ffmpeg(['-f','lavfi','-i','sine=frequency=1000:duration=6','-af',"volume=0:enable='lt(t,1)'",music]);
+  const post = require('../src/services/structuredEpisodePost');
+  const runPost = post.runStructuredEpisodePost;
+  t.mock.method(post,'runStructuredEpisodePost',(db,log,opts) => runPost(db,log,{...opts,filters:new Set()}));
+  const opts = {dialogue_subtitles:true,bgm:{url:'/static/music.wav',volume_db:-6}};
+  await ws.request('PUT',ws.editUrl,{...change(await ws.read(),0,1000000,0),tail_us:400000});
+  const cut = {...change(await ws.read(),1,1480000,0),...opts};
+  const heard = await ws.audition(cut);
+  await ws.request('PUT',ws.editUrl,cut);
+  const release = fileOf(ws,await ws.finish('complete',opts));
+  assert.equal(heard.seam_seconds,1.48);
+  const subtitles = ffmpeg(['-i',path.join(ws.storage,heard.video_url),'-map','0:s:0','-f','srt','-']).toString();
+  assert.match(subtitles,/00:00:00,000 --> 00:00:00,400\s+是因为绩效吗/);
+  for (const [file,offset] of [[release,1],[path.join(ws.storage,heard.video_url),0]]) {
+    assert.ok(hasTone(file,offset+0.15,440),'前一接缝的尾音进入本试听窗');
+    assert.ok(!hasTone(file,offset+0.7,440),'前一接缝的尾音按时结束');
+    assert.ok(hasTone(file,offset+0.15,1000),'由首镜 IR 触发的整集配乐保持绝对时码');
+  }
+  fs.writeFileSync(path.join(ws.storage,'clip-0.mp4'),'damaged');
+  const missing = await ws.audition({...change(await ws.read(),1,1480000,0),...opts});
+  assert.equal(missing.seam_seconds,1.48);
+  assert.match(missing.warnings.join(' '),/第 1 镜/);
+  const skipped = path.join(ws.storage,missing.video_url);
+  assert.ok(!hasTone(skipped,0.15,440) && !hasTone(skipped,0.15,1000));
+  assert.ok(hasTone(skipped,1.2,1000),'草稿缺首镜后仍按剩余整集时间重新定位 BGM');
+
 });

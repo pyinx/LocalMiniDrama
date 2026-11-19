@@ -8,10 +8,10 @@ function packCuts(db, ep, boards) {
   const ref = side => {
     const index = boards.findIndex(b => b.id === side.id);
     const active = index >= 0 && (resolveTake(db,boards[index])?.id ?? null) === side.take;
-    return { index, digest:side.digest, active, original_id:Math.abs(side.id) };
+    return { index, digest:side.digest, tail_sound_key:side.tail_sound_key, active, original_id:Math.abs(side.id) };
   };
   return { edit_plan:{ fps:plan.fps, cuts:plan.cuts.map(c => ({
-    left:ref(c.left), right:ref(c.right), in_us:c.in_us, out_us:c.out_us, pending:!!c.pending,
+    left:ref(c.left), right:ref(c.right), in_us:c.in_us, out_us:c.out_us, tail_us:c.tail_us ?? 0, pending:!!c.pending,
   })) } };
 }
 
@@ -22,13 +22,15 @@ function restoreCuts(db, id, ep, boards) {
   frameRate(plan.fps);
   function side(ref) {
     if (!Number.isInteger(ref?.index) || ref.index < -1 || ref.index >= boards.length || !/^[a-f0-9]{64}$/.test(ref.digest)) throw new Error('工程包接缝引用无效');
+    if (ref.tail_sound_key !== undefined && !/^[a-f0-9]{64}$/.test(ref.tail_sound_key)) throw new Error('工程包尾音声源引用无效');
     const board = boards[ref.index];
     if (!board && !(ref.original_id > 0 && Number.isSafeInteger(ref.original_id))) throw new Error('工程包缺少旧镜号');
-    return {id:board ? board.id : -ref.original_id, take:board?.take ?? null, digest:ref.digest};
+    return {id:board ? board.id : -ref.original_id, take:board?.take ?? null, digest:ref.digest,tail_sound_key:ref.tail_sound_key};
   }
   const cuts = plan.cuts.map(c => {
-    if (![c.in_us,c.out_us].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error('工程包源片剪点无效');
-    return {left:side(c.left),right:side(c.right),in_us:c.in_us,out_us:c.out_us,
+    const tail_us = c.tail_us === undefined ? 0 : c.tail_us;
+    if (![c.in_us,c.out_us,tail_us].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error('工程包源片剪点无效');
+    return {left:side(c.left),right:side(c.right),in_us:c.in_us,out_us:c.out_us,tail_us,
       ...(c.pending || !c.left.active || !c.right.active ? { pending:true } : {})};
   });
   db.prepare('UPDATE episodes SET edit_plan=? WHERE id=?').run(JSON.stringify({revision:1,fps:plan.fps,cuts}),id);

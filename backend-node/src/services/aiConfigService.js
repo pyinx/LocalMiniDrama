@@ -194,7 +194,7 @@ function updateConfig(db, log, id, req) {
     updates.push('query_endpoint = ?');
     params.push(req.query_endpoint || '');
   }
-  if (req.settings != null) {
+  if (req.settings !== undefined) {
     updates.push('settings = ?');
     params.push(req.settings);
   }

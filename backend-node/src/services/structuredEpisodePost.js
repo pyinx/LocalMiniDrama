@@ -9,7 +9,7 @@ const path = require('path');
 const { parseSegmentIr } = require('./segmentIr/schema');
 const { buildTimeline, planDialogueLines, estimatedLineSeconds, buildDialogueSrt, buildCardsSrt } = require('./episodeSubtitles');
 const { buildDialogueTrack } = require('./dialogueTtsService');
-const { ffprobeDurationSec, ffprobeHasAudio, runFfmpeg, escapeFfmpegPath } = require('./mergedEpisodePostProcess');
+const { ffprobeDurationSec, ffprobeHasAudio, runFfmpeg, escapeFfmpegPath, runMergedEpisodePostProcess } = require('./mergedEpisodePostProcess');
 const { probeFfmpegFilters } = require('../utils/ffmpegPath');
 const { toLocalPath } = require('../utils/storagePaths');
 
@@ -35,13 +35,17 @@ function segmentIsNative(db, storyboardId, takeId) {
   }
 }
 
-function loadSegments(db, scenes) {
+function loadSegments(db, scenes, complete) {
   return scenes.map((sc) => {
     const sbId = Number(sc.scene_id);
     const row = db.prepare('SELECT segment_ir FROM storyboards WHERE id = ?').get(sbId);
     const parsed = row && row.segment_ir ? parseSegmentIr(row.segment_ir) : null;
+    if (complete && parsed && !parsed.ok) {
+      throw new Error(`第 ${sc.storyboard_number ?? sbId} 镜的结构化分镜无效：${parsed.errors.map(e => e.path || e.message).join('、')}`);
+    }
     return {
       storyboard_id: sbId,
+      number: sc.storyboard_number,
       ir: parsed && parsed.ok ? parsed.ir : null,
       clip_s: Number(sc.duration) || 5,
       edit_range: sc.edit_range,
@@ -115,7 +119,7 @@ async function runStructuredEpisodePost(db, log, opts) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `drama-struct-post-${episodeId || 0}-`));
   const info = { subtitles: { method: 'none', burned: false }, sheets: {}, warnings: [], dialogue_track: false };
   try {
-    const timeline = buildTimeline(loadSegments(db, scenes));
+    const timeline = buildTimeline(loadSegments(db, scenes, mergeOpts.delivery_mode === 'complete'));
     const wantSubs = !!(mergeOpts.dialogue_subtitles || mergeOpts.burn_narration_subtitles);
     const wantCards = !!mergeOpts.cards;
     const wantDub = !!mergeOpts.burn_dialogue_audio;
@@ -130,16 +134,28 @@ async function runStructuredEpisodePost(db, log, opts) {
         synthesize: opts.synthesize || defaultSynthesize(db, log, tmpDir),
         voiceOf: makeVoiceOf(db, timeline),
         totalDuration: videoDur,
+        protectDialogue: Boolean(mergeOpts.delivery_mode),
         tmpDir,
         log,
       });
       placements = track.placements;
+      for (const p of placements) {
+        const prev = timeline[p.segment - 1];
+        const incoming = prev?.edit_range?.tail_us || 0;
+        if (incoming && Math.round((p.start_s - timeline[p.segment].start_s) * 1e6) < incoming) {
+          throw new Error('尾音与下一镜实际对白重叠，请缩短尾音后重新试听');
+        }
+      }
       dialoguePath = track.audioPath;
       info.warnings.push(...track.warnings);
       info.dialogue_track = !!dialoguePath;
     } else {
       const plan = planDialogueLines(timeline, (line) => estimatedLineSeconds(line));
       placements = plan.placements;
+    }
+
+    if (wantSubs && placements.some(p => p.native || !wantDub)) {
+      info.warnings.push({ level: 'info', code: 'estimated_dialogue_timing', msg: '未逐句测得音长的台词字幕按计划时码估算。' });
     }
 
     // ---- 字幕文件（放在成片旁边，软字幕时也便于单独使用）
@@ -156,11 +172,20 @@ async function runStructuredEpisodePost(db, log, opts) {
     const audioLabels = [];
     const graph = [];
     let idx = 1;
-    if (hasOrig) audioLabels.push('[0:a]');
+    if (hasOrig && dialoguePath && mergeOpts.delivery_mode) {
+      const windows = placements.filter(p => !p.native).map(p =>
+        `between(t,${p.start_s.toFixed(6)},${(p.start_s + p.duration_s).toFixed(6)})`);
+      // Apply the switch on 1 ms audio blocks, independent of the input codec's packet length.
+      graph.push(`[0:a]aresample=48000,asetnsamples=n=48:p=0,volume=0:enable='${windows.join('+')}'[source]`);
+      audioLabels.push('[source]');
+    } else if (hasOrig) audioLabels.push('[0:a]');
     if (dialoguePath) { args.push('-i', dialoguePath); audioLabels.push(`[${idx++}:a]`); }
     let bgmIdx = null;
     if (bgm) {
       const bgmPath = toLocalPath(opts.cfg || require('../config').loadConfig(), bgm.url) || bgm.url;
+      if (path.isAbsolute(bgmPath) && !fs.statSync(bgmPath, { throwIfNoEntry: false })?.isFile()) {
+        throw new Error(`整集 BGM 缺少音频文件：${path.basename(bgmPath)}`);
+      }
       args.push('-stream_loop', '-1', '-i', bgmPath);
       bgmIdx = idx++;
       const db_ = Number.isFinite(Number(bgm.volume_db)) ? Math.min(-6, Number(bgm.volume_db)) : DEFAULT_BGM_DB;
@@ -208,7 +233,16 @@ async function runStructuredEpisodePost(db, log, opts) {
       if (!runFfmpeg(args, log, 'structured_post') || !fs.existsSync(outAbs)) return { ok: false, error: '成片后期合成失败', info };
       info.output = path.relative(storageRoot, outAbs).replace(/\\/g, '/');
     }
-    const finalAbs = info.output === 'unchanged' ? mergedAbsPath : path.join(storageRoot, info.output);
+    let finalAbs = info.output === 'unchanged' ? mergedAbsPath : path.join(storageRoot, info.output);
+    const narration = mergeOpts.burn_narration_subtitles && scenes.some(sc => sc.sound?.narration?.trim());
+    if (mergeOpts.delivery_mode && (narration || mergeOpts.watermark_text)) {
+      const layered = await runMergedEpisodePostProcess(db, log, {
+        ...opts, mergedAbsPath: finalAbs, mergeOpts: { ...mergeOpts, burn_narration_subtitles: narration },
+      });
+      if (!layered.ok) return { ...layered, info };
+      info.output = layered.relativePath;
+      finalAbs = path.join(storageRoot, info.output);
+    }
 
     // ---- 审片拼图
     if (mergeOpts.review_sheets) {
@@ -221,6 +255,9 @@ async function runStructuredEpisodePost(db, log, opts) {
       });
       const seams = buildSeamsSheet(finalAbs, bounds, `${base}_seams.png`, tmpDir, log);
       const frames = buildFramesSheet(finalAbs, videoDur, `${base}_frames.png`, log);
+      if (mergeOpts.delivery_mode === 'complete' && ((bounds.length && !seams) || !frames)) {
+        throw new Error(!frames ? '缺少逐秒审片拼图' : '缺少接缝审片拼图');
+      }
       if (seams) info.sheets.seams = path.relative(storageRoot, seams).replace(/\\/g, '/');
       if (frames) info.sheets.frames = path.relative(storageRoot, frames).replace(/\\/g, '/');
     }

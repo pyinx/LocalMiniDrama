@@ -2,6 +2,7 @@
 
 ## Baseline
 | test | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | c103623+99d5a76fabbabfa8 | 2026-11-19T05:16:35Z |
+| test | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+980c2770b9ad2d84 | 2026-11-19T09:18:37Z |
 
 当前 `codex/drama-production-workbench` 工作树包含上一轮未提交的媒体诊断。对本次问题使用独立临时 SQLite 与媒体目录。源码回归使用 `cd backend-node && node --test test/workbench/multiProject.test.js test/mediaDiagnostics.test.js`。两套跨集项目、两镜交付与媒体测量等共 6 项通过。
 
@@ -72,6 +73,12 @@
 | I7 | 已删除镜头的待复核剪法在重复导入后可能丢失身份。 | blocking | 保留失效引用，两次打包和恢复后仍待复核。 | [工程包回归](../../../backend-node/test/episodeEdit.test.js) |
 | I8 | 试听未显示降级警告；临时文件和草稿历史持续增长。 | should-fix | 窗口显示警告，草稿列表排除试听，单集保留最近 12 份试听。 | [试听窗口](../../../frontweb/src/components/EpisodeSeamEditor.vue) · [合成服务](../../../backend-node/src/services/videoMergeService.js) |
 | I9 | 截断 MP4 可能仍有完整文件头，双镜试听可能意外变为单镜。 | blocking | 试听和采用均解码两侧，执行任务时校验双镜，缺失即失败。 | [损坏媒体回归](../../../backend-node/test/episodeEdit.test.js) |
+| F1 | 正式交付曾把逐句实配在剪点处截断，或以加速补偿镜头余量。 | blocking | 已修复。按实测时长检查完整源区间；超界返回镜号，保留上一版正式成片。 | [交付回归](../../../backend-node/test/episodeStructuredDelivery.test.js) |
+| F2 | 试听后一个接缝时漏掉前一个已采用接缝的尾音。 | blocking | 已修复。先按整集编译，按全局帧号截取接缝窗口，验证三镜的 440 Hz 尾音。 | [三镜试听回归](../../../backend-node/test/episodeEdit.test.js) |
+| F3 | 非首接缝的试听会重置 BGM，或因结构化分镜在窗口外而省略后期。 | blocking | 已修复。按完整逻辑镜序决定后期，在成片时间轴截取连续音乐和软字幕。 | [三镜试听回归](../../../backend-node/test/episodeEdit.test.js) |
+| F4 | 逐句主声替换时一并抹去独立旁白。 | blocking | 已修复。先替换主声再叠旁白，成片解码逐窗检查两路声音和被替换的原对白。 | [结构化媒体回归](../../../backend-node/test/episodeStructuredDelivery.test.js) |
+| F5 | 初版试点仅凭超过计划时长提供具体剪点，容易把刻意停顿列为应剪。 | should-fix | 已修复。只按当前采用片与内容摘要匹配的明确审片标记提供可试听位置；验证单纯时长差无建议。 | [建议回归](../../../frontweb/test/seamSuggestionPilot.test.js) |
+| F6 | 接缝试听曾走普通草稿分支，能播放正式交付会拒绝的逐句截断或加速。 | blocking | 已修复并独立复测。试听与正式交付拒绝，普通草稿明示降级并保留原声。 | [试听、正式、草稿 HTTP 及 PCM 验证](../../../backend-node/test/episodeStructuredDelivery.test.js) |
 | AC6 | 现有样片验证媒体技术。真实作品偏好、首次使用门槛及智能建议增益尚待对应试验。 | verdict | not met | [既有研究流程](../../../docs/quality-study.md) |
 | AC10 | 首次用户的独立操作率尚待五人任务验证。 | verdict | not met | [试点判据](spec.md#acceptance-criteria) |
 | AC11 | 剪点建议对误剪和用时的影响尚待对照试验。 | verdict | not met | [试点判据](spec.md#acceptance-criteria) |
@@ -152,3 +159,54 @@ macOS 版本 1.2.9，构建号 1.2.14。两份 Lite DMG 均通过镜像校验、
 | AC7 | build | record 014 | cli | `cd frontweb && npm run build` | pass | c103623+09732abbaca7e1e4 | 2026-11-19T05:36:16Z |
 | AC2 | test | record 015 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | c103623+09732abbaca7e1e4 | 2026-11-19T05:37:39Z |
 | AC3 | test | record 016 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | c103623+09732abbaca7e1e4 | 2026-11-19T05:38:37Z |
+
+## 本轮集成验收（2026-11-19）
+
+以 `a277d92` 的合并结果和当前工作区为起点。`hx run test --baseline` 的原始记录 001 绑定 `a277d92+980c2770b9ad2d84`，共 406 项通过。媒体验收使用 `desktop/ffmpeg-mac/` 随包的 FFmpeg 和 ffprobe。所有自动生成的测试工程使用独立 SQLite 和临时媒体目录。
+
+- AC2 边界补测。六镜混用 25、30 和 30000/1001 fps，第二镜以旋转矩阵呈现竖画幅。通过正式交付导出，逐帧解码并对照五处黑白切点，最终输出 72 × 128、88 帧。测试 `keeps rotated mixed-rate cuts on the cumulative output frame grid`。
+- AC5 并发补测。在真实交付队列挂起先发任务，修改剪点并发布新修订，再让旧任务完成。旧任务因修订变化失败。随后调换镜序，旧接缝进入待复核，上一版成片仍可解码。测试 `a late export cannot publish over the new edit, and a reordered pair needs review`。
+| AC1 | test | record 002 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+81f1583e386ab4fa | 2026-11-19T09:27:54Z |
+| AC2 | test | record 003 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | a277d92+d5be0b09f859f713 | 2026-11-19T09:30:32Z |
+| AC1 | test | record 004 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+26a79fc964f72509 | 2026-11-19T09:35:33Z |
+
+## AC6、AC10、AC11 · 招募前核验
+
+本机试点批次为 `backend-node/data/studies/episode-edit-vEwoF7/`。仓库已有 `tools/quality-study.cjs` 可在填入两位实际评审后预登记、生成随机双人有声包并解码选票。当前 `report` 返回“待测”。材料、独立任务和判据见[试点执行说明](../../../docs/quality-study.md#接缝精剪的三项真人试点)。截至本次核验，未取得真人盲评票、新手观察记录或交叉试验用时。
+
+AC11 工程核验在隔离数据库及 Chrome 新配置运行 `node backend-node/data/studies/episode-edit-vEwoF7/AC11浏览器核验.cjs`，同目录保留原始日志。真实素材缩小的工程样本特意补入重复尾帧，逐帧核对末尾 12 帧为重复后，通过实际候选审片 API 写入带源片哈希、2.500 秒和原因的测试意见。未登记时即使镜长超过计划也不显示建议。普通入口隐藏、首次试点关闭、跨项目记忆、导入另一工程后记忆保留、试听未写入采用修订均通过。已有修订为 1 的工程经正式入口各导出一次，开关前后的解码视频 SHA-256 均为 `410c82a34a4a9329ff618667d23b7eee4f55538775f83fad17439f3f036792ff`，PCM 均为 `5b6daa1cd715a0cd65b43c11f192b56df5a4848b08898f9197f6c7b65baf8035`。工程包与 SHA-256、取样方法、未完成的真人环节分开保存。
+
+### AC9 结构化后期与精剪的隔离复核
+
+在空目录克隆合并提交 `a277d9208da8326c819cf0fc0173842d63906f5f`，其质量链父提交为 `baad74a6711246ab6564ec433f92e935f91b953f`，精剪父提交为 `dd91abb1e81da942c25faf31bf476ef7d5869e07`。本次修正未提交。在该提交的干净检出中应用 [此次验证的完整补丁](samples/ac9/snapshot.patch) 即可重建 AC9 快照。该补丁含原结构化用例维护者调整的输入夹具。复用与锁文件匹配的本机依赖和项目 `desktop/ffmpeg-mac/` 下的 FFmpeg、ffprobe，分别通过 `FFMPEG_PATH`、`FFPROBE_PATH` 指定。未配置外部模型。真实 HTTP、临时 SQLite、FFmpeg 编码及解码均已执行，逐句 TTS 服务以有已知时长的 WAV 代替远端调用。
+
+- `node --test backend-node/test/episodeStructuredDelivery.test.js` 在隔离快照和共享工作区各通过 4 项。25 fps 成片共 70 帧，视频和 AAC 音轨均为 2.800 秒。接缝第 29 帧为第一源片第 29 帧绿标，第 30 帧为第二源片第 10 帧黄标。[正式成片](samples/ac9/structured.mp4) · [接缝拼图](samples/ac9/seams.png) · [抽帧拼图](samples/ac9/frames.png)
+- 第二镜的已知对白在成片 1.550–1.836 秒，字卡在 1.800–2.800 秒。核对了 SRT、实测音标和烧录文字出现的帧。以系统 FFmpeg 单独验证无 libass 时成片内的两条软字幕。原生对白只有计划时码时，后期信息标明估算。[对白字幕](samples/ac9/dialogue.srt) · [字卡](samples/ac9/cards.srt)
+- 源片中 650 Hz 镜内音乐只出现在成片第 40–49 帧。整集 BGM 经过接缝连续，并在第 35 帧从 300 Hz 切换为 350 Hz。镜内音乐验证范围限于已混入源素材的声音。当前 IR 没有单独引用音乐文件的镜内事件字段。
+- 已采用的配音与普通工程正式成片相比幅值偏差小于 15%，替换区间内的原对白被抑制。自动逐句配音期间独立旁白可听。实配 1.6 秒裁至 1 秒、实配 1.2 秒放入 1 秒镜头均阻止正式导出。缺 BGM、结构化分镜版本无效时，任务列出缺项并保留上次成片。
+- 隔离基线使用系统 FFmpeg 时有 2 项既有烧录字幕用例失败，其构建不含 `subtitles` 滤镜；改用随包构建后基线 405/405 通过。一次全量回归在已有无声镜用例轮询时遇到 `ECONNRESET`，独立 AC9 媒体验证通过。样片 SHA-256 为 `0fb15911fbc6d7009699cb5a80e217bf9f05b477e2d3c062be0f9ef78e6173fb`。
+| AC2 | test | record 005 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+26a79fc964f72509 | 2026-11-19T09:37:27Z |
+- 同一实配对白跨剪点时，接缝试听任务返回失败并指出需调整剪点。普通草稿明确警告并回退到 450 Hz 原声，未混入 1250 Hz 配音。已将包含此回归的快照补丁应用到第二个全新克隆，6 个源文件与验收快照逐字节一致。
+| AC3 | test | record 006 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | a277d92+e93a03d539ca5f0a | 2026-11-19T09:39:52Z |
+
+真实试点准备件与工程核验样本相互独立。三镜研究节选的顺剪/工程候选分别为 40.291667/40.208333 秒，两镜节选为 21.666667/21.250000 秒；四个文件均经 ffprobe 核对画面与声音时长相同。额外的 AC11 两份开关试验包各自含机器辅助审片标记，实测回导后保持采用文件和时码。三镜 14.800 秒观察到摘下耳机后双手落下；两镜 9.250 秒位于实际测得的 9.247–9.417 秒尾端低音量区间。标记供参与者对听和判断。5 个新手席位共 25 个空步骤，4 个作者席位共 8 个平衡次序，各行预填了相应包哈希，真人完成、耗时、误剪与返工栏均空。
+- 最终冻结快照 `a277d92+024ed4b037f1ab7b` 的 `hx run test --ac AC9` 通过 409 项，失败、跳过均为 0；同修订 `hx run build --ac AC9` 通过。两次运行的起止修订一致。[测试记录 008](samples/ac9/008-test.json) · [构建记录 009](samples/ac9/009-build.json)
+| AC1 | test | record 007 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | a277d92+a88a2c812b516b68 | 2026-11-19T09:44:57Z |
+| AC1 | test | record 008 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:48:10Z |
+
+第三部采用官方《衣服设计天才302》第一集「撕碎的草图与新生」。Git LFS 原始工程 SHA-256 `f2aa6ec793270761b295e5ccc1fa5adb367dd36937db99e0b064667d8bb592f9`，六个分镜分别保有独立 MP4。隔离数据库真实导入后六镜齐全、初始剪法为空。正式顺剪为 2166 帧、90.250000 秒，工程试剪候选在第一处收短一帧后为 2165 帧、90.208333 秒；两版均为 1440×2560，图像和声音流时长相等。`AC6登记草案.json` 已列三部作品、来源哈希、镜序、混音、适用维度；`AC6保护点与缺陷.csv` 标明脚本保护点待作者核听。`媒体核验.json` 留存六份本地顺剪/工程候选的文件哈希、音视频流和帧数。工程候选均未获作者采用，未计入试验尝试。正式预登记需两位真实评审，已有工具对全部三部均返回“待测”。
+| AC2 | test | record 009 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:49:20Z |
+| AC3 | test | record 010 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:50:46Z |
+| AC4 | test | record 011 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:51:48Z |
+| AC5 | test | record 012 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:52:54Z |
+| AC7 | test | record 013 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:53:56Z |
+| AC8 | test | record 014 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:54:46Z |
+| AC9 | test | record 015 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:55:31Z |
+| AC4 | build | record 016 | cli | `cd frontweb && npm run build` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:55:43Z |
+| AC7 | build | record 017 | cli | `cd frontweb && npm run build` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:56:02Z |
+| AC8 | build | record 018 | cli | `cd frontweb && npm run build` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:56:17Z |
+| AC9 | build | record 019 | cli | `cd frontweb && npm run build` | pass | a277d92+0f01c49c32d89590 | 2026-11-19T09:56:37Z |
+
+## 最终门禁结果
+
+工作区 `a277d92+0f01c49c32d89590` 的记录 008–015 分别为八个技术判据执行全套测试，每次后端 374 项、前端 46 项通过，零跳过。记录 016–019 为 AC4、AC7、AC8、AC9 的生产构建。独立复审记录 020 已登记。`hx check` 认可 8/11 项；AC6、AC10、AC11 均待真人原始记录，变更保持开放。三部作品的六份媒体、工程及观察表位于 `backend-node/data/studies/episode-edit-vEwoF7/`。

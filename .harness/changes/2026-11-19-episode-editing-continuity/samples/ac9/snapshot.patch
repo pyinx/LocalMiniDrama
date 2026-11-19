@@ -1,0 +1,467 @@
+diff --git a/backend-node/src/services/dialogueTtsService.js b/backend-node/src/services/dialogueTtsService.js
+index 0ecf920..f642dcf 100644
+--- a/backend-node/src/services/dialogueTtsService.js
++++ b/backend-node/src/services/dialogueTtsService.js
+@@ -22,7 +22,7 @@ function atempoChain(t) {
+  * }} opts
+  * @returns {Promise<{ audioPath: string|null, placements: object[], warnings: object[] }>}
+  */
+-async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration, tmpDir, log }) {
++async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration, tmpDir, log, protectDialogue = false }) {
+   const synthDur = new Map();
+   const synthPath = new Map();
+   for (const seg of timeline) {
+@@ -37,7 +37,7 @@ async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration
+       }
+     }
+   }
+-  const { placements, warnings } = planDialogueLines(timeline, (line, seg) => (seg.native ? estimatedLineSeconds(line) : synthDur.get(line)));
++  const { placements, warnings } = planDialogueLines(timeline, (line, seg) => (seg.native ? estimatedLineSeconds(line) : synthDur.get(line)), protectDialogue);
+   const dubbed = placements.filter((p) => !p.native);
+   if (!dubbed.length) return { audioPath: null, placements, warnings };
+ 
+diff --git a/backend-node/src/services/episodeSubtitles.js b/backend-node/src/services/episodeSubtitles.js
+index 5335de5..96976b3 100644
+--- a/backend-node/src/services/episodeSubtitles.js
++++ b/backend-node/src/services/episodeSubtitles.js
+@@ -37,14 +37,19 @@ function buildTimeline(segments) {
+  * 逐句摆放：在所在镜头内依次排开；放不下就加速（至多 1.25 倍），仍放不下给出告警。
+  * @param {(line, seg) => number} durationOf 句子时长（秒）：原生人声段用估算，配音段用实际 TTS 时长
+  */
+-function planDialogueLines(timeline, durationOf) {
++function planDialogueLines(timeline, durationOf, protectDialogue = false) {
+   const placements = [];
+   const warnings = [];
+   timeline.forEach((seg, si) => {
+     seg.shots.forEach(({ start_s, end_s, shot }, k) => {
+       let cursor = start_s;
+       shot.lines.forEach((line, j) => {
+-        const raw = Math.max(0.2, Number(durationOf(line, seg)) || 0.2);
++        const measured = Number(durationOf(line, seg));
++        const protectedLine = protectDialogue && !seg.native;
++        const raw = protectedLine ? measured : Math.max(0.2, measured || 0.2);
++        if (protectedLine && cursor + raw > end_s + 0.000001) {
++          throw new Error(`第 ${seg.number ?? si + 1} 镜逐句配音「${line.text}」超过可用时长，请调整镜头或配音`);
++        }
+         const window = Math.max(0.2, end_s - cursor);
+         const tempo = raw > window ? Math.min(raw / window, MAX_TEMPO) : 1;
+         const dur = raw / tempo;
+@@ -53,6 +58,9 @@ function planDialogueLines(timeline, durationOf) {
+         }
+         const visibleStart = seg.edit_range ? Math.max(seg.start_s, cursor) : cursor;
+         const visibleEnd = seg.edit_range ? Math.min(cursor + dur, seg.visibleEnd) : cursor + dur;
++        if (protectedLine && (visibleStart > cursor + 0.000001 || visibleEnd < cursor + raw - 0.000001)) {
++          throw new Error(`第 ${seg.number ?? si + 1} 镜逐句配音「${line.text}」被剪点截断，请调整剪点或配音`);
++        }
+         if (visibleEnd > visibleStart) placements.push({ segment: si, storyboard_id: seg.storyboard_id, native: seg.native, line, start_s: visibleStart, duration_s: visibleEnd - visibleStart, offset_s: visibleStart - cursor, raw_s: raw, tempo });
+         cursor += dur + LINE_GAP;
+       });
+diff --git a/backend-node/src/services/structuredEpisodePost.js b/backend-node/src/services/structuredEpisodePost.js
+index 1b486c1..b5e5b63 100644
+--- a/backend-node/src/services/structuredEpisodePost.js
++++ b/backend-node/src/services/structuredEpisodePost.js
+@@ -9,7 +9,7 @@ const path = require('path');
+ const { parseSegmentIr } = require('./segmentIr/schema');
+ const { buildTimeline, planDialogueLines, estimatedLineSeconds, buildDialogueSrt, buildCardsSrt } = require('./episodeSubtitles');
+ const { buildDialogueTrack } = require('./dialogueTtsService');
+-const { ffprobeDurationSec, ffprobeHasAudio, runFfmpeg, escapeFfmpegPath } = require('./mergedEpisodePostProcess');
++const { ffprobeDurationSec, ffprobeHasAudio, runFfmpeg, escapeFfmpegPath, runMergedEpisodePostProcess } = require('./mergedEpisodePostProcess');
+ const { probeFfmpegFilters } = require('../utils/ffmpegPath');
+ const { toLocalPath } = require('../utils/storagePaths');
+ 
+@@ -35,13 +35,17 @@ function segmentIsNative(db, storyboardId, takeId) {
+   }
+ }
+ 
+-function loadSegments(db, scenes) {
++function loadSegments(db, scenes, complete) {
+   return scenes.map((sc) => {
+     const sbId = Number(sc.scene_id);
+     const row = db.prepare('SELECT segment_ir FROM storyboards WHERE id = ?').get(sbId);
+     const parsed = row && row.segment_ir ? parseSegmentIr(row.segment_ir) : null;
++    if (complete && parsed && !parsed.ok) {
++      throw new Error(`第 ${sc.storyboard_number ?? sbId} 镜的结构化分镜无效：${parsed.errors.map(e => e.path || e.message).join('、')}`);
++    }
+     return {
+       storyboard_id: sbId,
++      number: sc.storyboard_number,
+       ir: parsed && parsed.ok ? parsed.ir : null,
+       clip_s: Number(sc.duration) || 5,
+       edit_range: sc.edit_range,
+@@ -115,7 +119,7 @@ async function runStructuredEpisodePost(db, log, opts) {
+   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `drama-struct-post-${episodeId || 0}-`));
+   const info = { subtitles: { method: 'none', burned: false }, sheets: {}, warnings: [], dialogue_track: false };
+   try {
+-    const timeline = buildTimeline(loadSegments(db, scenes));
++    const timeline = buildTimeline(loadSegments(db, scenes, mergeOpts.delivery_mode === 'complete'));
+     const wantSubs = !!(mergeOpts.dialogue_subtitles || mergeOpts.burn_narration_subtitles);
+     const wantCards = !!mergeOpts.cards;
+     const wantDub = !!mergeOpts.burn_dialogue_audio;
+@@ -130,6 +134,7 @@ async function runStructuredEpisodePost(db, log, opts) {
+         synthesize: opts.synthesize || defaultSynthesize(db, log, tmpDir),
+         voiceOf: makeVoiceOf(db, timeline),
+         totalDuration: videoDur,
++        protectDialogue: Boolean(mergeOpts.delivery_mode),
+         tmpDir,
+         log,
+       });
+@@ -142,6 +147,10 @@ async function runStructuredEpisodePost(db, log, opts) {
+       placements = plan.placements;
+     }
+ 
++    if (wantSubs && placements.some(p => p.native || !wantDub)) {
++      info.warnings.push({ level: 'info', code: 'estimated_dialogue_timing', msg: '未逐句测得音长的台词字幕按计划时码估算。' });
++    }
++
+     // ---- 字幕文件（放在成片旁边，软字幕时也便于单独使用）
+     const base = path.join(path.dirname(mergedAbsPath), path.basename(mergedAbsPath, path.extname(mergedAbsPath)));
+     const srtPath = wantSubs ? `${base}.srt` : null;
+@@ -156,11 +165,20 @@ async function runStructuredEpisodePost(db, log, opts) {
+     const audioLabels = [];
+     const graph = [];
+     let idx = 1;
+-    if (hasOrig) audioLabels.push('[0:a]');
++    if (hasOrig && dialoguePath && mergeOpts.delivery_mode) {
++      const windows = placements.filter(p => !p.native).map(p =>
++        `between(t,${p.start_s.toFixed(6)},${(p.start_s + p.duration_s).toFixed(6)})`);
++      // Apply the switch on 1 ms audio blocks, independent of the input codec's packet length.
++      graph.push(`[0:a]aresample=48000,asetnsamples=n=48:p=0,volume=0:enable='${windows.join('+')}'[source]`);
++      audioLabels.push('[source]');
++    } else if (hasOrig) audioLabels.push('[0:a]');
+     if (dialoguePath) { args.push('-i', dialoguePath); audioLabels.push(`[${idx++}:a]`); }
+     let bgmIdx = null;
+     if (bgm) {
+       const bgmPath = toLocalPath(opts.cfg || require('../config').loadConfig(), bgm.url) || bgm.url;
++      if (path.isAbsolute(bgmPath) && !fs.statSync(bgmPath, { throwIfNoEntry: false })?.isFile()) {
++        throw new Error(`整集 BGM 缺少音频文件：${path.basename(bgmPath)}`);
++      }
+       args.push('-stream_loop', '-1', '-i', bgmPath);
+       bgmIdx = idx++;
+       const db_ = Number.isFinite(Number(bgm.volume_db)) ? Math.min(-6, Number(bgm.volume_db)) : DEFAULT_BGM_DB;
+@@ -208,7 +226,16 @@ async function runStructuredEpisodePost(db, log, opts) {
+       if (!runFfmpeg(args, log, 'structured_post') || !fs.existsSync(outAbs)) return { ok: false, error: '成片后期合成失败', info };
+       info.output = path.relative(storageRoot, outAbs).replace(/\\/g, '/');
+     }
+-    const finalAbs = info.output === 'unchanged' ? mergedAbsPath : path.join(storageRoot, info.output);
++    let finalAbs = info.output === 'unchanged' ? mergedAbsPath : path.join(storageRoot, info.output);
++    const narration = mergeOpts.burn_narration_subtitles && scenes.some(sc => sc.sound?.narration?.trim());
++    if (mergeOpts.delivery_mode && (narration || mergeOpts.watermark_text)) {
++      const layered = await runMergedEpisodePostProcess(db, log, {
++        ...opts, mergedAbsPath: finalAbs, mergeOpts: { ...mergeOpts, burn_narration_subtitles: narration },
++      });
++      if (!layered.ok) return { ...layered, info };
++      info.output = layered.relativePath;
++      finalAbs = path.join(storageRoot, info.output);
++    }
+ 
+     // ---- 审片拼图
+     if (mergeOpts.review_sheets) {
+@@ -221,6 +248,9 @@ async function runStructuredEpisodePost(db, log, opts) {
+       });
+       const seams = buildSeamsSheet(finalAbs, bounds, `${base}_seams.png`, tmpDir, log);
+       const frames = buildFramesSheet(finalAbs, videoDur, `${base}_frames.png`, log);
++      if (mergeOpts.delivery_mode === 'complete' && ((bounds.length && !seams) || !frames)) {
++        throw new Error(!frames ? '缺少逐秒审片拼图' : '缺少接缝审片拼图');
++      }
+       if (seams) info.sheets.seams = path.relative(storageRoot, seams).replace(/\\/g, '/');
+       if (frames) info.sheets.frames = path.relative(storageRoot, frames).replace(/\\/g, '/');
+     }
+diff --git a/backend-node/src/services/videoMergeService.js b/backend-node/src/services/videoMergeService.js
+index d593480..f6e08bd 100644
+--- a/backend-node/src/services/videoMergeService.js
++++ b/backend-node/src/services/videoMergeService.js
+@@ -419,23 +419,14 @@ async function renderMerge(db, log, r, baseUrl, work) {
+ 
+   const shotRange = scenes.map(s => s.storyboard_number ?? s.scene_id).join('、');
+   if (mode && !mergedRelativePath) throw new Error(`第 ${shotRange} 镜无法合成，请检查 FFmpeg 和源文件`);
+-  const stages = [];
+-  if (postKind === 'structured' && mode) {
+-    const narration = mergeOpts.burn_narration_subtitles && scenes.some(sc => sc.sound?.narration?.trim());
+-    if (narration || mergeOpts.watermark_text) {
+-      stages.push({ kind: 'legacy', options: { ...mergeOpts, burn_narration_subtitles: narration } });
+-    }
+-  }
+-  if (postKind) stages.push({ kind: postKind, options: mergeOpts });
+-  for (const { kind, options } of stages) {
+-    if (!mergedRelativePath) break;
++  if (postKind && mergedRelativePath) {
+     const mergedAbsPath = path.join(storageRoot, mergedRelativePath);
+-    const runPost = kind === 'structured'
++    const runPost = postKind === 'structured'
+       ? require('./structuredEpisodePost').runStructuredEpisodePost
+       : require('./mergedEpisodePostProcess').runMergedEpisodePostProcess;
+     let post;
+     try {
+-      post = await runPost(db, log, { mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts: options });
++      post = await runPost(db, log, { mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts });
+     } catch (err) {
+       if (mode !== 'draft') throw err;
+       post = { ok: false, error: err.message };
+@@ -447,11 +438,10 @@ async function renderMerge(db, log, r, baseUrl, work) {
+     if (post.ok && post.relativePath) {
+       mergedRelativePath = post.relativePath;
+       log.info('Video merge: merged episode post-process', { merge_id: mergeId, out: mergedRelativePath });
+-    } else if (complete) {
++    } else if (complete || mergeOpts.audition_pair) {
+       throw new Error(`第 ${shotRange} 镜后期失败：${post.error || '未生成成片'}`);
+     } else if (mode === 'draft') {
+       draftWarnings.push(`第 ${shotRange} 镜后期失败，草稿使用后期处理前的合成片：${post.error || '未生成后期文件'}`);
+-      break;
+     } else if (post.error && post.error !== 'NO_POST_OPTS') {
+       log.warn('Video merge: post-process skipped', { merge_id: mergeId, err: post.error });
+     }
+diff --git a/backend-node/test/episodeEdit.test.js b/backend-node/test/episodeEdit.test.js
+index 9adc051..99fd21a 100644
+--- a/backend-node/test/episodeEdit.test.js
++++ b/backend-node/test/episodeEdit.test.js
+@@ -300,7 +300,11 @@ test('composes structured cues from the accepted revision', async t => {
+   assert.equal(pcm.length, 4000);
+   assert.ok(pcm.every(byte => byte === 0), '显式静音镜在结构化后期中保持安静');
+ 
++  ir.shots[0].lines = [];
++  ir.shots[1].lines = ir.shots[1].lines.slice(0, 1);
++  ws.db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(ir), ws.boards[1].id);
+   await ws.update(1, { sound_source: 'auto' });
++  await ws.request('PUT', ws.editUrl, change(await ws.read(), 0, 1200000, 750000));
+   const tts = t.mock.method(require('../src/services/ttsService'), 'synthesize', async (_db, _log, req) => {
+     const local_path = 'line-' + Buffer.from(req.text).toString('hex') + '.wav';
+     ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=880:duration=0.4', path.join(req.storage_base, local_path)]);
+diff --git a/backend-node/test/episodeStructuredDelivery.test.js b/backend-node/test/episodeStructuredDelivery.test.js
+new file mode 100644
+index 0000000..6484fb4
+--- /dev/null
++++ b/backend-node/test/episodeStructuredDelivery.test.js
+@@ -0,0 +1,233 @@
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const { execFileSync } = require('node:child_process');
++const { setTimeout: delay } = require('node:timers/promises');
++const fs = require('node:fs');
++const path = require('node:path');
++const { getFfmpegPath } = require('../src/utils/ffmpegPath');
++const config = require('../src/config');
++const { takeWorkspace } = require('./helpers/workbenchTakes');
++const { sampleIr } = require('./helpers/segmentIrFixtures');
++
++function ffmpeg(...args) {
++  return execFileSync(getFfmpegPath(), ['-v', 'error', '-y', ...args], { maxBuffer: 16 * 1024 * 1024 });
++}
++
++async function deliver(ws, options = {}) {
++  const episode = ws.episodes[0].id;
++  const job = await ws.request('POST', `/episodes/${episode}/finalize`, { delivery_mode: 'complete', ...options });
++  const deadline = Date.now() + 60000;
++  while (Date.now() < deadline) {
++    const response = await fetch(ws.url(`/video-merges/${job.merge_id}`), { headers: { Connection: 'close' } });
++    assert.ok(response.ok);
++    const { data: row } = await response.json();
++    if (['completed', 'failed'].includes(row.status)) return row;
++    await delay(50);
++  }
++  assert.fail('正式交付超时');
++}
++
++function decode(file) {
++  return ffmpeg('-i', file, '-map', '0:a:0', '-ac', '1', '-ar', '8000', '-f', 's16le', '-');
++}
++
++// Measure each 40 ms output frame separately. The test tones have an integer number of cycles per frame.
++function amplitude(pcm, frame, frequency) {
++  let x = 0, y = 0;
++  for (let i = 0; i < 320; i++) {
++    const value = pcm.readInt16LE((frame * 320 + i) * 2);
++    const phase = 2 * Math.PI * frequency * i / 8000;
++    x += value * Math.cos(phase);
++    y += value * Math.sin(phase);
++  }
++  return Math.hypot(x, y) / 160;
++}
++
++async function fixture(t) {
++  const ws = await takeWorkspace(t);
++  t.mock.method(config, 'loadConfig', () => ws.cfg);
++  const boards = ws.shots.slice(0, 2);
++  const sources = [
++    ['red', 29, 'sin(2*PI*450*t)'],
++    ['blue', 10, 'sin(2*PI*650*t)*between(t,0.80,1.20)+sin(2*PI*1000*t)*between(t,0.75,1.0357)'],
++  ];
++  for (const [i, [color, frame, audio]] of sources.entries()) {
++    const name = `source-${i}.mp4`;
++    const take = ws.add(boards[i], name);
++    ffmpeg('-f', 'lavfi', '-i', `color=${color}:s=144x256:r=25:d=2`, '-f', 'lavfi', '-i',
++      `aevalsrc='0.08*(${audio})':s=48000:d=2`, '-vf',
++      `drawbox=c=${i ? 'yellow' : 'lime'}:t=fill:enable='eq(n,${frame})'`,
++      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path.join(ws.storage, name));
++    await ws.adopt(boards[i], take);
++  }
++  ffmpeg('-f', 'lavfi', '-i', 'sine=f=875:d=0.64', path.join(ws.storage, 'voice.wav'));
++  await ws.request('PUT', `/storyboards/${boards[0].id}`, { audio_local_path: 'voice.wav', sound_source: 'dub' });
++  await ws.request('PUT', `/storyboards/${boards[1].id}`, { sound_source: 'original' });
++  const url = `/episodes/${ws.episodes[0].id}/edit`;
++  const { revision, shots } = await ws.request('GET', url);
++  await ws.request('PUT', url, { revision, action: 'trim', left: shots[0], right: shots[1], out_us: 1200000, in_us: 400000 });
++  return ws;
++}
++
++function setIr(ws, i, ir) {
++  ws.db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(ir), ws.shots[i].id);
++}
++
++function mediaFile(ws, row) {
++  assert.equal(row.status, 'completed', row.error_msg);
++  return path.join(ws.storage, row.merged_url);
++}
++
++test('正式交付使用裁后对白、字卡和接缝帧，保留源片音乐并连续混入整集 BGM', async t => {
++  const ws = await fixture(t);
++  const ordinary = decode(mediaFile(ws, await deliver(ws)));
++  const ids = { sceneId: 1, linId: 1, hrId: 2 };
++  const first = sampleIr(ids);
++  setIr(ws, 0, first);
++  const second = sampleIr(ids, { cards: [{ text: 'CUT', at_s: 4, hold_s: 2 }] });
++  second.shots[0].lines = [];
++  second.shots[1].lines = [{ ...second.shots[1].lines[0], text: '走' }];
++  setIr(ws, 1, second);
++  ffmpeg('-f', 'lavfi', '-i', "aevalsrc='0.12*sin(2*PI*if(lt(t,1.4),300,350)*t)':s=48000:d=3", path.join(ws.storage, 'bgm.wav'));
++  const row = await deliver(ws, { dialogue_subtitles: true, cards: true, review_sheets: true,
++    burn_dialogue_audio: true, bgm: { url: '/static/bgm.wav', volume_db: -12 } });
++  const file = mediaFile(ws, row);
++  const dir = path.dirname(file);
++  const pcm = decode(file);
++  assert.equal(row.post_info.dialogue_track, false, '采用配音和原声后应沿用已选主声');
++  // An additional copy at the same level would double the Fourier amplitude.
++  const voice = amplitude(ordinary, 8, 875);
++  assert.ok(voice > 1000);
++  assert.ok(Math.abs(amplitude(pcm, 8, 875) / voice - 1) < 0.15);
++  assert.ok(amplitude(pcm, 8, 450) < 65, '配音镜不应混回原声');
++  for (let frame = 1; frame < 69; frame++) {
++    const bgm = frame < 35 ? 300 : 350;
++    assert.ok(amplitude(pcm, frame, bgm) > 300, `BGM 第 ${frame} 帧`);
++    const music = amplitude(pcm, frame, 650);
++    assert.ok(frame >= 40 && frame < 50 ? music > 600 : music < 150, `镜内音乐第 ${frame} 帧 ${music}`);
++    const speech = amplitude(pcm, frame, 1000);
++    if (frame >= 39 && frame < 45) assert.ok(speech > 600, `对白第 ${frame} 帧`);
++    if (frame < 38 || frame > 46) assert.ok(speech < 150, `对白越界到第 ${frame} 帧`);
++  }
++  const srt = fs.readdirSync(dir).filter(name => name.endsWith('.srt'));
++  const read = name => fs.readFileSync(path.join(dir, name), 'utf8');
++  assert.match(read(srt.find(name => !name.endsWith('.cards.srt'))), /00:00:01,550 --> 00:00:01,836\s+走/);
++  assert.match(read(srt.find(name => name.endsWith('.cards.srt'))), /00:00:01,800 --> 00:00:02,800\s+CUT/);
++  assert.ok(row.post_info.warnings.some(w => w.code === 'estimated_dialogue_timing'));
++  if (row.post_info.subtitles.burned) {
++    const rgb = ffmpeg('-i', file, '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-');
++    const frameBytes = 144 * 256 * 3;
++    assert.equal(rgb.length, 70 * frameBytes);
++    function hasInk(frame, upper) {
++      const start = frame * frameBytes + (upper ? 0 : frameBytes / 2);
++      for (let i = start; i < start + frameBytes / 2; i += 3) {
++        if (Math.min(rgb[i], rgb[i + 1], rgb[i + 2]) > 130) return true;
++      }
++      return false;
++    }
++    assert.deepEqual([38, 39, 44].map(frame => hasInk(frame, false)), [false, true, true]);
++    assert.deepEqual([44, 45, 69].map(frame => hasInk(frame, true)), [false, true, true]);
++  } else {
++    assert.match(ffmpeg('-i', file, '-map', '0:s:0', '-f', 'srt', '-').toString(), /00:00:01,550 --> 00:00:01,836\s+走/);
++    assert.match(ffmpeg('-i', file, '-map', '0:s:1', '-f', 'srt', '-').toString(), /00:00:01,800 --> 00:00:02,800\s+CUT/);
++  }
++  const seams = path.join(ws.storage, row.post_info.sheets.seams);
++  const pixel = ffmpeg('-i', seams, '-vf', 'crop=480:8:0:0,scale=2:1:flags=area', '-pix_fmt', 'rgb24', '-frames:v', '1', '-f', 'rawvideo', '-');
++  assert.ok(pixel[0] < 30 && pixel[1] > 210 && pixel[2] < 30, `接缝左侧应为第 29 帧的绿标 ${pixel}`);
++  assert.ok(pixel[3] > 210 && pixel[4] > 210 && pixel[5] < 30, `接缝右侧应为第 10 帧的黄标 ${pixel}`);
++  if (process.env.AC9_EVIDENCE_DIR) fs.cpSync(dir, process.env.AC9_EVIDENCE_DIR, { recursive: true });
++});
++
++test('逐句配音接替发声区间的主声，前后保留所选片段的原声', async t => {
++  const ws = await fixture(t);
++  const board = ws.shots[1];
++  await ws.request('PUT', `/storyboards/${board.id}`, { sound_source: 'auto' });
++  const ir = sampleIr({ sceneId: 1, linId: 1, hrId: 2 });
++  ir.shots[0].lines = [];
++  ir.shots[1].lines = [ir.shots[1].lines[0]];
++  setIr(ws, 1, ir);
++  // Only external speech synthesis is replaced. Mixing, encoding and HTTP delivery run normally.
++  t.mock.method(require('../src/services/ttsService'), 'synthesize', async (_db, _log, request) => {
++    ffmpeg('-f', 'lavfi', '-i', 'sine=f=1250:d=0.24', path.join(request.storage_base, 'speech.wav'));
++    return { local_path: 'speech.wav' };
++  });
++  // The second shot keeps its entire head so a separate narration can cross the dialogue.
++  const url = `/episodes/${ws.episodes[0].id}/edit`;
++  const { revision, shots } = await ws.request('GET', url);
++  await ws.request('PUT', url, { revision, action: 'trim', left: shots[0], right: shots[1], out_us: 1200000, in_us: 0 });
++  ffmpeg('-f', 'lavfi', '-i', 'sine=f=1600:d=1.1', path.join(ws.storage, 'narration.wav'));
++  await ws.request('PUT', `/storyboards/${board.id}`, { narration: '旁白', narration_audio_local_path: 'narration.wav' });
++  const row = await deliver(ws, { burn_dialogue_audio: true, dialogue_subtitles: true, burn_narration_subtitles: true });
++  const pcm = decode(mediaFile(ws, row));
++  assert.equal(row.post_info.dialogue_track, true);
++  for (let frame = 50; frame <= 53; frame++) {
++    assert.ok(amplitude(pcm, frame, 1250) > 600, '缺少采用的逐句配音');
++    assert.ok(amplitude(pcm, frame, 1000) < 120, '原对白和逐句配音同时可听');
++    assert.ok(amplitude(pcm, frame, 1600) > 600, '独立旁白不应随原对白静音');
++  }
++  assert.ok(amplitude(pcm, 58, 650) > 600, '逐句配音结束后仍应保留片段原声');
++});
++
++test('结构化资料损坏或 BGM 缺失时，正式交付点明缺项并保留上次成片', async t => {
++  const ws = await fixture(t);
++  const previous = await deliver(ws);
++  mediaFile(ws, previous);
++  const ir = sampleIr({ sceneId: 1, linId: 1, hrId: 2 });
++  for (const [input, options, error] of [
++    [{ ...ir, version: 9 }, { cards: true }, /第 2 镜.*结构化分镜/],
++    [ir, { bgm: { url: '/static/missing.wav' } }, /BGM.*missing\.wav/],
++  ]) {
++    setIr(ws, 1, input);
++    const job = await deliver(ws, options);
++    assert.equal(job.status, 'failed');
++    assert.match(job.error_msg, error);
++    assert.equal(ws.db.prepare('SELECT video_url FROM episodes WHERE id=?').get(ws.episodes[0].id).video_url, previous.merged_url);
++  }
++});
++
++test('正式交付要求实配逐句对白完整且原速', async t => {
++  const ws = await fixture(t);
++  const board = ws.shots[0];
++  await ws.request('PUT', `/storyboards/${board.id}`, { sound_source: 'auto', audio_local_path: '' });
++  const ir = sampleIr({ sceneId: 1, linId: 1, hrId: 2 });
++  ir.shots[0].lines = [ir.shots[0].lines[0]];
++  ir.shots[1].lines = [];
++  let duration;
++  t.mock.method(require('../src/services/ttsService'), 'synthesize', async (_db, _log, request) => {
++    ffmpeg('-f', 'lavfi', '-i', `sine=f=1250:d=${duration}`, path.join(request.storage_base, 'speech.wav'));
++    return { local_path: 'speech.wav' };
++  });
++  const url = `/episodes/${ws.episodes[0].id}/edit`;
++  for (const [cut, seconds, shotSeconds] of [[1, 1.6, 8], [2, 1.2, 4]]) {
++    duration = seconds;
++    ir.shots[0].seconds = shotSeconds;
++    ir.shots = shotSeconds === 8 ? [ir.shots[0]] : [ir.shots[0], { ...ir.shots[0], seconds: 8 - shotSeconds, lines: [] }];
++    setIr(ws, 0, ir);
++    const { revision, shots } = await ws.request('GET', url);
++    await ws.request('PUT', url, { revision, action: cut === 2 ? 'restore' : 'trim', left: shots[0], right: shots[1], out_us: cut * 1000000, in_us: 0 });
++    const row = await deliver(ws, { burn_dialogue_audio: true });
++    assert.equal(row.status, 'failed', `原声长 ${seconds}s，镜头窗口 ${cut === 2 ? 1 : cut}s`);
++    assert.match(row.error_msg, /逐句配音.*(剪点|可用时长)/);
++    if (cut === 1) {
++      const state = await ws.request('GET', url + '?burn_dialogue_audio=true');
++      const job = await ws.request('POST', url + '/audition', { revision: state.revision, action: 'trim',
++        left: state.shots[0], right: state.shots[1], out_us: 1000000, in_us: 0, burn_dialogue_audio: true });
++      const deadline = Date.now() + 60000;
++      let task;
++      do {
++        task = await ws.request('GET', `/tasks/${job.task_id}`);
++        if (['completed', 'failed'].includes(task.status)) break;
++        await delay(50);
++      } while (Date.now() < deadline);
++      assert.equal(task.status, 'failed', '试听也必须保护逐句对白');
++      assert.match(task.error, /逐句配音.*剪点/);
++      const draft = await deliver(ws, { delivery_mode: 'draft', burn_dialogue_audio: true });
++      const pcm = decode(mediaFile(ws, draft));
++      assert.ok(amplitude(pcm, 8, 450) > 600, '普通草稿应回退至第一镜原声');
++      assert.ok(amplitude(pcm, 8, 1250) < 120);
++      const result = await ws.request('GET', `/tasks/${draft.task_id}`);
++      const warnings = (typeof result.result === 'string' ? JSON.parse(result.result) : result.result).warnings;
++      assert.match(warnings.join('；'), /逐句配音.*剪点/);
++    }
++  }
++});

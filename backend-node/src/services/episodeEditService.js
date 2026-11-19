@@ -16,7 +16,6 @@ async function editEpisode(db, cfg, log, id, operation, body = {}) {
   try {
     const inputs = [];
     const localInputs = new Map();
-    let canvas;
     for (const shot of scenes) {
       try {
         const file = shot.video_url && await merge.resolveVideoToLocalPath(shot.video_url,base,root,temp,shot.scene_id,log);
@@ -24,9 +23,8 @@ async function editEpisode(db, cfg, log, id, operation, body = {}) {
         // The catalog can use headers. Audition and adoption must validate the actual pair.
         const verify = operation !== 'read' && body.action !== 'restore' && [body.left?.id,body.right?.id].includes(shot.scene_id);
         const info = await merge.inspectDeliveryClip(file,'第 ' + shot.storyboard_number + ' 镜',false,verify);
-        inputs.push(cuts.inputOf(shot,info,file));
+        inputs.push(await cuts.inputOf(shot,info,file,options,root));
         localInputs.set(shot.scene_id,file);
-        canvas ||= info;
       } catch (err) { inputs.push({ id:shot.scene_id,number:shot.storyboard_number, error:err.message }); }
     }
     if (JSON.stringify(scenes) !== JSON.stringify(drama.episodeDeliveryInputs(db,id,base,options))) cuts.fail('素材已变化，请重新打开',409);
@@ -48,7 +46,7 @@ async function editEpisode(db, cfg, log, id, operation, body = {}) {
       return cuts.writePlan(db,id,plan,next);
     }
     if (body.action === 'restore') cuts.fail('请选择要试听的接缝');
-    return drama.finalizeEpisode(db,log,id,base,{...body,delivery_mode:'draft'}, {plan:next,pair:[body.left,body.right],inputs,canvas});
+    return drama.finalizeEpisode(db,log,id,base,{...body,delivery_mode:'draft'}, {plan:next,pair:[body.left,body.right],inputs});
   } finally { fs.rmSync(temp,{recursive:true,force:true}); }
 }
 

@@ -2,6 +2,7 @@
 const fs = require('fs');
 const { getVideoCaps, clampDuration, isSeedance2FamilyModel } = require('./modelCapabilities');
 const path = require('path');
+const { toLocalPath } = require('../utils/storagePaths');
 const { ipv4Request, formatNetError } = require('../utils/ipv4Http');
 const aiConfigService = require('./aiConfigService');
 const { flattenModelIds, pickModelId, ARK_RETIRED_VIDEO_MODELS } = require('./modelId');
@@ -2996,10 +2997,12 @@ async function callSoraVideoApi(config, log, opts) {
 
   const resolvedModel = model || getModelFromConfig(config) || (cheapSeedance ? 'wb-seedance-2-fast' : '');
 
-  // seconds：通用 Sora 为 4/8/12；低价 Seedance2 按模型时长档
+  // 兼容 Sora 的 H3 使用 H3 时长，原生 Sora 使用 4/8/12 秒档。
   let dur;
   if (cheapSeedance) {
     dur = normalizeCheapSeedance2Duration(duration, resolvedModel);
+  } else if (/^minimax-h3-(original|fast)$/i.test(resolvedModel)) {
+    dur = String(normalizeMinimaxH3Duration(duration));
   } else {
     const rawSec = duration ? Number(duration) : 4;
     dur = rawSec <= 4 ? '4' : rawSec <= 8 ? '8' : '12';
@@ -3100,7 +3103,7 @@ async function callSoraVideoApi(config, log, opts) {
   let imageBuffer = null;
   let imageMime = 'image/jpeg';
   let imageFilename = 'reference.jpg';
-  const rawImgUrl = (image_url || '').trim();
+  const rawImgUrl = (image_url || refList[0] || '').trim();
 
   if (rawImgUrl) {
     if (rawImgUrl.startsWith('data:')) {
@@ -3113,12 +3116,11 @@ async function callSoraVideoApi(config, log, opts) {
       } else {
         log.warn('[Sora] ???? base64 ??????', { video_gen_id });
       }
-    } else if (/localhost|127\.0\.0\.1/i.test(rawImgUrl)) {
-      // localhost URL ? ?????????
+    } else if (rawImgUrl.startsWith('/static/') || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(rawImgUrl)) {
       try {
-        const afterStatic = rawImgUrl.split('/static/')[1];
-        if (afterStatic && storage_local_path) {
-          const localFile = path.join(storage_local_path, afterStatic.replace(/^\//, ''));
+        const pathname = new URL(rawImgUrl, 'http://localhost').pathname;
+        if (pathname.startsWith('/static/') && storage_local_path) {
+          const localFile = toLocalPath({ storage: { local_path: storage_local_path } }, pathname);
           let buf = null;
           try {
             buf = await fs.promises.readFile(localFile);
@@ -3157,6 +3159,10 @@ async function callSoraVideoApi(config, log, opts) {
         log.warn('[Sora] ?????????', { error: e.message, video_gen_id });
       }
     }
+  }
+
+  if (rawImgUrl && !imageBuffer?.length) {
+    return { error: 'Sora 单图参考图片读取失败，请检查分镜图片后重试', submission: 'rejected' };
   }
 
   // ?? ???? resize ?? size ???Sora ?????????????????
@@ -3254,20 +3260,24 @@ async function callSoraVideoApi(config, log, opts) {
   log.info('[Sora] raw response', { status: res.status, raw: raw.slice(0, 1000), video_gen_id });
 
   if (!res.ok) {
-    let errMsg = 'Sora ????????: ' + res.status;
+    let errMsg = 'Sora 视频创建失败（HTTP ' + res.status + '）';
     try {
       const errJson = JSON.parse(raw);
       const msg = errJson.error?.message || errJson.message || errJson.error;
       if (msg) errMsg += ' - ' + (typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 200));
     } catch (_) {
-      if (raw) errMsg += ' - ' + raw.slice(0, 200);
+      if (/^\s*(?:<!doctype html|<html\b)/i.test(raw)) {
+        errMsg += '：网关返回 HTML 错误页，请用提交时间查询网关日志';
+      } else if (raw) {
+        errMsg += ' - ' + raw.slice(0, 200);
+      }
     }
     return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
   try { data = JSON.parse(raw); } catch (e) {
-    return { error: 'Sora ??????: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
+    return { error: 'Sora 提交响应不是有效的 JSON：' + e.message + ' | raw: ' + raw.slice(0, 200) };
   }
 
   // ?????? URL（含中转 result_url）

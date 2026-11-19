@@ -22,7 +22,7 @@ function atempoChain(t) {
  * }} opts
  * @returns {Promise<{ audioPath: string|null, placements: object[], warnings: object[] }>}
  */
-async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration, tmpDir, log }) {
+async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration, tmpDir, log, protectDialogue = false }) {
   const synthDur = new Map();
   const synthPath = new Map();
   for (const seg of timeline) {
@@ -37,7 +37,7 @@ async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration
       }
     }
   }
-  const { placements, warnings } = planDialogueLines(timeline, (line, seg) => (seg.native ? estimatedLineSeconds(line) : synthDur.get(line)));
+  const { placements, warnings } = planDialogueLines(timeline, (line, seg) => (seg.native ? estimatedLineSeconds(line) : synthDur.get(line)), protectDialogue);
   const dubbed = placements.filter((p) => !p.native);
   if (!dubbed.length) return { audioPath: null, placements, warnings };
 

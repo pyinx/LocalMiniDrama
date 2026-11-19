@@ -16,3 +16,17 @@ export function playheadSourceUs(point,clip,seconds) {
   if (point === 'out') return delta <= 0 ? clip.out_us + delta : null
   return delta >= 0 ? clip.in_us + delta : null
 }
+
+export function reviewedSeamMarks(details, left, fps) {
+  const candidate = details.candidates.find(v => v.id === left.take)
+  if (candidate?.id !== details.resolved_video?.id || !candidate || !left.digest) return []
+  const prefix = `剪点建议[${left.digest}]：`
+  const [n, d] = fps.split('/').map(Number)
+  const frameUs = 1e6 * d / n
+  return candidate.reviews.flatMap(r => {
+    const us = r.time_ms * 1000
+    if (r.status !== 'open' || !r.note.startsWith(prefix) || us - left.in_us < frameUs || left.out_us - us < frameUs) return []
+    const reason = r.note.slice(prefix.length).trim()
+    return reason ? [{ id: r.id, time_ms: r.time_ms, reason }] : []
+  })
+}
