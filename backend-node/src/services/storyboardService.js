@@ -1,4 +1,12 @@
 // 分镜：create, update, delete；帧提示词 get/save
+const { parseSegmentIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
+const { planSegments } = require('./segmentIr/planner');
+const {
+  projectLegacyFields,
+  ownedFieldChanges,
+  SegmentIrOwnedError,
+  SegmentIrInvalidError,
+} = require('./segmentIr/project');
 
 /**
  * 将分镜勾选的角色（dramas.characters 表 id）同步到 storyboard_characters（角色库 id），
@@ -87,6 +95,10 @@ function createStoryboard(db, log, req) {
 function updateStoryboard(db, log, id, req) {
   const row = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(id));
   if (!row) return null;
+  if (row.segment_ir) {
+    const changed = ownedFieldChanges(row, req);
+    if (changed.length) throw new SegmentIrOwnedError(changed);
+  }
   const allowed = ['title', 'description', 'location', 'time', 'duration', 'dialogue', 'narration', 'action', 'result', 'atmosphere', 'image_prompt', 'polished_prompt', 'video_prompt', 'scene_id', 'characters', 'composed_image', 'image_url', 'local_path', 'main_panel_idx', 'video_url', 'audio_local_path', 'narration_audio_local_path', 'status', 'shot_type', 'angle', 'angle_h', 'angle_v', 'angle_s', 'movement', 'segment_index', 'segment_title', 'creation_mode', 'universal_segment_text', 'layout_description', 'first_frame_image_id', 'last_frame_image_id', 'last_frame_image_url', 'last_frame_local_path'];
   const updates = [];
   const params = [];
@@ -137,6 +149,51 @@ function updateStoryboard(db, log, id, req) {
   }
   log.info('Storyboard updated', { id });
   return getStoryboardById(db, id);
+}
+
+/** 分镜是否由结构化 IR 管理 */
+function hasSegmentIr(db, id) {
+  const r = db.prepare('SELECT segment_ir FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(id));
+  return !!(r && r.segment_ir);
+}
+
+/** 旧的通用生成/润色、按音频拆分等会改写 IR 所有字段的入口统一用它拦截 */
+function assertNotSegmentIr(db, id) {
+  if (hasSegmentIr(db, id)) throw new SegmentIrOwnedError([]);
+}
+
+/**
+ * 保存结构化分镜：校验 →（给了能力表时）单段规划 → 同一事务写入 IR 与投影字段 → 同步角色关联。
+ * 单段规划只做台词耗时下限与时长对齐；需要拆段时原样保存并在 plan_findings 里提示重新规划。
+ * @param {{ caps?: object }} [opts]
+ * @returns 分镜 DTO（规划过则带 plan_findings）；分镜不存在返回 null；IR 不合法抛 SegmentIrInvalidError
+ */
+function saveSegmentIr(db, log, id, irInput, opts = {}) {
+  const sid = Number(id);
+  const exists = db.prepare('SELECT id FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(sid);
+  if (!exists) return null;
+  const parsed = parseSegmentIr(irInput);
+  if (!parsed.ok) throw new SegmentIrInvalidError(parsed.errors);
+  let ir = parsed.ir;
+  let planFindings = null;
+  if (opts.caps) {
+    const plan = planSegments([ir], opts.caps);
+    planFindings = plan.findings;
+    if (plan.segments.length === 1) ir = parseSegmentIr(plan.segments[0].ir).ir;
+    else planFindings.push({ level: 'warn', code: 'needs_replan', where: {}, msg: `这一段按当前模型需要拆成 ${plan.segments.length} 段，请对本集执行重新规划` });
+  }
+  const p = projectLegacyFields(ir);
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE storyboards SET segment_ir = ?, segment_ir_version = ?, dialogue = ?, action = ?, duration = ?,
+         shot_type = ?, movement = ?, characters = ?, scene_id = ?, updated_at = ? WHERE id = ?`
+    ).run(JSON.stringify(ir), SEGMENT_IR_VERSION, p.dialogue, p.action, p.duration, p.shot_type, p.movement, p.characters, p.scene_id, now, sid);
+    syncStoryboardCharacterLinks(db, sid, JSON.parse(p.characters));
+  })();
+  log.info('Storyboard segment IR saved', { id: sid, shots: ir.shots.length });
+  const dto = getStoryboardById(db, sid);
+  return planFindings ? { ...dto, plan_findings: planFindings } : dto;
 }
 
 function deleteStoryboard(db, log, id) {
@@ -195,6 +252,7 @@ function getStoryboardById(db, id) {
     last_frame_image_url: r.last_frame_image_url ?? null,
     last_frame_local_path: r.last_frame_local_path ?? null,
     characters,
+    segment_ir: parseStoredIr(r.segment_ir),
     prop_ids: propIds,
     composed_image: r.composed_image,
     image_url: r.image_url ?? null,
@@ -268,8 +326,16 @@ function insertBeforeStoryboard(db, log, targetId) {
   return getStoryboardById(db, info.lastInsertRowid);
 }
 
+function parseStoredIr(raw) {
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
 module.exports = {
   parseDramaCharacterIds,
+  hasSegmentIr,
+  assertNotSegmentIr,
+  saveSegmentIr,
   createStoryboard,
   insertBeforeStoryboard,
   updateStoryboard,

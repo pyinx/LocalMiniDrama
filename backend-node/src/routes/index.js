@@ -280,6 +280,7 @@ function setupRouter(cfg, db, log) {
   r.post('/episodes/:episode_id/characters/extract', stub.episodeCharactersExtract);
   r.get('/episodes/:episode_id/storyboards', storyboards.episodeStoryboardsGet);
   r.post('/episodes/:episode_id/finalize', drama.finalizeEpisode);
+  r.post('/episodes/:episode_id/replan', storyboards.replanEpisode);
   r.get('/episodes/:episode_id/download', drama.downloadEpisodeVideo);
 
   // ---------- tasks ----------
@@ -342,6 +343,7 @@ function setupRouter(cfg, db, log) {
   r.post('/storyboards/:id/insert-before', storyboards.insertBefore);
   r.get('/storyboards/:id', storyboards.getOne);
   r.put('/storyboards/:id', storyboards.update);
+  r.put('/storyboards/:id/segment-ir', storyboards.updateSegmentIr);
   r.delete('/storyboards/:id', storyboards.delete);
   r.post('/storyboards/:id/props', prop.associateProps);
   r.post('/storyboards/:id/frame-prompt', storyboards.framePrompt);

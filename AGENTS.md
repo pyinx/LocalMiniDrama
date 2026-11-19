@@ -43,3 +43,5 @@ cd frontweb && npm run build
 - AI content generation requires external API keys (configured via the app's "AI 配置" page), but the app fully functions without them for development/testing purposes.
 - The backend also serves the built frontend from `frontweb/dist/` at port 5679 when the dist folder exists; during development, use the Vite dev server at port 3013 instead.
 - Video merge / tail-frame features require `ffmpeg` on PATH (or in `backend-node/tools/ffmpeg/`); UI and CRUD work without it.
+
+@HX.md
