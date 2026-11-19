@@ -10,6 +10,33 @@ const { deriveStyleSentences } = require('./segmentCompile/style');
 const episodeContinuityService = require('./episodeContinuityService');
 const { toPublicUrl } = require('../utils/storagePaths');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+const { tailFrameEligibility } = require('./segmentCompile/continuity');
+
+/**
+ * 尾帧衔接检查：来源必须是紧邻上一段、同场景版本且有共同角色；来源视频缺失或比尾帧新（重生成过）时阻断。
+ * @returns {{ tailFrame: {url}|null, findings: object[] }}
+ */
+function checkTailFrame(db, sb, ir, bindings) {
+  const from = ir.continuity.tail_ref_from;
+  if (from == null) return { tailFrame: null, findings: [] };
+  const block = (code, msg) => ({ tailFrame: null, findings: [{ level: 'block', code, where: { storyboard_id: from }, msg }] });
+  const prev = db
+    .prepare('SELECT id, segment_ir FROM storyboards WHERE episode_id = ? AND storyboard_number < ? AND deleted_at IS NULL ORDER BY storyboard_number DESC, id DESC LIMIT 1')
+    .get(sb.episode_id, sb.storyboard_number || 0);
+  if (!prev || prev.id !== from) return block('tail_frame_not_adjacent', '尾帧来源不是紧邻的上一段，请重新衔接或改用文字承接');
+  const prevParsed = prev.segment_ir ? parseSegmentIr(prev.segment_ir) : null;
+  const verdict = tailFrameEligibility(prevParsed && prevParsed.ok ? prevParsed.ir : null, ir);
+  if (!verdict.ok) return block('tail_frame_not_applicable', verdict.reason);
+  const video = db
+    .prepare("SELECT created_at FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1")
+    .get(from);
+  if (!video) return block('tail_frame_source_missing', '尾帧来源段还没有成功生成的视频');
+  const imgId = ir.continuity.first_frame_image_id;
+  const img = imgId != null ? db.prepare('SELECT created_at FROM image_generations WHERE id = ? AND deleted_at IS NULL').get(imgId) : null;
+  if (!img || !bindings.images[imgId]) return block('tail_frame_missing', '尾帧图片已不存在，请重新衔接');
+  if (String(video.created_at) > String(img.created_at)) return block('tail_frame_stale', '尾帧来源段的视频在取帧之后重新生成过，尾帧已过期，请重新衔接');
+  return { tailFrame: { url: bindings.images[imgId] }, findings: [] };
+}
 
 function tableExists(db, name) {
   return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
@@ -82,7 +109,7 @@ function loadBindings(db, cfg, dramaId, ir) {
 function compileStoryboard(db, storyboardId, opts = {}) {
   const sb = db
     .prepare(
-      `SELECT s.id, s.segment_ir, s.episode_id, e.drama_id FROM storyboards s JOIN episodes e ON e.id = s.episode_id
+      `SELECT s.id, s.segment_ir, s.episode_id, s.storyboard_number, e.drama_id FROM storyboards s JOIN episodes e ON e.id = s.episode_id
        WHERE s.id = ? AND s.deleted_at IS NULL AND e.deleted_at IS NULL`
     )
     .get(Number(storyboardId));
@@ -99,14 +126,16 @@ function compileStoryboard(db, storyboardId, opts = {}) {
   const target = videoClient.resolveVideoTarget(db, opts.model);
   const continuity = (episodeContinuityService.getContinuity(db, sb.episode_id) || {})[String(ir.scene.scene_id)] || {};
 
+  const bindings = loadBindings(db, cfg, sb.drama_id, ir);
+  const tail = opts.tailFrame ? { tailFrame: opts.tailFrame, findings: [] } : checkTailFrame(db, sb, ir, bindings);
   const compiled = compileSegment(ir, {
     caps: target.caps,
     style,
-    bindings: loadBindings(db, cfg, sb.drama_id, ir),
+    bindings,
     continuity,
-    tailFrame: opts.tailFrame || null,
+    tailFrame: tail.tailFrame,
   });
-  const findings = [...style.findings, ...compiled.findings, ...lintSegment(ir, compiled, target.caps)];
+  const findings = [...style.findings, ...tail.findings, ...compiled.findings, ...lintSegment(ir, compiled, target.caps)];
   return {
     ok: true,
     ir,

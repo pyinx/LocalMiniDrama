@@ -2,6 +2,32 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { getFfmpegPath, hasLocalFfmpeg } = require('../utils/ffmpegPath');
+const { parseSegmentIr } = require('./segmentIr/schema');
+const { tailFrameEligibility } = require('./segmentCompile/continuity');
+
+/** 提取视频最后一帧到 outAbsPath；返回 { ok, error } */
+function extractLastFrame(videoAbsPath, outAbsPath) {
+  const result = spawnSync(getFfmpegPath(), [
+    '-sseof', '-1',
+    '-i', videoAbsPath,
+    '-update', '1',
+    '-q:v', '2',
+    '-frames:v', '1',
+    '-y',
+    outAbsPath
+  ], { encoding: 'utf8', timeout: 60000 });
+  if (result.error || result.status !== 0) {
+    return { ok: false, error: result.stderr || result.error?.message || '未知错误' };
+  }
+  if (!fs.existsSync(outAbsPath)) return { ok: false, error: '提取帧后文件未生成' };
+  return { ok: true };
+}
+
+function storedIr(raw) {
+  if (!raw) return null;
+  const r = parseSegmentIr(raw);
+  return r.ok ? r.ir : null;
+}
 
 /**
  * 尾帧衔接服务：提取当前分镜视频的最后一帧，设为下一个分镜的首帧
@@ -36,7 +62,7 @@ function routes(db, cfg, log) {
         }
 
         const nextSb = db.prepare(`
-          SELECT id, storyboard_number FROM storyboards
+          SELECT id, storyboard_number, segment_ir FROM storyboards
           WHERE episode_id = ? AND storyboard_number > ? AND deleted_at IS NULL
           ORDER BY storyboard_number ASC LIMIT 1
         `).get(currentSb.episode_id, currentSb.storyboard_number || 0);
@@ -45,12 +71,19 @@ function routes(db, cfg, log) {
           return res.status(400).json({ error: '没有下一个分镜可供衔接' });
         }
 
+        // 结构化分镜：只给同场景版本、有共同角色的紧邻段挂尾帧；结果写进下一段的 IR
+        const nextIr = storedIr(nextSb.segment_ir);
+        if (nextSb.segment_ir) {
+          const curRow = db.prepare('SELECT segment_ir FROM storyboards WHERE id = ?').get(storyboardId);
+          const verdict = nextIr ? tailFrameEligibility(storedIr(curRow && curRow.segment_ir), nextIr) : { ok: false, reason: '下一段的结构化数据已损坏' };
+          if (!verdict.ok) return res.status(409).json({ error: verdict.reason, code: 'tail_frame_not_applicable' });
+        }
+
         // 3. 检查 ffmpeg 是否可用
         if (!hasLocalFfmpeg()) {
           return res.status(500).json({ error: '服务器未安装 ffmpeg，无法提取视频帧' });
         }
 
-        const ffmpeg = getFfmpegPath();
 
         // 4. 构建视频文件绝对路径
         // local_path 通常是相对路径，如 media/videos/xxx.mp4
@@ -80,23 +113,10 @@ function routes(db, cfg, log) {
         // 使用 -sseof -1 定位到最后一秒，然后取第一帧
         log.info('[尾帧衔接] 开始提取', { from: video.local_path, to: outputRelPath });
 
-        const result = spawnSync(ffmpeg, [
-          '-sseof', '-1',
-          '-i', videoAbsPath,
-          '-update', '1',
-          '-q:v', '2',
-          '-frames:v', '1',
-          '-y',
-          outputAbsPath
-        ], { encoding: 'utf8', timeout: 60000 });
-
-        if (result.error || result.status !== 0) {
-          log.error('[尾帧衔接] ffmpeg 失败', { stderr: result.stderr?.slice(-500) });
-          return res.status(500).json({ error: 'ffmpeg 提取帧失败: ' + (result.stderr || result.error?.message || '未知错误') });
-        }
-
-        if (!fs.existsSync(outputAbsPath)) {
-          return res.status(500).json({ error: '提取帧后文件未生成' });
+        const extracted = extractLastFrame(videoAbsPath, outputAbsPath);
+        if (!extracted.ok) {
+          log.error('[尾帧衔接] ffmpeg 失败', { stderr: String(extracted.error).slice(-500) });
+          return res.status(500).json({ error: 'ffmpeg 提取帧失败: ' + extracted.error });
         }
 
         // 7. 获取图片尺寸（可选，用于记录）
@@ -153,11 +173,18 @@ function routes(db, cfg, log) {
         // 先获取当前首帧（用于历史记录，如果需要）
         const nextSbCurrent = db.prepare('SELECT first_frame_image_id, image_url, local_path FROM storyboards WHERE id = ?').get(nextSb.id);
 
-        db.prepare(`
-          UPDATE storyboards
-          SET first_frame_image_id = ?, image_url = ?, local_path = ?, updated_at = ?
-          WHERE id = ?
-        `).run(newImageId, imageUrl, outputRelPath, now, nextSb.id);
+        if (nextIr) {
+          require('./storyboardService').saveSegmentIr(db, log, nextSb.id, {
+            ...nextIr,
+            continuity: { ...nextIr.continuity, tail_ref_from: storyboardId, first_frame_image_id: Number(newImageId) },
+          });
+        } else {
+          db.prepare(`
+            UPDATE storyboards
+            SET first_frame_image_id = ?, image_url = ?, local_path = ?, updated_at = ?
+            WHERE id = ?
+          `).run(newImageId, imageUrl, outputRelPath, now, nextSb.id);
+        }
 
         log.info('[尾帧衔接] 完成', {
           from_storyboard: storyboardId,
@@ -184,3 +211,4 @@ function routes(db, cfg, log) {
 }
 
 module.exports = routes;
+module.exports.extractLastFrame = extractLastFrame;
