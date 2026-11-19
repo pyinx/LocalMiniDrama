@@ -1540,6 +1540,7 @@
               <el-button v-if="sb.resolved_video || getSbAllVideos(sb.id).length || sb.adopted_video_generation_id" size="small" @click="reviewBoard = sb">
                 {{ sb.adopted_video_generation_id ? '已采用 #' + sb.adopted_video_generation_id + ' · 审片' : '选择采用版与审片' }}
               </el-button>
+              <el-button v-if="sb.resolved_video && getNextStoryboard(sb.id)" size="small" link @click="seamEditor?.open(sb.id)">与下一镜对听</el-button>
               <!-- 视频历史条：有多条历史时显示，点击可切换 -->
               <div v-if="getVideoStripItems(sb.id).length" class="sb-videos-strip">
                 <el-tooltip content="历史视频：点击采用此候选" placement="top" :show-arrow="false">
@@ -1561,6 +1562,13 @@
                 <el-tooltip v-if="getNextStoryboard(sb.id)" content="提取本视频尾帧，设为下一个分镜的首帧" placement="top">
                   <el-button size="small" :loading="linkingTailFrameIds.has(sb.id)" @click="onLinkTailFrameToNext(sb)">尾帧衔接</el-button>
                 </el-tooltip>
+                <label>本镜声音
+                  <select :value="sb.sound_source || 'auto'" :disabled="savingShotSound[sb.id]" @change="onShotSound(sb, $event)">
+                    <option value="auto">跟随整集</option><option value="original">原声</option>
+                    <option value="dub" :disabled="!sbDialogueAudioRelPath(sb)">采用配音</option><option value="mute">静音</option>
+                  </select>
+                </label>
+                <el-button v-if="sb.sound_source === 'dub' && sbDialogueAudioRelPath(sb)" size="small" link :disabled="savingShotSound[sb.id]" @click="saveShotSound(sb, 'dub')">采用当前配音</el-button>
                 <el-tooltip v-if="sb.dialogue" content="对白配音（TTS）" placement="top">
                   <el-button size="small" :loading="ttsSbIds.has(sb.id)" @click="onTtsSbDialogue(sb)">
                     对白配音
@@ -1634,7 +1642,7 @@
           <el-form-item label="对白烧录">
             <div class="video-option-row">
               <el-switch v-model="videoBurnDialogue" />
-              <span v-if="videoBurnDialogue" class="video-option-hint">开启后，将把各镜「配音」生成的对白 TTS 按分镜时长对齐并混入整集成片（无对白音频的分镜为静音）。可与「字幕」旁白同时开启，两条音轨会叠混。</span>
+              <span v-if="videoBurnDialogue" class="video-option-hint">跟随整集的镜头使用已有配音，其余保留原声。单镜选择优先，旁白可独立叠加。</span>
             </div>
           </el-form-item>
           <template v-if="hasStructuredStoryboards">
@@ -1695,6 +1703,9 @@
           正式交付整集
         </el-button>
         <el-button size="large" :loading="draftBusy" :disabled="!currentEpisodeId || !storyboards.length" @click="previewDraft">草稿预览</el-button>
+        <EpisodeSeamEditor v-if="currentEpisodeId" ref="seamEditor" :key="currentEpisodeId" :episode-id="Number(currentEpisodeId)" :options="getFinalizeMergeOptions('draft')" />
+        <DeliveryLoudness v-if="store.dramaId && currentEpisodeId" :key="store.dramaId + '/' + currentEpisodeId"
+          :drama-id="Number(store.dramaId)" :episode-id="Number(currentEpisodeId)" :episodes="store.drama?.episodes" />
         <div v-if="draftPreview?.episode === currentEpisodeId" class="video-preview-wrap">
           <p>{{ draftPreview.message }}</p>
           <video v-if="draftPreview.url" :src="draftPreview.url" controls />
@@ -2677,6 +2688,8 @@
 <script setup>
 import { previousStoryboard, previousTakeUrl } from '@/utils/mediaUrl'
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
+import DeliveryLoudness from '@/components/DeliveryLoudness.vue'
+import EpisodeSeamEditor from '@/components/EpisodeSeamEditor.vue'
 import CreativeReviewPanel from '@/components/CreativeReviewPanel.vue'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 const creativeReviewPanel = ref(null)
@@ -5559,6 +5572,22 @@ async function onUpscaleSbImage(sb) {
 function normalizeAudioRelPath(raw) {
   const s = String(raw != null ? raw : '').trim().replace(/^\//, '')
   return s
+}
+
+const seamEditor = ref(null)
+const savingShotSound = ref({})
+async function saveShotSound(sb, source) {
+  savingShotSound.value[sb.id] = true
+  try {
+    const result = await storyboardsAPI.update(sb.id, { sound_source: source })
+    sb.sound_source = result.sound_source
+  } catch (e) { ElMessage.error(e.message || '声音选择保存失败') }
+  finally { savingShotSound.value[sb.id] = false }
+}
+async function onShotSound(sb, event) {
+  const control = event.target
+  await saveShotSound(sb, control.value)
+  control.value = sb.sound_source || 'auto'
 }
 
 /** 对白 TTS 相对路径 */

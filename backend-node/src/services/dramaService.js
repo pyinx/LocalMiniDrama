@@ -395,6 +395,7 @@ function rowToStoryboard(r, db) {
       main_panel_idx: r.main_panel_idx != null ? Number(r.main_panel_idx) : null,
       video_url: r.video_url,
       ...takes.selectionFields(db, r),
+      sound_source: require('./episodeSound').soundOf(r)?.source ?? 'auto',
       audio_local_path: r.audio_local_path ?? null,
       narration_audio_local_path: r.narration_audio_local_path ?? null,
       status: r.status || 'pending',
@@ -760,40 +761,54 @@ function saveCanvasLayout(db, log, dramaId, req) {
 /**
  * 为合成器解析当前采用片的媒体地址。
  */
-function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
-  const sb = db.prepare('SELECT * FROM storyboards WHERE id=? AND deleted_at IS NULL').get(storyboardId);
-  const selected = takes.resolveTake(db, sb);
-  if (selected?.local_path && baseUrl) return baseUrl.replace(/\/$/, '') + '/' + selected.local_path.replace(/^\/+/, '');
+function takeUrl(selected, baseUrl) {
+  if (selected?.local_path) return (baseUrl || '/static').replace(/\/$/, '') + '/' + selected.local_path.replace(/^\/+/, '');
   return selected?.video_url || null;
 }
 
-function episodeDeliveryInputs(db, episodeId, baseUrl) {
-  const boards = episodeStoryboardRows(db, episodeId);
-  return boards.map((sb, order) => ({
-    scene_id: sb.id, storyboard_number: sb.storyboard_number, order,
-    take_id: sb.adopted_video_generation_id ?? null,
-    video_url: getVideoUrlForStoryboard(db, sb.id, baseUrl),
-    duration: Number(sb.duration) || 5,
-    sound: {
-      dialogue: sb.dialogue, narration: sb.narration,
-      audio_local_path: sb.audio_local_path, narration_audio_local_path: sb.narration_audio_local_path,
-    },
-  }));
+function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
+  const sb = db.prepare('SELECT * FROM storyboards WHERE id=? AND deleted_at IS NULL').get(storyboardId);
+  return takeUrl(takes.resolveTake(db,sb),baseUrl);
 }
 
-function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
+function localVideoDigest(root,take) {
+  const file = takes.localFile(root,take?.local_path);
+  return file ? require('./episodeSound').mediaDigest(file) : null;
+}
+
+function episodeDeliveryInputs(db, episodeId, baseUrl, options = {}) {
+  const root = require('../config').loadConfig().storage?.local_path || './data/storage';
+  const boards = episodeStoryboardRows(db, episodeId);
+  return boards.map((sb, order) => {
+    const take = takes.resolveTake(db,sb);
+    return {
+      scene_id: sb.id, storyboard_number: sb.storyboard_number, order,
+      take_id: sb.adopted_video_generation_id ?? null, effective_take_id: take?.id ?? null,
+      video_url: takeUrl(take,baseUrl), duration: Number(sb.duration) || 5,
+      ...(options.delivery_mode === 'complete' && { video_digest: localVideoDigest(root,take) }),
+      sound: require('./episodeSound').soundSnapshot(sb, options, root),
+    };
+  });
+}
+
+function finalizeEpisode(db, log, episodeId, baseUrl, body = {}, audition = null) {
   const ep = db.prepare('SELECT id, drama_id, episode_number FROM episodes WHERE id = ? AND deleted_at IS NULL').get(episodeId);
   if (!ep) return null;
   const drama = db.prepare('SELECT title, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(ep.drama_id);
   const videoMergeService = require('./videoMergeService');
   const title = `${drama?.title || '项目 ' + ep.drama_id} - 第${ep.episode_number ?? episodeId}集`;
-  const mode = body.delivery_mode;
+  const plan = require('./episodeCutPlan').readPlan(db, episodeId);
+  const mode = body.delivery_mode ?? (plan.cuts.length ? 'complete' : undefined);
   let aspectRatio;
   try { aspectRatio = JSON.parse(drama?.metadata || '{}').aspect_ratio; } catch (_) {}
   if (mode != null && !['complete', 'draft'].includes(mode)) return { error: '未知的交付模式' };
-  const inputs = episodeDeliveryInputs(db, episodeId, baseUrl);
+  const inputs = episodeDeliveryInputs(db, episodeId, baseUrl, {...body,delivery_mode:mode});
   const missing = inputs.filter(sc => !sc.video_url).map(sc => sc.storyboard_number ?? sc.scene_id);
   const message = missing.length ? `${title}：第 ${missing.join('、')} 镜缺少视频` : '';
+  if (missing.length && plan.cuts.length) {
+    const absent = new Set(inputs.filter(s => !s.video_url).map(s => s.scene_id));
+    require('./episodeCutPlan').markPending(db,episodeId,plan,plan.cuts.filter(c => absent.has(c.left.id) || absent.has(c.right.id)));
+  }
   if (mode === 'complete' && (missing.length || !inputs.length || inputs.length > 100)) {
     return { error: message || `${title}：正式交付需要 1 至 100 个分镜`, missing_shots: missing };
   }
@@ -809,7 +824,9 @@ function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
     scenes,
     provider: 'ffmpeg',
     merge_options: {
-      delivery_mode: mode,
+      delivery_mode: mode, reliable_render: true,
+      ...(mode && { edit_revision: plan.revision, edit_plan: audition?.plan || plan, logical_order: inputs.map(s => s.scene_id) }),
+      ...(audition && { audition_pair: audition.pair, audition_inputs:audition.inputs, audition_canvas:audition.canvas }),
       aspect_ratio: mode ? aspectRatio : undefined,
       burn_narration_subtitles: !!(body && body.burn_narration_subtitles),
       burn_dialogue_audio: !!(body && body.burn_dialogue_audio),

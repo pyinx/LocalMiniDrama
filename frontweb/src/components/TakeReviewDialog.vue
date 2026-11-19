@@ -9,6 +9,7 @@
       </el-select>
       <template v-if="candidate">
         <video ref="player" :key="candidate.id" :src="videoRecordUrl(candidate)" controls preload="metadata" class="take-player" />
+        <MediaMeasurement :key="candidate.id" :id="candidate.id" :board-id="board.id" @seek="seekSample" />
         <el-button size="small" :disabled="busy || candidate.id === state.adopted_video_generation_id" @click="adopt">采用此版</el-button>
         <el-checkbox :model-value="candidate.keep_in_archive" :disabled="busy" @change="keep">工程包保留</el-checkbox>
         <el-form label-position="top" @submit.prevent>
@@ -41,6 +42,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storyboardsAPI } from '@/api/storyboards'
 import { videoRecordUrl } from '@/utils/storyboardMedia'
+import MediaMeasurement from './MediaMeasurement.vue'
 const props = defineProps({ board: Object, episodeNumber: Number })
 const emit = defineEmits(['close', 'selection', 'revise', 'reshoot'])
 const labels = { revise: '改稿', replace: '换候选', reshoot: '重拍本镜' }
@@ -48,6 +50,9 @@ const state = ref({ candidates: [] }), selected = ref(null), player = ref(null)
 const busy = ref(false), seconds = ref(0), note = ref(''), action = ref('revise')
 const candidate = computed(() => state.value.candidates.find(v => v.id === selected.value))
 watch(selected, () => { seconds.value = 0; note.value = '' })
+function seekSample(time) {
+  if (player.value) player.value.currentTime = time
+}
 async function refresh() {
   state.value = await storyboardsAPI.takes(props.board.id)
   emit('selection', state.value)

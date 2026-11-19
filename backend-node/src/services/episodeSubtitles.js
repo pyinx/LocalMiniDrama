@@ -19,14 +19,17 @@ function buildTimeline(segments) {
     const start = t;
     t += seg.clip_s;
     if (!seg.ir) return { ...seg, start_s: start, shots: [] };
-    const scale = seg.ir.duration_s > 0 ? seg.clip_s / seg.ir.duration_s : 1;
-    let cursor = start;
+    const sourceDuration = seg.edit_range ? seg.edit_range.duration_us / 1e6 : seg.clip_s;
+    const scale = seg.ir.duration_s > 0 ? sourceDuration / seg.ir.duration_s : 1;
+    const origin = start - (seg.edit_range?.in_us || 0) / 1e6;
+    const visibleEnd = seg.edit_range ? Math.min(t, origin + seg.edit_range.out_us / 1e6) : t;
+    let cursor = origin;
     const shots = seg.ir.shots.map((shot) => {
       const s = { start_s: cursor, end_s: cursor + shot.seconds * scale, shot };
       cursor = s.end_s;
       return s;
     });
-    return { ...seg, start_s: start, shots };
+    return { ...seg, start_s: start, scale, origin, visibleEnd, shots };
   });
 }
 
@@ -48,7 +51,9 @@ function planDialogueLines(timeline, durationOf) {
         if (dur > window + 1e-6) {
           warnings.push({ level: 'warn', code: 'line_overflows_shot', where: { storyboard_id: seg.storyboard_id, path: `shots.${k}.lines.${j}` }, msg: `「${line.text}」需要 ${raw.toFixed(1)} 秒，加速到 ${MAX_TEMPO} 倍后仍超出镜头剩余的 ${window.toFixed(1)} 秒` });
         }
-        placements.push({ segment: si, storyboard_id: seg.storyboard_id, native: seg.native, line, start_s: cursor, duration_s: dur, raw_s: raw, tempo });
+        const visibleStart = seg.edit_range ? Math.max(seg.start_s, cursor) : cursor;
+        const visibleEnd = seg.edit_range ? Math.min(cursor + dur, seg.visibleEnd) : cursor + dur;
+        if (visibleEnd > visibleStart) placements.push({ segment: si, storyboard_id: seg.storyboard_id, native: seg.native, line, start_s: visibleStart, duration_s: visibleEnd - visibleStart, offset_s: visibleStart - cursor, raw_s: raw, tempo });
         cursor += dur + LINE_GAP;
       });
     });
@@ -122,10 +127,12 @@ function buildCardsSrt(timeline) {
   const cues = [];
   for (const seg of timeline) {
     if (!seg.ir) continue;
-    const scale = seg.ir.duration_s > 0 ? seg.clip_s / seg.ir.duration_s : 1;
     for (const c of seg.ir.cards) {
-      const start = seg.start_s + c.at_s * scale;
-      cues.push({ start, end: start + Math.max(2, c.hold_s * scale), text: c.text });
+      const sourceStart = seg.origin + c.at_s * seg.scale;
+      const sourceEnd = sourceStart + Math.max(2, c.hold_s * seg.scale);
+      const start = Math.max(seg.start_s, sourceStart);
+      const end = seg.edit_range ? Math.min(sourceEnd, seg.visibleEnd) : sourceEnd;
+      if (end > start) cues.push({ start, end, text: c.text });
     }
   }
   return toSrt(cues.sort((a, b) => a.start - b.start));

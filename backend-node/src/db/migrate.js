@@ -116,6 +116,7 @@ function ensureAllColumns(database) {
 
   // --- episodes ---
   ensureColumns(database, 'episodes', [
+    { name: 'edit_plan', type: 'TEXT' },
     { name: 'drama_id',       type: 'INTEGER DEFAULT 0' },
     { name: 'continuity_json', type: 'TEXT' },  // 剧集级连续性表 { [scene_id]: { props, position_lock, axis_lock, ambience } }
     { name: 'episode_number', type: 'INTEGER DEFAULT 0' },
@@ -172,6 +173,7 @@ function ensureAllColumns(database) {
     { name: 'polished_prompt',        type: 'TEXT' },               // 文字AI润色后的图片生成提示词（可编辑，生图时优先使用）
     { name: 'continuity_snapshot',   type: 'TEXT' },               // JSON: 连戏状态快照 {characters:{name:{position,clothing,expression,props}},lighting}
     { name: 'creative_review_lock',  type: 'TEXT' },               // 人工锁定的对白、外观描述及镜头方法
+    { name: 'adopted_sound', type: 'TEXT' },
     { name: 'audio_local_path',      type: 'TEXT' },               // 对白 TTS 本地路径
     { name: 'narration_audio_local_path', type: 'TEXT' },         // 解说旁白 TTS 本地路径
     { name: 'creation_mode',     type: 'TEXT DEFAULT \'classic\'' }, // classic | universal

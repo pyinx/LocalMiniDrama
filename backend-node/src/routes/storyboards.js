@@ -308,6 +308,7 @@ function routes(db, log) {
         response.success(res, sb);
       } catch (err) {
         if (sendSegmentIrError(res, err)) return;
+        if (err.status === 400) return response.badRequest(res, err.message);
         log.error('storyboards update', { error: err.message });
         response.internalError(res, err.message);
       }

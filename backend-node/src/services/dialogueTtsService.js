@@ -45,7 +45,7 @@ async function buildDialogueTrack({ timeline, synthesize, voiceOf, totalDuration
   dubbed.forEach((p) => args.push('-i', synthPath.get(p.line)));
   const chains = dubbed.map((p, i) => {
     const ms = Math.round(p.start_s * 1000);
-    return `[${i}:a]aresample=44100,aformat=channel_layouts=stereo,${atempoChain(p.tempo)},adelay=${ms}|${ms}[d${i}]`;
+    return `[${i}:a]aresample=44100,aformat=channel_layouts=stereo,${atempoChain(p.tempo)},atrim=start=${p.offset_s}:duration=${p.duration_s},asetpts=PTS-STARTPTS,adelay=${ms}|${ms}[d${i}]`;
   });
   const mix = `${dubbed.map((_, i) => `[d${i}]`).join('')}amix=inputs=${dubbed.length}:normalize=0:dropout_transition=0,apad,atrim=0:${totalDuration.toFixed(3)}[out]`;
   const out = path.join(tmpDir, 'dialogue_track.wav');

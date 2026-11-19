@@ -1,13 +1,13 @@
 # FFmpeg 本地目录
 
-将 ffmpeg 可执行文件放在此目录下，后端会优先使用，**无需配置环境变量**。
+Windows x64 已随附同一发行包的 `ffmpeg.exe` 与 `ffprobe.exe`。前者负责编码和滤镜测量，后者读取音轨、画幅及时长。Windows 桌面版将两者打包，首次启动或升级时补上本机缺少的工具。
 
-## 需要拷贝的文件（Windows）
+## 手动替换工具（Windows）
 
 - `ffmpeg.exe`
-- `ffprobe.exe`（若需要探测时长等信息）
+- `ffprobe.exe`
 
-从 FFmpeg 官方构建目录的 `bin` 下复制到本目录即可。
+随附版本为 Gyan 8.0.1 essentials，原始 7z 的 SHA-256 为 `a0c715acca3839bfd203e600a7775b83cfe3ff928a4eceb9ca54f2982365901c`，其中 ffprobe 的 SHA-256 为 `192a1d6899059765ac8c39764fc3148d4e6049955956dc2029f81f4bd6a8972d`。[发行包及对应源码](https://github.com/GyanD/codexffmpeg/releases/tag/8.0.1) · [随附许可证](LICENSE.txt)
 
 ## 一键拷贝（可选）
 
@@ -21,6 +21,6 @@ node scripts/copy-ffmpeg.js "D:\Program Files\ffmpeg-8.0.1-essentials_build\bin"
 
 ## 路径优先级
 
-1. 本目录下的 `ffmpeg`（或 Windows 下 `ffmpeg.exe`）
-2. 环境变量 `FFMPEG_PATH`（若已设置）
-3. 系统 PATH 中的 `ffmpeg`
+1. 已配置且存在的 `FFMPEG_PATH`、`FFPROBE_PATH`
+2. 应用工作目录及可执行文件附近的工具，再查本目录
+3. 系统 PATH

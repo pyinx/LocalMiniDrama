@@ -203,7 +203,7 @@ function getDrawtextFontOption() {
  */
 async function runMergedEpisodePostProcess(db, log, opts) {
   const { mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts = {} } = opts;
-  const wantDial = !!mergeOpts.burn_dialogue_audio;
+  const wantDial = !mergeOpts.delivery_mode && !!mergeOpts.burn_dialogue_audio;
   const wantNarr = !!mergeOpts.burn_narration_subtitles;
   const watermarkText = (mergeOpts.watermark_text && String(mergeOpts.watermark_text).trim())
     ? String(mergeOpts.watermark_text).trim().slice(0, 200)
@@ -232,7 +232,43 @@ async function runMergedEpisodePostProcess(db, log, opts) {
     let srtPath = null;
     let srtLines = [];
 
-    if (needAudio) {
+    if (wantNarr && mergeOpts.delivery_mode) {
+      const { localFile } = require('./workbenchTakeService');
+      const { speechSeconds } = require('./episodeMediaRender');
+      let elapsed = 0;
+      const list = [];
+      for (const [i, sc] of scenes.entries()) {
+        const text = sc.sound?.narration?.trim();
+        const label = '第 ' + (sc.storyboard_number ?? sc.scene_id) + ' 镜';
+        const args = ['-y','-v','error'];
+        if (text) {
+          try {
+            if (sc.edit_range?.in_us > 0) throw new Error('剪点会截断旁白开头，请调整剪点或配音');
+            let relative = sc.sound.narration_audio_local_path;
+            if (!relative) relative = (await ttsService.synthesize(db, log, { text, storyboard_id:null, storage_base:storageRoot })).local_path;
+            const file = localFile(storageRoot,relative);
+            if (!file) throw new Error('文件缺失');
+            const length = await speechSeconds(file,sc.duration);
+            if (length > sc.duration + 0.002) throw new Error('时长超过镜头');
+            args.push('-i',file,'-map','0:a:0');
+            srtLines.push(String(srtLines.length / 4 + 1),
+              formatSrtTimestamp(Math.round(elapsed*1000)) + ' --> ' + formatSrtTimestamp(Math.round((elapsed + Math.min(length,sc.duration))*1000)), text, '');
+          } catch (err) { throw new Error(label + '旁白合成中断：' + err.message); }
+        } else args.push('-f','lavfi','-i','anullsrc=r=48000:cl=stereo');
+        const name = 'narr-' + i + '.wav';
+        if (!runFfmpeg([...args,'-af','apad','-t',String(sc.duration),'-ar','48000','-ac','2','-c:a','pcm_s16le',path.join(tempRoot,name)],log,'narration')) throw new Error(label + '旁白渲染失败');
+        list.push("file '" + name + "'");
+        elapsed += sc.duration;
+      }
+      const manifest = path.join(tempRoot,'narration.txt');
+      fs.writeFileSync(manifest,list.join('\n') + '\n');
+      alignedAudioPath = path.join(tempRoot,'narration.wav');
+      if (!runFfmpeg(['-y','-f','concat','-safe','1','-i',manifest,'-c:a','copy',alignedAudioPath],log,'narration_concat')) throw new Error('旁白拼接失败');
+      if (srtLines.length) {
+        srtPath = mergedAbsPath.replace(/\.mp4$/i,'_narration.srt');
+        fs.writeFileSync(srtPath,'\uFEFF' + srtLines.join('\n') + '\n','utf8');
+      }
+    } else if (needAudio) {
       let tMs = 0;
       let srtIdx = 1;
       const segmentFiles = [];
@@ -379,13 +415,16 @@ async function runMergedEpisodePostProcess(db, log, opts) {
         return { ok: false, error: '内部错误：缺少对齐音轨' };
       }
       const args = ['-y', '-i', mergedAbsPath, '-i', alignedAudioPath];
-      if (filterComplex) {
+      if (mergeOpts.delivery_mode) {
+        const mix = '[0:a:0][1:a:0]amix=inputs=2:duration=first:normalize=0[aout]';
+        args.push('-filter_complex', [filterComplex, mix].filter(Boolean).join(';'), '-map', filterComplex ? '[vout]' : '0:v:0', '-map', '[aout]');
+      } else if (filterComplex) {
         args.push('-filter_complex', filterComplex, '-map', '[vout]', '-map', '1:a');
       } else {
         args.push('-map', '0:v', '-map', '1:a');
       }
       args.push(
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        ...(filterComplex || !mergeOpts.delivery_mode ? ['-c:v','libx264','-preset','fast','-crf','23'] : ['-c:v','copy']),
         '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outAbs
       );
       if (!runFfmpeg(args, log, 'mux_av')) {

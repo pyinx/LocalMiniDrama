@@ -281,6 +281,21 @@ function setupRouter(cfg, db, log) {
   r.post('/episodes/:episode_id/props/extract', prop.extractProps);
   r.post('/episodes/:episode_id/characters/extract', stub.episodeCharactersExtract);
   r.get('/episodes/:episode_id/storyboards', storyboards.episodeStoryboardsGet);
+  const editEpisode = operation => async (req, res) => {
+    try {
+      const options = operation === 'read' ? {
+        burn_dialogue_audio:req.query.burn_dialogue_audio === 'true', burn_narration_subtitles:req.query.burn_narration_subtitles === 'true',
+      } : req.body || {};
+      const result = await require('../services/episodeEditService').editEpisode(db, cfg, log, Number(req.params.episode_id), operation, options);
+      if (result?.error) return response.badRequest(res,result.error);
+      response.success(res,result);
+    } catch (err) {
+      response.error(res,err.status || 422,'EPISODE_EDIT',err.message);
+    }
+  };
+  r.get('/episodes/:episode_id/edit', editEpisode('read'));
+  r.put('/episodes/:episode_id/edit', editEpisode('save'));
+  r.post('/episodes/:episode_id/edit/audition', editEpisode('audition'));
   r.post('/episodes/:episode_id/finalize', drama.finalizeEpisode);
   r.post('/episodes/:episode_id/replan', storyboards.replanEpisode);
   r.get('/episodes/:episode_id/continuity', storyboards.getEpisodeContinuity);
@@ -323,6 +338,7 @@ function setupRouter(cfg, db, log) {
 
   // ---------- videos ----------
   require('./workbenchTakes')(r, db, cfg);
+  require('./mediaDiagnostics')(r, db, cfg);
   r.get('/videos', videos.list);
   r.post('/videos', videos.create);
   r.post('/videos/image/:image_gen_id', videos.fromImage);

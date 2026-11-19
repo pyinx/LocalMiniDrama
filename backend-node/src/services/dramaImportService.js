@@ -360,10 +360,20 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
     const ep = data.episodes[epIdx];
     const episodeId = episodeIdList[epIdx];
     if (!episodeId) continue;
+    const importedBoards = [];
 
     for (const sb of (ep.storyboards || [])) {
       const sbAudioPath = saveMediaFile(storagePath, projectDir, 'audio', files, sb.audio_file, 'sb_audio_imp');
       const sbNarrationAudioPath = saveMediaFile(storagePath, projectDir, 'audio', files, sb.narration_audio_file, 'sb_narr_audio_imp');
+
+      let adoptedSound = null;
+      if (sb.adopted_sound) {
+        const { source, file, sha256 } = sb.adopted_sound;
+        const selectedPath = source === 'dub' && file !== sb.audio_file
+          ? saveMediaFile(storagePath, projectDir, 'audio', files, file, 'sb_adopted') : sbAudioPath;
+        adoptedSound = require('./episodeSound').selectSound(source, selectedPath, storagePath);
+        if (source === 'dub' && JSON.parse(adoptedSound).sha256 !== sha256) throw new Error('工程包采用配音的内容不匹配');
+      }
 
       // 还原 characters：从导出时记录的下标映射回新 ID
       const charIndices = Array.isArray(sb.character_indices) ? sb.character_indices : [];
@@ -393,7 +403,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
         'emotion', 'emotion_intensity', 'segment_index', 'segment_title', 'continuity_snapshot', 'creation_mode',
         'universal_segment_text', 'layout_description', 'first_frame_image_id', 'last_frame_image_id',
         'last_frame_image_url', 'last_frame_local_path', 'image_url', 'local_path', 'characters',
-        'audio_local_path', 'narration_audio_local_path', 'created_at', 'updated_at'
+        'adopted_sound', 'audio_local_path', 'narration_audio_local_path', 'created_at', 'updated_at'
       ];
       const sbVals = [
         episodeId,
@@ -435,6 +445,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
         null, // image_url 由首帧绑定设置
         null, // local_path 由首帧绑定设置
         charactersJson,
+        adoptedSound,
         sbAudioPath || null,
         sbNarrationAudioPath || null,
         now,
@@ -564,7 +575,12 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
 
       // 兼容老工程：ZIP 无 frame_prompts 时，用已导入的首/尾帧图生 prompt 回填
       restoreFramePromptsFromImageGens(db, sbId, now2, log);
+      if (ep.edit_plan) {
+        const row = db.prepare('SELECT * FROM storyboards WHERE id=?').get(sbId);
+        importedBoards.push({ id:sbId, take:require('./workbenchTakeService').resolveTake(db,row)?.id ?? null });
+      }
     }
+    require('./episodeCutArchive').restoreCuts(db,episodeId,ep,importedBoards);
   }
 
   // ---- 结构化分镜 IR 与剧集连续性表：所有对象都建好后再重映射 id（尾帧来源可能指向后面的分镜） ----

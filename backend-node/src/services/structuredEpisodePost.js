@@ -23,11 +23,11 @@ function isStructuredEpisode(db, scenes) {
   });
 }
 
-/** 片段是否由原生人声模型生成：看该分镜最近一次成功生成时的编译结果 */
-function segmentIsNative(db, storyboardId) {
+/** 片段是否由原生人声模型生成：优先读取实际采用版本，兼容没有版本身份的旧任务 */
+function segmentIsNative(db, storyboardId, takeId) {
   const g = db
-    .prepare("SELECT compiled_json FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY id DESC LIMIT 1")
-    .get(storyboardId);
+    .prepare("SELECT compiled_json FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL AND (? IS NULL OR id = ?) ORDER BY id DESC LIMIT 1")
+    .get(storyboardId, takeId ?? null, takeId ?? null);
   try {
     return !!(g && g.compiled_json && JSON.parse(g.compiled_json).request.generate_audio);
   } catch (_) {
@@ -44,7 +44,8 @@ function loadSegments(db, scenes) {
       storyboard_id: sbId,
       ir: parsed && parsed.ok ? parsed.ir : null,
       clip_s: Number(sc.duration) || 5,
-      native: segmentIsNative(db, sbId),
+      edit_range: sc.edit_range,
+      native: sc.mainSoundResolved || segmentIsNative(db, sbId, sc.effective_take_id),
     };
   });
 }
@@ -75,11 +76,15 @@ function defaultSynthesize(db, log, tmpDir) {
 function buildSeamsSheet(videoPath, boundaries, outPath, tmpDir, log) {
   if (!boundaries.length) return null;
   const pairs = [];
-  boundaries.forEach((b, i) => {
+  boundaries.forEach(({ time, cutFrame, before }, i) => {
     const a = path.join(tmpDir, `seam_${i}_a.png`);
     const c = path.join(tmpDir, `seam_${i}_b.png`);
-    const grab = (t, p) => runFfmpeg(['-y', '-ss', Math.max(0, t).toFixed(3), '-i', videoPath, '-frames:v', '1', '-vf', 'scale=240:-2', p], log, 'seam_frame');
-    if (grab(b - 0.15, a) && grab(b + 0.05, c)) pairs.push([a, c]);
+    const grab = (left, output) => {
+      const seek = cutFrame == null ? ['-ss', String(left ? time - before : time)] : [];
+      const select = cutFrame == null ? '' : `select=eq(n\\,${left ? cutFrame - 1 : cutFrame}),`;
+      return runFfmpeg(['-y', ...seek, '-i', videoPath, '-frames:v', '1', '-vf', select + 'scale=240:-2', output], log, 'seam_frame');
+    };
+    if (grab(true, a) && grab(false, c)) pairs.push([a, c]);
   });
   if (!pairs.length) return null;
   const args = ['-y'];
@@ -209,7 +214,11 @@ async function runStructuredEpisodePost(db, log, opts) {
     if (mergeOpts.review_sheets) {
       const bounds = [];
       let t = 0;
-      timeline.slice(0, -1).forEach((s) => { t += s.clip_s; bounds.push(t); });
+      timeline.slice(0, -1).forEach((s) => {
+        t += s.clip_s;
+        const cutFrame = s.edit_range ? Math.round(t * require('./episodeCutPlan').frameRate(s.edit_range.fps)) : null;
+        bounds.push({ time: t, cutFrame, before: Math.min(0.15, s.clip_s) });
+      });
       const seams = buildSeamsSheet(finalAbs, bounds, `${base}_seams.png`, tmpDir, log);
       const frames = buildFramesSheet(finalAbs, videoDur, `${base}_frames.png`, log);
       if (seams) info.sheets.seams = path.relative(storageRoot, seams).replace(/\\/g, '/');
