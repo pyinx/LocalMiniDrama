@@ -362,6 +362,18 @@ function routes(db, log) {
         response.internalError(res, err.message);
       }
     },
+    /** 剧本体检：只诊断，不改写剧本 */
+    scriptReview: async (req, res) => {
+      try {
+        const r = await require('../services/scriptReviewService').reviewEpisode(db, log, req.params.episode_id, { model: (req.body || {}).model });
+        response.success(res, r);
+      } catch (err) {
+        if (err.code === 'not_found') return response.notFound(res, err.message);
+        if (err.code === 'empty_script' || err.code === 'script_review_invalid') return response.error(res, 422, err.code, err.message);
+        log.error('script review', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
     getEpisodeContinuity: (req, res) => {
       const table = episodeContinuityService.getContinuity(db, req.params.episode_id);
       if (!table) return response.notFound(res, '剧集不存在');

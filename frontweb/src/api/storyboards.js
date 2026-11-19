@@ -86,6 +86,10 @@ export const storyboardsAPI = {
   episodeSegmentCheck(episodeId) {
     return request.get(`/episodes/${episodeId}/segment-check`)
   },
+  /** 剧本体检（只诊断不改写）：{ script: { format, stats, lines }, report: { gates, dimensions, weighted_total, grade, problems } } */
+  scriptReview(episodeId) {
+    return request.post(`/episodes/${episodeId}/script-review`, {})
+  },
   /** 即梦可选后端是否可用：{ available, reason?, message? } */
   jimengStatus() {
     return request.get('/integrations/jimeng/status')

@@ -903,9 +903,12 @@ Requirements:
 1. Write in clear, fluent English suitable for later storyboard breakdown.
 2. Include scene descriptions, character actions and dialogue. Do NOT use shot numbers, "INT./EXT." headings, or screenplay formatting marks.
 3. Each episode: approximately 800 words. Episodes must be connected in story continuity — each episode picks up from where the previous one ended.
-4. Each episode should have a clear beginning, development, and a hook or turning point at the end.${enNote}`;
+4. Each episode should have a clear beginning, development, and a hook or turning point at the end.
+${require('./scriptReview/rules/episodeRules').WRITING_RULES_EN}${enNote}`;
   }
   const _storyOverride = _overrideCache['story_expansion_system'];
+  // 写作纪律只并入默认提示词；用户自定义过的提示词原样使用
+  const rules = _storyOverride ? '' : require('./scriptReview/rules/episodeRules').WRITING_RULES_ZH;
   const base = _storyOverride || `你是一位专业的编剧。你的任务是根据用户提供的故事梗概，创作 ${n} 集完整的短片剧本。
 
 要求：
@@ -913,7 +916,7 @@ Requirements:
 2. 可以包含场景描述、角色动作与对话，但不要输出分镜格式、镜头编号或「内景/外景」等场次标记。
 3. 每集约 800 字。如有多集，剧情必须前后衔接——每集从上一集结尾处推进，确保整体故事连贯。
 4. 每集有清晰的起承转合，结尾留有悬念或转折，吸引观众看下一集。`;
-  return base + jsonNote;
+  return base + rules + jsonNote;
 }
 
 const STORY_STYLE_LABELS = {

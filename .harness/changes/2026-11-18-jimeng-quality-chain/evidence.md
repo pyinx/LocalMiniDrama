@@ -75,6 +75,8 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC31 | test | record 037 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a257185+4bc2d9cba06df027 | 2026-11-19T06:01:27Z |
 | AC20 | test:live | record 038 | cli | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | fail(exit 1) | 7280bdf+9eab70250b5f2ddf | 2026-11-19T06:02:47Z |
 | AC20 | test:live | record 039 | cli | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | pass | 7280bdf+67cb2f309e91aff2 | 2026-11-19T06:04:12Z |
+| AC17 | test | record 040 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 1289973+d11b6e6630254ab1 | 2026-11-19T06:14:45Z |
+| AC18 | test | record 041 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 1289973+d11b6e6630254ab1 | 2026-11-19T06:14:58Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review

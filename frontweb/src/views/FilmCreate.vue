@@ -897,6 +897,10 @@
             <ElButton type="info" plain size="large" @click="onAddSingleStoryboard">
             添加一个分镜
             </ElButton>
+            <ElButton plain size="large" :disabled="!currentEpisodeId" @click="scriptReviewVisible = true">
+            剧本体检
+            </ElButton>
+            <ScriptReviewDialog v-if="currentEpisodeId" v-model="scriptReviewVisible" :episode-id="currentEpisodeId" />
           </div>
           <template v-if="storyboards.length > 0">
             <div class="sb-batch-right">
@@ -2730,6 +2734,7 @@ import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
 import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
 import VariantEditor from '@/components/VariantEditor.vue'
 import JimengConfirmDialog from '@/components/JimengConfirmDialog.vue'
+import ScriptReviewDialog from '@/components/ScriptReviewDialog.vue'
 import { jimengOptionState } from '@/utils/segmentUi'
 import FindingList from '@/components/FindingList.vue'
 import { videoMergesAPI } from '@/api/videoMerges'
@@ -3384,6 +3389,7 @@ const storyboardIncludeNarration = ref(false)
 const storyboardStructured = ref(false)
 /** 当前默认视频配置是否为即梦 CLI（可选后端：先报价确认再提交） */
 const jimengActive = ref(false)
+const scriptReviewVisible = ref(false)
 const jimengDialogVisible = ref(false)
 const jimengDialogSbIds = ref([])
 async function refreshJimengActive() {
