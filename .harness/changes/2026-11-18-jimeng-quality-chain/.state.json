@@ -2,20 +2,20 @@
   "slug": "2026-11-18-jimeng-quality-chain",
   "tier": "T2",
   "schema": 2,
-  "status": "confirmed",
+  "status": "done",
   "created": "2026-11-18T07:07:36Z",
   "baseRef": "16a32d4",
   "gates": {
     "1": {
-      "at": "2026-11-18T07:29:31Z",
-      "reqHash": "42330a68d6e848f6c4000b8f5e03eab8e3e65ee1",
-      "rev": "16a32d4+146d86f6f9e24528",
+      "at": "2026-11-19T08:26:24Z",
+      "reqHash": "28605e214409a5f7c028393b16e21e17daabcd6b",
+      "rev": "1c1c6a0+c818c898010fbef1",
       "status": "confirmed"
     },
     "2": {
-      "at": "2026-11-19T00:38:57Z",
-      "specHash": "4b9ab4757ab723032bf4b9932d501d2ba9438ba9",
-      "rev": "16a32d4+bd851e980f45905c",
+      "at": "2026-11-19T08:25:59Z",
+      "specHash": "5ca82ced27d199d98d4debb3576cd7694e233d34",
+      "rev": "1c1c6a0+c818c898010fbef1",
       "status": "confirmed"
     }
   },
@@ -1468,6 +1468,960 @@
         "deferred": []
       },
       "records": 6
+    },
+    {
+      "at": "2026-11-19T08:25:59Z",
+      "contract": {
+        "criteria": [
+          {
+            "id": "AC1",
+            "text": "MiniMax H3 带 1–9 张参考图、比例 9:16 时请求体含 `ratio:\"9:16\"`；首尾帧模式与纯文生的既有行为不变",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/minimaxH3.test.js::sends ratio with reference images"
+            ]
+          },
+          {
+            "id": "AC2",
+            "text": "动漫风格剧的视频风格行不含\"真人写实\"；写实风格剧仍含写实描述；LLM 规格文本不再强制\"真人写实\"",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/universalStyleLine.test.js::anime drama has no realistic tag",
+              "backend-node/test/universalStyleLine.test.js::realistic drama keeps realistic tag"
+            ]
+          },
+          {
+            "id": "AC3",
+            "text": "任一目标模型下，规划出的段时长落在该模型 [min,max] 内且按 step 对齐；段内各分镜整数秒之和等于段时长；超上限的内容被拆成多段而非截断",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentPlanner.test.js::clamps to model envelope",
+              "backend-node/test/segmentPlanner.test.js::splits overflow into new segment"
+            ]
+          },
+          {
+            "id": "AC4",
+            "text": "能力表对 Seedance 2.x、MiniMax H3、Wan（各已接入型号）、即梦视频模型返回时长/参考图/prompt 长度/比例/首尾帧/原生人声字段；未知模型返回保守默认并带 `unknown` 标记；videoClient 的上限取自能力表",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/modelCapabilities.test.js::known models",
+              "backend-node/test/modelCapabilities.test.js::unknown model is conservative"
+            ]
+          },
+          {
+            "id": "AC5",
+            "text": "新链路生成的分镜段持久化为结构化表示并通过 schema 校验；校验失败返回明确错误且不发出视频请求；编译与检查在 `POST /videos` 插入行之前同步完成，阻断时同步返回 `422 segment_compile_blocked` 且不插入行；编译结果写入该生成记录，异步生成不再二次编译",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIr.test.js::invalid ir rejected before request",
+              "backend-node/test/segmentIr.test.js::valid ir"
+            ]
+          },
+          {
+            "id": "AC6",
+            "text": "分段装箱：台词耗时按字数计算（含换人停顿）决定段时长下限；对白条数不超过时长对应容量；≤8s 段至多 1 次硬切、≤15s 至多 3 次；每段叙事事件数满足下限（≥1；≥10s 时 ≥2；≥15s 时 ≥3），开场与集尾钩子单独成段",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentPlanner.test.js::dialogue capacity",
+              "backend-node/test/segmentPlanner.test.js::duration from dialogue",
+              "backend-node/test/segmentPlanner.test.js::event minimum",
+              "backend-node/test/segmentPlanner.test.js::hard cut cap",
+              "backend-node/test/segmentPlanner.test.js::hooks isolated"
+            ]
+          },
+          {
+            "id": "AC7",
+            "text": "每个目标模型的编译结果满足：风格句恰好一次且在首段；每个绑定参考恰有一句说明且顺序与参考列表一致；正文中出现的每个参考别名都已绑定；每个说话角色带口型写法、同框不说话者标闭口（仅对能力表标为原生人声的模型；非原生/未知模型改写为说话人闭口、背对或画外，台词交给 AC27）；每个分镜含景别、机位、出镜角色的绝对朝向与视线落点；尾注按模型能力生成；请求体的音频开关由能力表推导，与口型写法一致；每个角色在每段首次开口时写入其音色描述（来自 `voice_style`），全剧逐字一致；Wan 族对 IR 请求关闭 `prompt_extend`；参考说明句按 角色 > 场景 > 道具 > 其他 的顺序输出（与截断优先级分开）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::audio flag follows caps",
+              "backend-node/test/promptCompilers.test.js::jimeng structure",
+              "backend-node/test/promptCompilers.test.js::minimax_h3 structure",
+              "backend-node/test/promptCompilers.test.js::seedance structure",
+              "backend-node/test/promptCompilers.test.js::voice description identical across segments",
+              "backend-node/test/promptCompilers.test.js::wan disables prompt_extend",
+              "backend-node/test/promptCompilers.test.js::wan structure"
+            ]
+          },
+          {
+            "id": "AC8",
+            "text": "编译结果超出模型 prompt 长度时按优先级裁剪（先动作细节、再氛围；不删镜头语言、台词与约束）；参考图超出上限时按 场景 > 主角造型 > 次要角色 > 道具 排序截断；裁剪后仍超限则拒绝并报错",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::orders and caps references",
+              "backend-node/test/promptCompilers.test.js::rejects when untrimmable",
+              "backend-node/test/promptCompilers.test.js::trims to max length"
+            ]
+          },
+          {
+            "id": "AC9",
+            "text": "prompt 检查器对禁写项给出带位置的告警：用代词回指角色、\"接上一段/同上\"、淡出/入黑/暗角、正文写字幕或 BGM、图像质量词（8K 等）、分数式占比、否定式排除；硬上限问题为阻断级",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptLint.test.js::clean prompt has no findings",
+              "backend-node/test/promptLint.test.js::flags each banned pattern"
+            ]
+          },
+          {
+            "id": "AC10",
+            "text": "旧分镜行为不变：未重新生成的分镜仍用原 prompt 路径；对某集重新生成分镜后改走新链路；两者可共存于同一部剧",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/pipelineCoexistence.test.js::old storyboard keeps legacy prompt",
+              "backend-node/test/pipelineCoexistence.test.js::regenerated episode uses compiler"
+            ]
+          },
+          {
+            "id": "AC11",
+            "text": "角色可有多个造型，每个造型有独立设定图；派生造型的生图请求以基础造型设定图为参考；`characters.stages` 既有数据可读入为造型；新造型设定图为\"只留一张清晰脸\"版式（正面全身脸部遮蔽、背面全身、一张清晰面部特写），提示词断言只有一处要求清晰面部",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/characterWardrobes.test.js::stages migrate to wardrobes",
+              "backend-node/test/characterWardrobes.test.js::variant references base sheet",
+              "backend-node/test/characterWardrobes.test.js::wardrobe sheet has exactly one clear face clause"
+            ]
+          },
+          {
+            "id": "AC12",
+            "text": "场景可有多个状态版本与竖屏主机位版本；竖屏版生图请求以 16:9 母版为参考；分镜段按\"造型\"\"场景状态\"绑定参考图，视频请求携带对应图片",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/sceneStates.test.js::portrait version references master",
+              "backend-node/test/segmentIr.test.js::binds wardrobe and scene state images"
+            ]
+          },
+          {
+            "id": "AC13",
+            "text": "成片：按分镜结构生成台词 SRT（每行 ≤12 字、os/vo 斜体）与字卡 SRT；BGM 混音音量低于台词；ffmpeg 无字幕滤镜时降级软字幕并返回原因；输出接缝拼图与每秒抽帧拼图",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/episodeCompose.test.js::bgm under dialogue",
+              "backend-node/test/episodeCompose.test.js::seams and frames sheets",
+              "backend-node/test/episodeCompose.test.js::soft subtitle fallback",
+              "backend-node/test/episodeCompose.test.js::srt from segments"
+            ]
+          },
+          {
+            "id": "AC14",
+            "text": "可提取前一段尾帧作为下一段衔接参考；只用于同场景版本、有共同主角的紧邻段；被依赖段的视频缺失或比尾帧新时阻断（尾帧过期）；尾帧写入走 IR 编辑（`continuity.first_frame_image_id`），不直接写分镜列",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/continuityRef.test.js::extracts last frame",
+              "backend-node/test/continuityRef.test.js::stale tail frame blocks",
+              "backend-node/test/continuityRef.test.js::tail frame only for same scene state",
+              "backend-node/test/continuityRef.test.js::tail frame written through ir"
+            ]
+          },
+          {
+            "id": "AC15",
+            "text": "即梦后端：未安装或未登录时状态接口报告不可用及原因，渲染请求被拒（不调用 CLI），其他协议链路不受影响",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/jimengNovelRenderer.test.js::unavailable when logged out",
+              "backend-node/test/jimengNovelRenderer.test.js::unavailable when missing"
+            ]
+          },
+          {
+            "id": "AC16",
+            "text": "即梦后端：提交前必须有与当前节点配置一致的报价且用户确认；配置变化后旧确认失效；`SUBMISSION_UNKNOWN`/超时只查结果不重提；同一 key 重复点击不产生第二次提交；参考图 URL 先落成本地绝对路径；确认 token 一次性使用，提交失败或被拒后需重新报价；节点 key 在调用 `node run` 之前写入生成记录，进程在提交后崩溃、重启后只轮询不重提；同一分镜重新渲染使用新的 run 标识轮询，不读到上一次结果",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/jimengNovelRenderer.test.js::consumed token cannot resubmit",
+              "backend-node/test/jimengNovelRenderer.test.js::crash after submit polls not resubmits",
+              "backend-node/test/jimengNovelRenderer.test.js::never resubmits unknown",
+              "backend-node/test/jimengNovelRenderer.test.js::refs become local paths",
+              "backend-node/test/jimengNovelRenderer.test.js::repeat click single submit",
+              "backend-node/test/jimengNovelRenderer.test.js::requires matching estimate",
+              "backend-node/test/jimengNovelRenderer.test.js::rerender polls new run",
+              "backend-node/test/jimengNovelRenderer.test.js::stale confirmation rejected"
+            ]
+          },
+          {
+            "id": "AC17",
+            "text": "剧本层：分集剧本生成提示遵循自写规则（开场冲突、集尾钩子、台词短句、可拍性）；剧本体检返回结构化报告（硬门槛 + 分维度评分 + 具体问题），不自动改写剧本",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/scriptReview.test.js::no auto rewrite",
+              "backend-node/test/scriptReview.test.js::parses script format",
+              "backend-node/test/scriptReview.test.js::report schema"
+            ]
+          },
+          {
+            "id": "AC18",
+            "text": "仓库内新增的规则文本不包含即梦 `jimeng-drama` 文件中任意连续 15 字以上的原文（白名单仅收常见通用短语，白名单文件本身经评审）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/noVerbatimJimeng.test.js::detector flags a 15-char quote and ignores 14 chars",
+              "backend-node/test/noVerbatimJimeng.test.js::no 15-char overlap"
+            ]
+          },
+          {
+            "id": "AC19",
+            "text": "全部既有测试保持通过，前端可构建",
+            "keys": [
+              "build",
+              "test"
+            ],
+            "tests": [
+              "review"
+            ]
+          },
+          {
+            "id": "AC21",
+            "text": "Wan `wanx2.1-vace-plus`（≤3 张）与 `wan2.6-r2v-flash`（≤5 张）的请求体中，每张参考图都是可用的图片输入（http(s) URL 或 `data:` base64 字符串），数量与输入一致；本地/localhost 图片转为 base64；无参考图时仍在发请求前报错",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/wanDashscope.test.js::errors without references",
+              "backend-node/test/wanDashscope.test.js::r2v sends resolved reference images",
+              "backend-node/test/wanDashscope.test.js::vace sends resolved reference images"
+            ]
+          },
+          {
+            "id": "AC22",
+            "text": "Wan 接收尺寸参数的模型（`wan2.6-t2v`、`wanx2.1-vace-plus`）按目标比例选用该模型支持的尺寸：9:16 → 竖屏尺寸，16:9 → `1280*720`；目标比例不受支持时在发请求前报错，不再静默出横屏；`wan2.6-r2v-flash` 同样按比例下发尺寸（A8）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/wanDashscope.test.js::landscape ratio keeps 1280x720",
+              "backend-node/test/wanDashscope.test.js::portrait ratio yields portrait size",
+              "backend-node/test/wanDashscope.test.js::r2v portrait size",
+              "backend-node/test/wanDashscope.test.js::unsupported ratio rejected before request"
+            ]
+          },
+          {
+            "id": "AC23",
+            "text": "有 IR 的分镜：旧文本字段（dialogue/action/duration/shot_type/movement/characters/scene_id/universal_segment_text）在保存 IR 时由 IR 投影写入；对这些字段的通用更新返回 `409 segment_ir_owned` 且不改数据；通过 IR 编辑接口修改后投影同步更新；应用内助手的分镜修改工具对 IR 分镜改走 IR 编辑；无 IR 的分镜行为不变；通用更新中投影字段值未改变时照常接受（兼容前端整对象保存），值改变才 409；按音频拆分与批量推断参数对 IR 分镜同样返回 409",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIrOwnership.test.js::agent tool edits ir",
+              "backend-node/test/segmentIrOwnership.test.js::batch infer rejected for ir storyboard",
+              "backend-node/test/segmentIrOwnership.test.js::generic update rejected for ir storyboard",
+              "backend-node/test/segmentIrOwnership.test.js::ir edit reprojects",
+              "backend-node/test/segmentIrOwnership.test.js::legacy fields are projected",
+              "backend-node/test/segmentIrOwnership.test.js::legacy storyboard update unchanged",
+              "backend-node/test/segmentIrOwnership.test.js::split by audio rejected for ir storyboard",
+              "backend-node/test/segmentIrOwnership.test.js::unchanged projected fields accepted"
+            ]
+          },
+          {
+            "id": "AC24",
+            "text": "导出再导入一部剧后，分镜 IR、角色造型、场景状态、道具状态及其图片完整保留，IR 中的角色/造型/场景/道具 id 正确重映射；旧版导出包（无这些数据）仍可导入",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/dramaExportRoundtrip.test.js::ids remapped in ir",
+              "backend-node/test/dramaExportRoundtrip.test.js::ir and variants survive roundtrip",
+              "backend-node/test/dramaExportRoundtrip.test.js::legacy package imports"
+            ]
+          },
+          {
+            "id": "AC25",
+            "text": "删除角色/场景/道具（含按集重新生成角色）时其造型/状态随之软删；引用已删除对象的 IR 在编译时给出阻断级问题，不静默丢参考",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/variantCascade.test.js::character delete cascades wardrobes",
+              "backend-node/test/variantCascade.test.js::ir referencing deleted asset blocks compile",
+              "backend-node/test/variantCascade.test.js::scene and prop delete cascade"
+            ]
+          },
+          {
+            "id": "AC26",
+            "text": "编译时按当前目标模型校验段时长：超出上限或低于下限返回阻断级问题并提示重新规划，不截断、不发请求",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::blocks when duration outside current model envelope"
+            ]
+          },
+          {
+            "id": "AC27",
+            "text": "非原生人声/未知模型：成片时按 IR 台词逐句合成语音，起始时间 = 段起点 + 所在分镜起点，单句超出分镜时长时变速至不超过上限（≤1.25x）否则告警；os/vo/画外按角色音色；原生人声模型不重复合成；IR 剧集的逐句台词轨替代旧的 `burn_dialogue_audio`，两者不同时混入",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/dialogueTts.test.js::ir episode does not double mix dialogue",
+              "backend-node/test/dialogueTts.test.js::line timing from ir",
+              "backend-node/test/dialogueTts.test.js::native audio model skips tts",
+              "backend-node/test/dialogueTts.test.js::overlong line tempo capped"
+            ]
+          },
+          {
+            "id": "AC28",
+            "text": "整集检查：开场段前 3 秒无叙事事件、相邻段主运镜相同、同一场景各段环境声描述不一致、尾帧依赖链超过两轮——各给出带段号的告警；判定依据为 IR 字段 `shots[].event` 与段级 `main_move`，尾帧依赖链只按 `continuity.tail_ref_from` 计算；同场景的持续道具外观、站位锁、轴线锁、环境声取自剧集级连续性表，逐字一致",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/episodeLint.test.js::clean episode has no findings",
+              "backend-node/test/episodeLint.test.js::flags each episode rule"
+            ]
+          },
+          {
+            "id": "AC29",
+            "text": "道具可作为参考图绑定进 IR，道具可有状态变体（以初始状态图为参考派生）；群像以独立资产生成（一张图 2–4 个不同个体）并可绑定；参考排序为 场景 > 主角造型 > 次要角色 > 群像 > 道具",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/propAndCrowdRefs.test.js::crowd asset binds",
+              "backend-node/test/propAndCrowdRefs.test.js::prop state references initial image",
+              "backend-node/test/propAndCrowdRefs.test.js::reference order"
+            ]
+          },
+          {
+            "id": "AC30",
+            "text": "IR 设为首尾帧模式时：编译结果不含普通参考与参考说明句、别名改为纯文字名、只携带首/尾帧；目标模型不支持首尾帧时阻断。场景可生成反打版本（以母版为参考，提示词要求换成另一面墙），并可被 IR 绑定",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::first last frame mode",
+              "backend-node/test/promptCompilers.test.js::first last frame unsupported blocks",
+              "backend-node/test/sceneStates.test.js::reverse version references master"
+            ]
+          },
+          {
+            "id": "AC31",
+            "text": "前端新逻辑抽为可测试的工具函数：编译告警分级展示规则、即梦可用性→选项禁用、报价确认状态机（未报价/已报价/已确认/配置变化失效/提交中）、IR 结构化编辑的表单↔IR 转换",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "frontweb/test/segmentUi.test.js::estimate confirmation state machine",
+              "frontweb/test/segmentUi.test.js::finding levels",
+              "frontweb/test/segmentUi.test.js::ir form roundtrip",
+              "frontweb/test/segmentUi.test.js::jimeng availability disables option"
+            ]
+          },
+          {
+            "id": "AC32",
+            "text": "界面可见状态：IR 分镜的结构化编辑器、编译预览与阻断提示、即梦不可用时选项置灰并显示原因、报价确认弹窗、造型/场景状态/道具状态/群像编辑、成片新选项、剧本体检报告——由独立评审在运行中的应用里逐项确认；另含整集检查面板、重新规划入口、整集报价确认",
+            "keys": [
+              "build"
+            ],
+            "tests": [
+              "review"
+            ]
+          },
+          {
+            "id": "AC33",
+            "text": "旧的通用分镜生成/润色接口对有 IR 的分镜返回 `409 segment_ir_owned`，不改写 `universal_segment_text`",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIrOwnership.test.js::universal polish rejected for ir storyboard"
+            ]
+          },
+          {
+            "id": "AC34",
+            "text": "即梦整集报价：一次报出所选分镜的总价与余额，生成一个覆盖这些节点的一次性 token；任一节点配置变化使 token 失效",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/jimengNovelRenderer.test.js::batch token invalid after config change",
+              "backend-node/test/jimengNovelRenderer.test.js::episode estimate single token"
+            ]
+          },
+          {
+            "id": "AC35",
+            "text": "四个写法族之外的协议（Vidu、Kling、Agnes 等）对 IR 分镜走通用编译族（只用能力表与通用规则）；通用族也满足 AC8/AC9/AC26",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::generic family for other protocols"
+            ]
+          },
+          {
+            "id": "AC36",
+            "text": "`POST /episodes/:id/replan`：按当前模型重新规划 IR 分镜，拆出的段按顺序重编号；被拆分段已绑定的视频/图片保留在原段（新段为空），返回变更清单；对旧分镜无效",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentPlanner.test.js::replan renumbers and keeps bindings"
+            ]
+          },
+          {
+            "id": "AC37",
+            "text": "台词保真：IR 台词与该集剧本比对，缺句、改字、换说话人给出告警（剧本为旧格式自由文本时只做模糊匹配并标注）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptLint.test.js::dialogue fidelity against script"
+            ]
+          },
+          {
+            "id": "AC38",
+            "text": "风格句派生：由剧风格得到视频风格句与资产风格句（后者去掉环境光倾向）；风格句混用写实与动漫语汇时告警",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/universalStyleLine.test.js::asset style sentence",
+              "backend-node/test/universalStyleLine.test.js::mixed vocabulary flagged"
+            ]
+          },
+          {
+            "id": "AC39",
+            "text": "剧集级连续性表：每集每场景一份（持续道具、站位锁、轴线锁、环境声），编译器逐字取用；修改后该场景所有 IR 分镜的编译结果同步变化",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::continuity table copied verbatim"
+            ]
+          },
+          {
+            "id": "AC40",
+            "text": "投影不含 `universal_segment_text`（它依赖 IR 之外的模型配置）；预览接口按当前配置即时编译展示",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIrOwnership.test.js::projection excludes compiled text"
+            ]
+          },
+          {
+            "id": "AC20",
+            "text": "在已登录的即梦账号上真实执行免费路径：建测试画布 → 用渲染器建一个视频节点（带一张本地参考图）→ 报价返回 `status==success` 且余额前后不变；结束后测试画布被删除（`canvas list` 不再包含）；即梦登录过期时用例失败并给出\"请重新登录后重跑\"，不判为通过或跳过",
+            "keys": [
+              "test:live"
+            ],
+            "tests": [
+              "backend-node/test/live/jimengFreePath.live.test.js::free path creates, estimates and cleans up"
+            ]
+          }
+        ],
+        "deferred": []
+      },
+      "records": 107
+    },
+    {
+      "at": "2026-11-19T08:26:24Z",
+      "contract": {
+        "criteria": [
+          {
+            "id": "AC1",
+            "text": "MiniMax H3 带 1–9 张参考图、比例 9:16 时请求体含 `ratio:\"9:16\"`；首尾帧模式与纯文生的既有行为不变",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/minimaxH3.test.js::sends ratio with reference images"
+            ]
+          },
+          {
+            "id": "AC2",
+            "text": "动漫风格剧的视频风格行不含\"真人写实\"；写实风格剧仍含写实描述；LLM 规格文本不再强制\"真人写实\"",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/universalStyleLine.test.js::anime drama has no realistic tag",
+              "backend-node/test/universalStyleLine.test.js::realistic drama keeps realistic tag"
+            ]
+          },
+          {
+            "id": "AC3",
+            "text": "任一目标模型下，规划出的段时长落在该模型 [min,max] 内且按 step 对齐；段内各分镜整数秒之和等于段时长；超上限的内容被拆成多段而非截断",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentPlanner.test.js::clamps to model envelope",
+              "backend-node/test/segmentPlanner.test.js::splits overflow into new segment"
+            ]
+          },
+          {
+            "id": "AC4",
+            "text": "能力表对 Seedance 2.x、MiniMax H3、Wan（各已接入型号）、即梦视频模型返回时长/参考图/prompt 长度/比例/首尾帧/原生人声字段；未知模型返回保守默认并带 `unknown` 标记；videoClient 的上限取自能力表",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/modelCapabilities.test.js::known models",
+              "backend-node/test/modelCapabilities.test.js::unknown model is conservative"
+            ]
+          },
+          {
+            "id": "AC5",
+            "text": "新链路生成的分镜段持久化为结构化表示并通过 schema 校验；校验失败返回明确错误且不发出视频请求；编译与检查在 `POST /videos` 插入行之前同步完成，阻断时同步返回 `422 segment_compile_blocked` 且不插入行；编译结果写入该生成记录，异步生成不再二次编译",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIr.test.js::invalid ir rejected before request",
+              "backend-node/test/segmentIr.test.js::valid ir"
+            ]
+          },
+          {
+            "id": "AC6",
+            "text": "分段装箱：台词耗时按字数计算（含换人停顿）决定段时长下限；对白条数不超过时长对应容量；≤8s 段至多 1 次硬切、≤15s 至多 3 次；每段叙事事件数满足下限（≥1；≥10s 时 ≥2；≥15s 时 ≥3），开场与集尾钩子单独成段",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentPlanner.test.js::dialogue capacity",
+              "backend-node/test/segmentPlanner.test.js::duration from dialogue",
+              "backend-node/test/segmentPlanner.test.js::event minimum",
+              "backend-node/test/segmentPlanner.test.js::hard cut cap",
+              "backend-node/test/segmentPlanner.test.js::hooks isolated"
+            ]
+          },
+          {
+            "id": "AC7",
+            "text": "每个目标模型的编译结果满足：风格句恰好一次且在首段；每个绑定参考恰有一句说明且顺序与参考列表一致；正文中出现的每个参考别名都已绑定；每个说话角色带口型写法、同框不说话者标闭口（仅对能力表标为原生人声的模型；非原生/未知模型改写为说话人闭口、背对或画外，台词交给 AC27）；每个分镜含景别、机位、出镜角色的绝对朝向与视线落点；尾注按模型能力生成；请求体的音频开关由能力表推导，与口型写法一致；每个角色在每段首次开口时写入其音色描述（来自 `voice_style`），全剧逐字一致；Wan 族对 IR 请求关闭 `prompt_extend`；参考说明句按 角色 > 场景 > 道具 > 其他 的顺序输出（与截断优先级分开）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::audio flag follows caps",
+              "backend-node/test/promptCompilers.test.js::jimeng structure",
+              "backend-node/test/promptCompilers.test.js::minimax_h3 structure",
+              "backend-node/test/promptCompilers.test.js::seedance structure",
+              "backend-node/test/promptCompilers.test.js::voice description identical across segments",
+              "backend-node/test/promptCompilers.test.js::wan disables prompt_extend",
+              "backend-node/test/promptCompilers.test.js::wan structure"
+            ]
+          },
+          {
+            "id": "AC8",
+            "text": "编译结果超出模型 prompt 长度时按优先级裁剪（先动作细节、再氛围；不删镜头语言、台词与约束）；参考图超出上限时按 场景 > 主角造型 > 次要角色 > 道具 排序截断；裁剪后仍超限则拒绝并报错",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::orders and caps references",
+              "backend-node/test/promptCompilers.test.js::rejects when untrimmable",
+              "backend-node/test/promptCompilers.test.js::trims to max length"
+            ]
+          },
+          {
+            "id": "AC9",
+            "text": "prompt 检查器对禁写项给出带位置的告警：用代词回指角色、\"接上一段/同上\"、淡出/入黑/暗角、正文写字幕或 BGM、图像质量词（8K 等）、分数式占比、否定式排除；硬上限问题为阻断级",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptLint.test.js::clean prompt has no findings",
+              "backend-node/test/promptLint.test.js::flags each banned pattern"
+            ]
+          },
+          {
+            "id": "AC10",
+            "text": "旧分镜行为不变：未重新生成的分镜仍用原 prompt 路径；对某集重新生成分镜后改走新链路；两者可共存于同一部剧",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/pipelineCoexistence.test.js::old storyboard keeps legacy prompt",
+              "backend-node/test/pipelineCoexistence.test.js::regenerated episode uses compiler"
+            ]
+          },
+          {
+            "id": "AC11",
+            "text": "角色可有多个造型，每个造型有独立设定图；派生造型的生图请求以基础造型设定图为参考；`characters.stages` 既有数据可读入为造型；新造型设定图为\"只留一张清晰脸\"版式（正面全身脸部遮蔽、背面全身、一张清晰面部特写），提示词断言只有一处要求清晰面部",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/characterWardrobes.test.js::stages migrate to wardrobes",
+              "backend-node/test/characterWardrobes.test.js::variant references base sheet",
+              "backend-node/test/characterWardrobes.test.js::wardrobe sheet has exactly one clear face clause"
+            ]
+          },
+          {
+            "id": "AC12",
+            "text": "场景可有多个状态版本与竖屏主机位版本；竖屏版生图请求以 16:9 母版为参考；分镜段按\"造型\"\"场景状态\"绑定参考图，视频请求携带对应图片",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/sceneStates.test.js::portrait version references master",
+              "backend-node/test/segmentIr.test.js::binds wardrobe and scene state images"
+            ]
+          },
+          {
+            "id": "AC13",
+            "text": "成片：按分镜结构生成台词 SRT（每行 ≤12 字、os/vo 斜体）与字卡 SRT；BGM 混音音量低于台词；ffmpeg 无字幕滤镜时降级软字幕并返回原因；输出接缝拼图与每秒抽帧拼图",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/episodeCompose.test.js::bgm under dialogue",
+              "backend-node/test/episodeCompose.test.js::seams and frames sheets",
+              "backend-node/test/episodeCompose.test.js::soft subtitle fallback",
+              "backend-node/test/episodeCompose.test.js::srt from segments"
+            ]
+          },
+          {
+            "id": "AC14",
+            "text": "可提取前一段尾帧作为下一段衔接参考；只用于同场景版本、有共同主角的紧邻段；被依赖段的视频缺失或比尾帧新时阻断（尾帧过期）；尾帧写入走 IR 编辑（`continuity.first_frame_image_id`），不直接写分镜列",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/continuityRef.test.js::extracts last frame",
+              "backend-node/test/continuityRef.test.js::stale tail frame blocks",
+              "backend-node/test/continuityRef.test.js::tail frame only for same scene state",
+              "backend-node/test/continuityRef.test.js::tail frame written through ir"
+            ]
+          },
+          {
+            "id": "AC15",
+            "text": "即梦后端：未安装或未登录时状态接口报告不可用及原因，渲染请求被拒（不调用 CLI），其他协议链路不受影响",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/jimengNovelRenderer.test.js::unavailable when logged out",
+              "backend-node/test/jimengNovelRenderer.test.js::unavailable when missing"
+            ]
+          },
+          {
+            "id": "AC16",
+            "text": "即梦后端：提交前必须有与当前节点配置一致的报价且用户确认；配置变化后旧确认失效；`SUBMISSION_UNKNOWN`/超时只查结果不重提；同一 key 重复点击不产生第二次提交；参考图 URL 先落成本地绝对路径；确认 token 一次性使用，提交失败或被拒后需重新报价；节点 key 在调用 `node run` 之前写入生成记录，进程在提交后崩溃、重启后只轮询不重提；同一分镜重新渲染使用新的 run 标识轮询，不读到上一次结果",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/jimengNovelRenderer.test.js::consumed token cannot resubmit",
+              "backend-node/test/jimengNovelRenderer.test.js::crash after submit polls not resubmits",
+              "backend-node/test/jimengNovelRenderer.test.js::never resubmits unknown",
+              "backend-node/test/jimengNovelRenderer.test.js::refs become local paths",
+              "backend-node/test/jimengNovelRenderer.test.js::repeat click single submit",
+              "backend-node/test/jimengNovelRenderer.test.js::requires matching estimate",
+              "backend-node/test/jimengNovelRenderer.test.js::rerender polls new run",
+              "backend-node/test/jimengNovelRenderer.test.js::stale confirmation rejected"
+            ]
+          },
+          {
+            "id": "AC17",
+            "text": "剧本层：分集剧本生成提示遵循自写规则（开场冲突、集尾钩子、台词短句、可拍性）；剧本体检返回结构化报告（硬门槛 + 分维度评分 + 具体问题），不自动改写剧本",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/scriptReview.test.js::no auto rewrite",
+              "backend-node/test/scriptReview.test.js::parses script format",
+              "backend-node/test/scriptReview.test.js::report schema"
+            ]
+          },
+          {
+            "id": "AC18",
+            "text": "仓库内新增的规则文本不包含即梦 `jimeng-drama` 文件中任意连续 15 字以上的原文（白名单仅收常见通用短语，白名单文件本身经评审）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/noVerbatimJimeng.test.js::detector flags a 15-char quote and ignores 14 chars",
+              "backend-node/test/noVerbatimJimeng.test.js::no 15-char overlap"
+            ]
+          },
+          {
+            "id": "AC19",
+            "text": "全部既有测试保持通过，前端可构建",
+            "keys": [
+              "build",
+              "test"
+            ],
+            "tests": [
+              "review"
+            ]
+          },
+          {
+            "id": "AC21",
+            "text": "Wan `wanx2.1-vace-plus`（≤3 张）与 `wan2.6-r2v-flash`（≤5 张）的请求体中，每张参考图都是可用的图片输入（http(s) URL 或 `data:` base64 字符串），数量与输入一致；本地/localhost 图片转为 base64；无参考图时仍在发请求前报错",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/wanDashscope.test.js::errors without references",
+              "backend-node/test/wanDashscope.test.js::r2v sends resolved reference images",
+              "backend-node/test/wanDashscope.test.js::vace sends resolved reference images"
+            ]
+          },
+          {
+            "id": "AC22",
+            "text": "Wan 接收尺寸参数的模型（`wan2.6-t2v`、`wanx2.1-vace-plus`）按目标比例选用该模型支持的尺寸：9:16 → 竖屏尺寸，16:9 → `1280*720`；目标比例不受支持时在发请求前报错，不再静默出横屏；`wan2.6-r2v-flash` 同样按比例下发尺寸（A8）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/wanDashscope.test.js::landscape ratio keeps 1280x720",
+              "backend-node/test/wanDashscope.test.js::portrait ratio yields portrait size",
+              "backend-node/test/wanDashscope.test.js::r2v portrait size",
+              "backend-node/test/wanDashscope.test.js::unsupported ratio rejected before request"
+            ]
+          },
+          {
+            "id": "AC23",
+            "text": "有 IR 的分镜：旧文本字段（dialogue/action/duration/shot_type/movement/characters/scene_id/universal_segment_text）在保存 IR 时由 IR 投影写入；对这些字段的通用更新返回 `409 segment_ir_owned` 且不改数据；通过 IR 编辑接口修改后投影同步更新；应用内助手的分镜修改工具对 IR 分镜改走 IR 编辑；无 IR 的分镜行为不变；通用更新中投影字段值未改变时照常接受（兼容前端整对象保存），值改变才 409；按音频拆分与批量推断参数对 IR 分镜同样返回 409",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIrOwnership.test.js::agent tool edits ir",
+              "backend-node/test/segmentIrOwnership.test.js::batch infer rejected for ir storyboard",
+              "backend-node/test/segmentIrOwnership.test.js::generic update rejected for ir storyboard",
+              "backend-node/test/segmentIrOwnership.test.js::ir edit reprojects",
+              "backend-node/test/segmentIrOwnership.test.js::legacy fields are projected",
+              "backend-node/test/segmentIrOwnership.test.js::legacy storyboard update unchanged",
+              "backend-node/test/segmentIrOwnership.test.js::split by audio rejected for ir storyboard",
+              "backend-node/test/segmentIrOwnership.test.js::unchanged projected fields accepted"
+            ]
+          },
+          {
+            "id": "AC24",
+            "text": "导出再导入一部剧后，分镜 IR、角色造型、场景状态、道具状态及其图片完整保留，IR 中的角色/造型/场景/道具 id 正确重映射；旧版导出包（无这些数据）仍可导入",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/dramaExportRoundtrip.test.js::ids remapped in ir",
+              "backend-node/test/dramaExportRoundtrip.test.js::ir and variants survive roundtrip",
+              "backend-node/test/dramaExportRoundtrip.test.js::legacy package imports"
+            ]
+          },
+          {
+            "id": "AC25",
+            "text": "删除角色/场景/道具（含按集重新生成角色）时其造型/状态随之软删；引用已删除对象的 IR 在编译时给出阻断级问题，不静默丢参考",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/variantCascade.test.js::character delete cascades wardrobes",
+              "backend-node/test/variantCascade.test.js::ir referencing deleted asset blocks compile",
+              "backend-node/test/variantCascade.test.js::scene and prop delete cascade"
+            ]
+          },
+          {
+            "id": "AC26",
+            "text": "编译时按当前目标模型校验段时长：超出上限或低于下限返回阻断级问题并提示重新规划，不截断、不发请求",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::blocks when duration outside current model envelope"
+            ]
+          },
+          {
+            "id": "AC27",
+            "text": "非原生人声/未知模型：成片时按 IR 台词逐句合成语音，起始时间 = 段起点 + 所在分镜起点，单句超出分镜时长时变速至不超过上限（≤1.25x）否则告警；os/vo/画外按角色音色；原生人声模型不重复合成；IR 剧集的逐句台词轨替代旧的 `burn_dialogue_audio`，两者不同时混入",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/dialogueTts.test.js::ir episode does not double mix dialogue",
+              "backend-node/test/dialogueTts.test.js::line timing from ir",
+              "backend-node/test/dialogueTts.test.js::native audio model skips tts",
+              "backend-node/test/dialogueTts.test.js::overlong line tempo capped"
+            ]
+          },
+          {
+            "id": "AC28",
+            "text": "整集检查：开场段前 3 秒无叙事事件、相邻段主运镜相同、同一场景各段环境声描述不一致、尾帧依赖链超过两轮——各给出带段号的告警；判定依据为 IR 字段 `shots[].event` 与段级 `main_move`，尾帧依赖链只按 `continuity.tail_ref_from` 计算；同场景的持续道具外观、站位锁、轴线锁、环境声取自剧集级连续性表，逐字一致",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/episodeLint.test.js::clean episode has no findings",
+              "backend-node/test/episodeLint.test.js::flags each episode rule"
+            ]
+          },
+          {
+            "id": "AC29",
+            "text": "道具可作为参考图绑定进 IR，道具可有状态变体（以初始状态图为参考派生）；群像以独立资产生成（一张图 2–4 个不同个体）并可绑定；参考排序为 场景 > 主角造型 > 次要角色 > 群像 > 道具",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/propAndCrowdRefs.test.js::crowd asset binds",
+              "backend-node/test/propAndCrowdRefs.test.js::prop state references initial image",
+              "backend-node/test/propAndCrowdRefs.test.js::reference order"
+            ]
+          },
+          {
+            "id": "AC30",
+            "text": "IR 设为首尾帧模式时：编译结果不含普通参考与参考说明句、别名改为纯文字名、只携带首/尾帧；目标模型不支持首尾帧时阻断。场景可生成反打版本（以母版为参考，提示词要求换成另一面墙），并可被 IR 绑定",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::first last frame mode",
+              "backend-node/test/promptCompilers.test.js::first last frame unsupported blocks",
+              "backend-node/test/sceneStates.test.js::reverse version references master"
+            ]
+          },
+          {
+            "id": "AC31",
+            "text": "前端新逻辑抽为可测试的工具函数：编译告警分级展示规则、即梦可用性→选项禁用、报价确认状态机（未报价/已报价/已确认/配置变化失效/提交中）、IR 结构化编辑的表单↔IR 转换",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "frontweb/test/segmentUi.test.js::estimate confirmation state machine",
+              "frontweb/test/segmentUi.test.js::finding levels",
+              "frontweb/test/segmentUi.test.js::ir form roundtrip",
+              "frontweb/test/segmentUi.test.js::jimeng availability disables option"
+            ]
+          },
+          {
+            "id": "AC32",
+            "text": "界面可见状态：IR 分镜的结构化编辑器、编译预览与阻断提示、即梦不可用时选项置灰并显示原因、报价确认弹窗、造型/场景状态/道具状态/群像编辑、成片新选项、剧本体检报告——由独立评审在运行中的应用里逐项确认；另含整集检查面板、重新规划入口、整集报价确认",
+            "keys": [
+              "build"
+            ],
+            "tests": [
+              "review"
+            ]
+          },
+          {
+            "id": "AC33",
+            "text": "旧的通用分镜生成/润色接口对有 IR 的分镜返回 `409 segment_ir_owned`，不改写 `universal_segment_text`",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIrOwnership.test.js::universal polish rejected for ir storyboard"
+            ]
+          },
+          {
+            "id": "AC34",
+            "text": "即梦整集报价：一次报出所选分镜的总价与余额，生成一个覆盖这些节点的一次性 token；任一节点配置变化使 token 失效",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/jimengNovelRenderer.test.js::batch token invalid after config change",
+              "backend-node/test/jimengNovelRenderer.test.js::episode estimate single token"
+            ]
+          },
+          {
+            "id": "AC35",
+            "text": "四个写法族之外的协议（Vidu、Kling、Agnes 等）对 IR 分镜走通用编译族（只用能力表与通用规则）；通用族也满足 AC8/AC9/AC26",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::generic family for other protocols"
+            ]
+          },
+          {
+            "id": "AC36",
+            "text": "`POST /episodes/:id/replan`：按当前模型重新规划 IR 分镜，拆出的段按顺序重编号；被拆分段已绑定的视频/图片保留在原段（新段为空），返回变更清单；对旧分镜无效",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentPlanner.test.js::replan renumbers and keeps bindings"
+            ]
+          },
+          {
+            "id": "AC37",
+            "text": "台词保真：IR 台词与该集剧本比对，缺句、改字、换说话人给出告警（剧本为旧格式自由文本时只做模糊匹配并标注）",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptLint.test.js::dialogue fidelity against script"
+            ]
+          },
+          {
+            "id": "AC38",
+            "text": "风格句派生：由剧风格得到视频风格句与资产风格句（后者去掉环境光倾向）；风格句混用写实与动漫语汇时告警",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/universalStyleLine.test.js::asset style sentence",
+              "backend-node/test/universalStyleLine.test.js::mixed vocabulary flagged"
+            ]
+          },
+          {
+            "id": "AC39",
+            "text": "剧集级连续性表：每集每场景一份（持续道具、站位锁、轴线锁、环境声），编译器逐字取用；修改后该场景所有 IR 分镜的编译结果同步变化",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/promptCompilers.test.js::continuity table copied verbatim"
+            ]
+          },
+          {
+            "id": "AC40",
+            "text": "投影不含 `universal_segment_text`（它依赖 IR 之外的模型配置）；预览接口按当前配置即时编译展示",
+            "keys": [
+              "test"
+            ],
+            "tests": [
+              "backend-node/test/segmentIrOwnership.test.js::projection excludes compiled text"
+            ]
+          },
+          {
+            "id": "AC20",
+            "text": "在已登录的即梦账号上真实执行免费路径：建测试画布 → 用渲染器建一个视频节点（带一张本地参考图）→ 报价返回 `status==success` 且余额前后不变；结束后测试画布被删除（`canvas list` 不再包含）；即梦登录过期时用例失败并给出\"请重新登录后重跑\"，不判为通过或跳过",
+            "keys": [
+              "test:live"
+            ],
+            "tests": [
+              "backend-node/test/live/jimengFreePath.live.test.js::free path creates, estimates and cleans up"
+            ]
+          }
+        ],
+        "deferred": []
+      },
+      "records": 107
     }
   ],
   "restatements": [
@@ -1494,6 +2448,41 @@
       "given": [
         "AC18 no longer names backend-node/test/noVerbatimJimeng.test.js::no 40-char overlap"
       ]
+    },
+    {
+      "at": "2026-11-19T08:25:59Z",
+      "gate": "2",
+      "given": [
+        "AC2 no longer names ::realistic drama keeps realistic tag",
+        "AC3 no longer names ::splits overflow into new segment",
+        "AC4 no longer names ::unknown model is conservative",
+        "AC5 no longer names ::invalid ir rejected before request",
+        "AC6 no longer names ::dialogue capacity, ::event minimum, ::hard cut cap, ::hooks isolated",
+        "AC7 no longer names ::audio flag follows caps, ::jimeng structure, ::minimax_h3 structure, ::voice description identical across segments, ::wan disables prompt_extend, ::wan structure",
+        "AC8 no longer names ::orders and caps references, ::rejects when untrimmable",
+        "AC9 no longer names ::clean prompt has no findings",
+        "AC10 no longer names ::regenerated episode uses compiler",
+        "AC11 no longer names ::stages migrate to wardrobes, ::wardrobe sheet has exactly one clear face clause",
+        "AC13 no longer names ::bgm under dialogue, ::seams and frames sheets, ::soft subtitle fallback",
+        "AC14 no longer names ::extracts last frame, ::stale tail frame blocks, ::tail frame written through ir",
+        "AC15 no longer names ::unavailable when logged out",
+        "AC16 no longer names ::consumed token cannot resubmit, ::crash after submit polls not resubmits, ::never resubmits unknown, ::refs become local paths, ::repeat click single submit, ::rerender polls new run, ::stale confirmation rejected",
+        "AC17 no longer names ::no auto rewrite, ::report schema",
+        "AC18 no longer names ::detector flags a 15-char quote and ignores 14 chars",
+        "AC21 no longer names ::errors without references, ::r2v sends resolved reference images",
+        "AC22 no longer names ::landscape ratio keeps 1280x720, ::r2v portrait size, ::unsupported ratio rejected before request",
+        "AC23 no longer names ::agent tool edits ir, ::batch infer rejected for ir storyboard, ::generic update rejected for ir storyboard, ::ir edit reprojects, ::legacy storyboard update unchanged, ::split by audio rejected for ir storyboard, ::unchanged projected fields accepted",
+        "AC24 no longer names ::ids remapped in ir, ::legacy package imports",
+        "AC25 no longer names ::ir referencing deleted asset blocks compile, ::scene and prop delete cascade",
+        "AC27 no longer names ::ir episode does not double mix dialogue, ::native audio model skips tts, ::overlong line tempo capped",
+        "AC28 no longer names ::clean episode has no findings",
+        "AC29 no longer names ::crowd asset binds, ::reference order",
+        "AC30 no longer names ::first last frame unsupported blocks",
+        "AC31 no longer names ::estimate confirmation state machine, ::ir form roundtrip, ::jimeng availability disables option",
+        "AC34 no longer names ::batch token invalid after config change",
+        "AC38 no longer names ::mixed vocabulary flagged"
+      ]
     }
-  ]
+  ],
+  "doneAt": "2026-11-19T08:33:20Z"
 }
