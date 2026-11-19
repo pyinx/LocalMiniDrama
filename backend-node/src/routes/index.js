@@ -278,6 +278,7 @@ function setupRouter(cfg, db, log) {
   r.post('/storyboards/:id/insert-before', storyboards.insertBefore);
   r.get('/storyboards/:id', storyboards.getOne);
   r.put('/storyboards/:id', storyboards.update);
+  r.put('/storyboards/:id/segment-ir', storyboards.updateSegmentIr);
   r.delete('/storyboards/:id', storyboards.delete);
   r.post('/storyboards/:id/props', prop.associateProps);
   r.post('/storyboards/:id/frame-prompt', storyboards.framePrompt);

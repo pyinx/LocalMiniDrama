@@ -3,6 +3,7 @@ const taskService = require('./taskService');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
 const { enforceUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
+const { SegmentIrOwnedError } = require('./segmentIr/project');
 const { syncStoryboardCharacters } = require('./imageService');
 const safeJson = require('../utils/safeJson');
 const { safeParseAIJSON, extractJsonCandidate, repairTruncatedJsonArray, extractFirstArray } = safeJson;
@@ -1637,6 +1638,7 @@ function splitStoryboardByAudio(db, log, storyboardId) {
     .prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL')
     .get(sbId);
   if (!row) throw new Error('分镜不存在');
+  if (row.segment_ir) throw new SegmentIrOwnedError([], '该分镜由结构化分镜（IR）管理，不能按音频拆分；请改用重新规划');
 
   const plans = buildSplitPlansFromStoryboard(row);
   const extraCount = plans.length - 1;

@@ -177,6 +177,8 @@ function ensureAllColumns(database) {
     { name: 'last_frame_image_id',  type: 'INTEGER' },
     { name: 'last_frame_image_url', type: 'TEXT' },
     { name: 'last_frame_local_path', type: 'TEXT' },
+    { name: 'segment_ir',        type: 'TEXT' },               // 结构化分镜段 JSON（有值即以它为唯一来源）
+    { name: 'segment_ir_version', type: 'INTEGER' },
     { name: 'status',            type: 'TEXT DEFAULT \'draft\'' },
     { name: 'created_at',        type: 'TEXT' },
     { name: 'updated_at',        type: 'TEXT' },

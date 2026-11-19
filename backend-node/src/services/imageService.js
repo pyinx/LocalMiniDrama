@@ -984,10 +984,11 @@ async function processImageGeneration(db, log, imageGenId) {
                 log.info('[图生] Step2.1 文本补扫到未关联角色，已添加参考图', { id: imageGenId, name: dChar.name });
                 // 同步回写到 storyboards.characters，避免下次重复扫描
                 try {
-                  const sbCharRow = db.prepare('SELECT characters FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(row.storyboard_id));
+                  const sbCharRow = db.prepare('SELECT characters, segment_ir FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(row.storyboard_id));
                   let charList = [];
                   try { charList = JSON.parse(sbCharRow?.characters || '[]'); } catch (_) { charList = []; }
-                  if (!charList.find((c) => Number(typeof c === 'object' && c != null ? c.id : c) === dChar.id)) {
+                  // 结构化分镜的出场角色由 IR cast 投影，不补写
+                  if (!sbCharRow?.segment_ir && !charList.find((c) => Number(typeof c === 'object' && c != null ? c.id : c) === dChar.id)) {
                     charList.push({ id: dChar.id, name: dChar.name });
                     db.prepare('UPDATE storyboards SET characters = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL')
                       .run(JSON.stringify(charList), new Date().toISOString(), Number(row.storyboard_id));
@@ -1629,9 +1630,11 @@ function syncStoryboardCharacters(db, log, storyboardId) {
   const added = [];
   try {
     const sb = db.prepare(
-      'SELECT id, episode_id, characters, action, dialogue, result, description FROM storyboards WHERE id = ? AND deleted_at IS NULL'
+      'SELECT id, episode_id, characters, action, dialogue, result, description, segment_ir FROM storyboards WHERE id = ? AND deleted_at IS NULL'
     ).get(Number(storyboardId));
     if (!sb) return { added };
+    // 结构化分镜的出场角色由 IR cast 投影，不按文本补写
+    if (sb.segment_ir) return { added };
 
     // 获取剧集对应的 drama_id
     let dramaId = null;

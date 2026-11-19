@@ -131,6 +131,7 @@ function buildTools() {
       action: z.string().optional(),
       description: z.string().optional(),
       imagePrompt: z.string().optional(),
+      segmentIr: z.string().optional().describe('有 segment_ir 的分镜：修改后的完整结构化分镜 JSON；这类分镜的台词和动作只能这样改'),
     }), async (input, ctx) => {
       const scope = readScope(ctx);
       return tools.executeUpdateStoryboard(appDb, appLog, scope.dramaId, input);

@@ -211,13 +211,26 @@ export function executeUpdateStoryboard(db, log, dramaId, input) {
   const data = input || {};
   const owned = assertOwned(db, dramaId, 'storyboard', data.id);
   if (!owned.ok) return owned;
+  const service = requireService('storyboardService.js');
   const patch = {};
   if (data.dialogue != null) patch.dialogue = data.dialogue;
   if (data.action != null) patch.action = data.action;
   if (data.description != null) patch.description = data.description;
   if (data.imagePrompt != null) patch.image_prompt = data.imagePrompt;
-  const updated = requireService('storyboardService.js').updateStoryboard(db, log, data.id, patch);
-  if (!updated) return fail('更新分镜失败');
+  try {
+    // 结构化分镜（IR）与界面走同一入口：整段 IR 校验后投影旧字段
+    if (data.segmentIr != null) service.saveSegmentIr(db, log, data.id, data.segmentIr);
+    if (Object.keys(patch).length) {
+      const updated = service.updateStoryboard(db, log, data.id, patch);
+      if (!updated) return fail('更新分镜失败');
+    }
+  } catch (err) {
+    if (err.code === 'segment_ir_owned') {
+      return fail('这条分镜由结构化分镜（segment_ir）管理，台词和动作不能直接改；请读取它的 segment_ir，修改后通过 segmentIr 参数提交完整 JSON');
+    }
+    if (err.code === 'segment_ir_invalid') return fail(err.message);
+    throw err;
+  }
   return { ok: true, id: Number(data.id), summary: '已更新分镜' };
 }
 

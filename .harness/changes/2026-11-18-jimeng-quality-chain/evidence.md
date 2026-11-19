@@ -34,6 +34,9 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC22 | test | record 005 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+a72fdbc800b8ae19 | 2026-11-18T12:22:51Z |
 | AC4 | test | record 006 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+79333efad95b7031 | 2026-11-18T12:34:15Z |
 | AC18 | test | record 007 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+bd851e980f45905c | 2026-11-19T00:39:01Z |
+| AC23 | test | record 008 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | bafc01b+835c8cbaf6859e05 | 2026-11-19T00:53:50Z |
+| AC33 | test | record 009 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | bafc01b+835c8cbaf6859e05 | 2026-11-19T00:53:54Z |
+| AC40 | test | record 010 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | bafc01b+835c8cbaf6859e05 | 2026-11-19T00:54:01Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review

@@ -4,6 +4,19 @@ const response = require('../response');
 const storyboardService = require('../services/storyboardService');
 const episodeStoryboardService = require('../services/episodeStoryboardService');
 const { enforceUniversalStyleLine } = require('../services/universalOmniMultiBeatFormat');
+
+/** 结构化分镜（IR）相关错误：所有权冲突 409，IR 不合法 422；其他错误返回 false 交给调用方 */
+function sendSegmentIrError(res, err) {
+  if (err && err.code === 'segment_ir_owned') {
+    response.error(res, 409, 'segment_ir_owned', err.message, { fields: err.fields || [] });
+    return true;
+  }
+  if (err && err.code === 'segment_ir_invalid') {
+    response.error(res, 422, 'segment_ir_invalid', err.message, { errors: err.errors });
+    return true;
+  }
+  return false;
+}
 const framePromptService = require('../services/framePromptService');
 const aiClient = require('../services/aiClient');
 const promptI18n = require('../services/promptI18n');
@@ -275,7 +288,22 @@ function routes(db, log) {
         if (!sb) return response.notFound(res, '分镜不存在');
         response.success(res, sb);
       } catch (err) {
+        if (sendSegmentIrError(res, err)) return;
         log.error('storyboards update', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 结构化分镜编辑：校验 IR 并投影旧字段（IR 分镜的唯一编辑入口） */
+    updateSegmentIr: (req, res) => {
+      try {
+        const ir = req.body && req.body.ir;
+        if (ir == null) return response.badRequest(res, 'ir 必填');
+        const sb = storyboardService.saveSegmentIr(db, log, req.params.id, ir);
+        if (!sb) return response.notFound(res, '分镜不存在');
+        response.success(res, sb);
+      } catch (err) {
+        if (sendSegmentIrError(res, err)) return;
+        log.error('storyboards updateSegmentIr', { error: err.message });
         response.internalError(res, err.message);
       }
     },
@@ -378,6 +406,7 @@ function routes(db, log) {
           message: `已拆成 ${result.storyboard_ids.length} 条分镜（新增 ${result.created_count} 条）`,
         });
       } catch (err) {
+        if (sendSegmentIrError(res, err)) return;
         log.error('storyboards splitByAudio', { error: err.message, id: req.params.id });
         response.badRequest(res, err.message || '拆镜失败');
       }
@@ -555,6 +584,7 @@ function routes(db, log) {
     generateUniversalSegmentPrompt: async (req, res) => {
       try {
         const sbId = Number(req.params.id);
+        storyboardService.assertNotSegmentIr(db, sbId);
         const built = buildUniversalSegmentUserPromptBundle(db, sbId, req.body || {}, {});
         if (!built.ok) {
           if (built.code === 'not_found') return response.notFound(res, built.message);
@@ -585,6 +615,7 @@ function routes(db, log) {
         log.info('[分镜] generateUniversalSegmentPrompt 完成', { id: sbId, len: text.length, duration_sec: durationSec });
         response.success(res, { universal_segment_text: text });
       } catch (err) {
+        if (sendSegmentIrError(res, err)) return;
         log.error('storyboards generateUniversalSegmentPrompt', { error: err.message });
         response.internalError(res, err.message);
       }
@@ -593,6 +624,12 @@ function routes(db, log) {
     /** 全能模式：与 generateUniversalSegmentPrompt 相同逻辑，NDJSON 流式（delta + done） */
     generateUniversalSegmentStream: async (req, res) => {
       const sbId = Number(req.params.id);
+      try {
+        storyboardService.assertNotSegmentIr(db, sbId);
+      } catch (err) {
+        if (sendSegmentIrError(res, err)) return;
+        throw err;
+      }
       const built = buildUniversalSegmentUserPromptBundle(db, sbId, req.body || {}, {});
       if (!built.ok) {
         if (built.code === 'not_found') return response.notFound(res, built.message);
@@ -657,6 +694,12 @@ function routes(db, log) {
      */
     polishUniversalSegmentStream: async (req, res) => {
       const sbId = Number(req.params.id);
+      try {
+        storyboardService.assertNotSegmentIr(db, sbId);
+      } catch (err) {
+        if (sendSegmentIrError(res, err)) return;
+        throw err;
+      }
       const draftRaw =
         req.body && req.body.draft_universal_segment_text != null
           ? String(req.body.draft_universal_segment_text)
@@ -1075,8 +1118,24 @@ function routes(db, log) {
         if (!episodeId) return response.badRequest(res, 'episode_id 必填');
 
         const rows = db.prepare(
-          'SELECT id, angle_s, shot_type, atmosphere, time, description, action, movement, lighting_style, depth_of_field FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC'
+          'SELECT id, angle_s, shot_type, atmosphere, time, description, action, movement, lighting_style, depth_of_field, segment_ir FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC'
         ).all(episodeId);
+
+        // IR 分镜的 movement 由 IR 投影；推断会改变它时整批拒绝（只补缺模式下非空 movement 不会被改）
+        const irConflicts = rows
+          .filter((row) => row.segment_ir)
+          .filter((row) => {
+            const inferred = angleService.inferPhotographyParams(row).movement;
+            const next = overwrite ? inferred : (row.movement ? null : inferred);
+            return next != null && next !== row.movement;
+          })
+          .map((row) => row.id);
+        if (irConflicts.length) {
+          return response.error(res, 409, 'segment_ir_owned', '这些分镜由结构化分镜（IR）管理，运镜只能通过结构化编辑修改', {
+            fields: ['movement'],
+            storyboard_ids: irConflicts,
+          });
+        }
 
         let updated = 0;
         const now = new Date().toISOString();
