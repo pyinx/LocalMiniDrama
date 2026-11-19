@@ -48,3 +48,21 @@ describe('universal style line (AC2)', () => {
     }
   });
 });
+
+describe('style sentences (AC38)', () => {
+  const { deriveStyleSentences } = require('../src/services/segmentCompile/style');
+
+  it('asset style sentence', () => {
+    const s = deriveStyleSentences('都市写实摄影，冷白顶光与窗外黄昏逆光，低饱和蓝灰色调，细腻皮肤纹理');
+    assert.equal(s.video, '都市写实摄影，冷白顶光与窗外黄昏逆光，低饱和蓝灰色调，细腻皮肤纹理');
+    assert.equal(s.asset, '都市写实摄影，低饱和蓝灰色调，细腻皮肤纹理');
+    const onlyLight = deriveStyleSentences('柔和晨光');
+    assert.equal(onlyLight.asset, '柔和晨光', 'falls back to the video sentence');
+  });
+
+  it('mixed vocabulary flagged', () => {
+    assert.ok(deriveStyleSentences('真人写实，赛璐璐上色').findings.some((f) => f.code === 'mixed_style_vocabulary'));
+    assert.deepEqual(deriveStyleSentences(ANIME_ZH).findings, []);
+    assert.deepEqual(deriveStyleSentences('都市写实摄影，低饱和').findings, []);
+  });
+});
