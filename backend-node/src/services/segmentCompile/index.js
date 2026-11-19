@@ -58,8 +58,9 @@ function compileSegment(ir, ctx) {
       if (!w) return add('block', 'asset_missing', `「${c.alias}」的造型已不存在`, { alias: c.alias });
       url = w.image_url || null;
     }
-    const kind = c.group ? 'crowd' : 'character';
-    if (url) candidates.push({ alias: c.alias, name: names[c.alias], kind, url, priority: c.group ? PRIORITY.crowd : ch.role === 'main' ? PRIORITY.lead : PRIORITY.character, order });
+    const crowd = !!(ch.is_group || c.group);
+    const kind = crowd ? 'crowd' : 'character';
+    if (url) candidates.push({ alias: c.alias, name: names[c.alias], kind, url, priority: crowd ? PRIORITY.crowd : ch.role === 'main' ? PRIORITY.lead : PRIORITY.character, order });
     else if (!firstLast) add('warn', 'no_reference_image', `「${c.alias}」还没有参考图，只能用文字指代`, { alias: c.alias });
   });
 

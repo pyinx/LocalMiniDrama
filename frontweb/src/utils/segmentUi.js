@@ -88,7 +88,17 @@ export function formToIr(form) {
     }
   })
   f.duration_s = f.shots.reduce((n, s) => n + s.seconds, 0)
+  // 下拉清空后可能是 undefined / ''：IR 里只能是 null 或整数 id
+  f.cast = (f.cast || []).map((c) => ({ ...c, wardrobe_id: optionalId(c.wardrobe_id) }))
+  f.prop_refs = (f.prop_refs || []).map((p) => ({ ...p, state_id: optionalId(p.state_id) }))
+  if (f.scene) f.scene = { ...f.scene, state_id: optionalId(f.scene.state_id) }
   return f
+}
+
+function optionalId(v) {
+  if (v === undefined || v === null || v === '') return null
+  const n = Number(v)
+  return Number.isInteger(n) && n > 0 ? n : null
 }
 
 export function newShotForm(previous) {

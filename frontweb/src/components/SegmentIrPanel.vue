@@ -23,6 +23,14 @@
       </el-input>
     </div>
 
+    <div class="seg-ir-sub">出场与造型</div>
+    <div v-for="c in form.cast" :key="c.character_id" class="seg-ir-row seg-ir-row--2">
+      <span class="seg-ir-cast-name">{{ c.alias }}</span>
+      <el-select v-model="c.wardrobe_id" size="small" placeholder="基础造型（角色主图）" clearable @change="dirty = true" @visible-change="(o) => o && loadWardrobes(c.character_id)">
+        <el-option v-for="w in wardrobes[c.character_id] || []" :key="w.id" :label="w.name" :value="w.id" />
+      </el-select>
+    </div>
+
     <el-collapse v-model="openShots" class="seg-ir-shots">
       <el-collapse-item v-for="(shot, k) in form.shots" :key="k" :name="k">
         <template #title>
@@ -117,6 +125,7 @@
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storyboardsAPI } from '@/api/storyboards'
+import { variantsAPI } from '@/api/variants'
 import FindingList from '@/components/FindingList.vue'
 import { irToForm, formToIr, newShotForm, newSubjectForm, newLineForm, FACING_OPTIONS, LINE_KINDS } from '@/utils/segmentUi'
 
@@ -140,6 +149,14 @@ watch(
     if (ir && !dirty.value) form.value = irToForm(ir)
   }
 )
+
+const wardrobes = ref({})
+async function loadWardrobes(characterId) {
+  try {
+    wardrobes.value = { ...wardrobes.value, [characterId]: (await variantsAPI.list('wardrobe', characterId)) || [] }
+  } catch (_) {}
+}
+for (const c of form.value.cast || []) if (c.wardrobe_id != null) loadWardrobes(c.character_id)
 
 const castAliases = computed(() => (form.value.cast || []).map((c) => c.alias))
 const totalSeconds = computed(() => form.value.shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0))
@@ -204,6 +221,7 @@ async function onPreview() {
 .seg-ir-row--4 { grid-template-columns: auto 1fr 1fr 1fr; align-items: center; }
 .seg-ir-row--6 { grid-template-columns: 1fr 1fr 1.2fr 1fr 1fr auto; }
 .seg-ir-row--line { grid-template-columns: 0.8fr 0.9fr 2.4fr 0.9fr auto; }
+.seg-ir-cast-name { font-size: 12px; align-self: center; }
 .seg-ir-sub { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; display: flex; gap: 6px; align-items: center; }
 .seg-ir-shot-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seg-ir-shot-ops { display: flex; gap: 8px; justify-content: flex-end; }

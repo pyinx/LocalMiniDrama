@@ -10,6 +10,7 @@ const jimengMaterialHubService = require('./jimengMaterialHubService');
 const modelArkAssetConfigService = require('./modelArkAssetConfigService');
 const uploadService = require('./uploadService');
 const seedance2AssetGuards = require('../utils/seedance2AssetGuards');
+const assetPhrases = require('./segmentCompile/rules/assetPhrases');
 const {
   appendSourceIdFilters,
   findExistingLibraryItem,
@@ -45,7 +46,7 @@ function appendPrompt(base, extra) {
 
 function generateCharacterImage(db, log, cfg, characterId, modelName, style) {
   const charRow = db.prepare(
-    'SELECT id, drama_id, name, appearance, description, negative_prompt FROM characters WHERE id = ? AND deleted_at IS NULL'
+    'SELECT id, drama_id, name, appearance, description, negative_prompt, is_group FROM characters WHERE id = ? AND deleted_at IS NULL'
   ).get(Number(characterId));
   if (!charRow) return { ok: false, error: 'character not found' };
   const drama = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
@@ -69,6 +70,7 @@ function generateCharacterImage(db, log, cfg, characterId, modelName, style) {
   } else {
     prompt = charRow.name || '';
   }
+  if (charRow.is_group) prompt = assetPhrases.crowdSheet(charRow.name || '人群', 3, prompt === charRow.name ? '' : prompt);
   const styleForImage = (effectiveCfg?.style?.default_style_en || effectiveCfg?.style?.default_style || '').trim();
   prompt = appendPrompt(prompt, styleForImage);
   if (!(style && String(style).trim())) {
@@ -323,6 +325,9 @@ function updateCharacter(db, log, characterId, req) {
   if (req.polished_prompt != null) { updates.push('polished_prompt = ?'); params.push(req.polished_prompt); }
   if (req.stages != null) { updates.push('stages = ?'); params.push(typeof req.stages === 'string' ? req.stages : JSON.stringify(req.stages)); }
   if (req.negative_prompt !== undefined) { updates.push('negative_prompt = ?'); params.push(req.negative_prompt); }
+  if (req.is_group !== undefined) { updates.push('is_group = ?'); params.push(req.is_group ? 1 : 0); }
+  if (req.tts_voice !== undefined) { updates.push('tts_voice = ?'); params.push(req.tts_voice || null); }
+  if (req.voice_style !== undefined) { updates.push('voice_style = ?'); params.push(req.voice_style || null); }
   if (updates.length === 0) return { ok: true };
   if (req.image_url != null || req.local_path != null) {
     seedance2AssetGuards.markStaleOnCharacterMainImageDrift(db, log, charRow, {

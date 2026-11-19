@@ -63,4 +63,13 @@ test('ir form roundtrip', () => {
   assert.equal(ir.shots[2].movement, null)
   assert.equal(ir.shots[2].event, null)
   assert.deepEqual(ir.shots[2].sfx, [])
+
+  const cleared = irToForm(IR)
+  cleared.cast[0].wardrobe_id = undefined
+  cleared.scene.state_id = ''
+  const back = formToIr(cleared)
+  assert.equal(back.cast[0].wardrobe_id, null)
+  assert.equal(back.scene.state_id, null)
+  cleared.cast[0].wardrobe_id = '7'
+  assert.equal(formToIr(cleared).cast[0].wardrobe_id, 7)
 })

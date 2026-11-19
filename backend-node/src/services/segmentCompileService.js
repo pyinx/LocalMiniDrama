@@ -24,8 +24,8 @@ function loadBindings(db, cfg, dramaId, ir) {
   const url = (r) => toPublicUrl(cfg, r.image_url, r.local_path);
   const bindings = {
     characters: byId(
-      db.prepare('SELECT id, name, role, voice_style, image_url, local_path FROM characters WHERE drama_id = ? AND deleted_at IS NULL').all(dramaId),
-      (r) => ({ name: r.name, role: r.role, voice_style: r.voice_style, image_url: url(r) })
+      db.prepare('SELECT id, name, role, voice_style, is_group, image_url, local_path FROM characters WHERE drama_id = ? AND deleted_at IS NULL').all(dramaId),
+      (r) => ({ name: r.name, role: r.role, voice_style: r.voice_style, is_group: !!r.is_group, image_url: url(r) })
     ),
     scenes: byId(
       db.prepare('SELECT id, location, image_url, local_path FROM scenes WHERE drama_id = ? AND deleted_at IS NULL').all(dramaId),

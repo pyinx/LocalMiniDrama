@@ -1811,20 +1811,17 @@
             <div v-else style="font-size:12px;color:#c0c4cc;padding:4px 0">暂无锚点，点击「提炼视觉锚点」自动提炼</div>
           </div>
         </el-form-item>
-        <!-- P1-3: 多阶段造型（stages） -->
-        <el-form-item v-if="editCharacterForm.id" label="多阶段造型">
-          <div style="width:100%">
-            <div style="font-size:12px;color:#909399;margin-bottom:6px">
-              不同集次的角色造型变化，格式：JSON 数组 [{"episode_range":[1,3],"appearance":"..."}]
-            </div>
-            <el-input
-              v-model="editCharacterForm.stages"
-              type="textarea"
-              :rows="4"
-              placeholder='例：[{"episode_range":[1,5],"appearance":"白衣少年"},{"episode_range":[6,10],"appearance":"黑衣武者"}]'
-              style="font-size:12px;font-family:monospace"
-            />
-          </div>
+        <el-form-item v-if="editCharacterForm.id" label="群像">
+          <el-checkbox v-model="editCharacterForm.is_group">这是一群人（出图为 2–4 个不同个体的群像参照）</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="音色描述">
+          <el-input v-model="editCharacterForm.voice_style" placeholder="一句话，如：男声，三十岁上下，音调偏低，略带沙哑（每段首次开口时原样写入视频提示词）" />
+        </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="配音音色 ID">
+          <el-input v-model="editCharacterForm.tts_voice" placeholder="不原生出人声的视频模型用逐句配音时使用；留空用配音配置的默认音色" />
+        </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="造型">
+          <VariantEditor kind="wardrobe" :parent-id="editCharacterForm.id" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2675,6 +2672,7 @@ import AIConfigContent from '@/components/AIConfigContent.vue'
 import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEditor.vue'
 import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
 import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
+import VariantEditor from '@/components/VariantEditor.vue'
 import { groupFindings, findingWhere } from '@/utils/segmentUi'
 import {
   generationStyleOptions,

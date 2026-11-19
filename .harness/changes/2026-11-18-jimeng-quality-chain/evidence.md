@@ -37,6 +37,21 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC23 | test | record 008 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | bafc01b+835c8cbaf6859e05 | 2026-11-19T00:53:50Z |
 | AC33 | test | record 009 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | bafc01b+835c8cbaf6859e05 | 2026-11-19T00:53:54Z |
 | AC40 | test | record 010 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | bafc01b+835c8cbaf6859e05 | 2026-11-19T00:54:01Z |
+| AC3 | test | record 011 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | afcd9e3+6f4ef4b3b501ffeb | 2026-11-19T01:14:18Z |
+| AC6 | test | record 012 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | afcd9e3+6f4ef4b3b501ffeb | 2026-11-19T01:14:31Z |
+| AC36 | test | record 013 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | afcd9e3+6f4ef4b3b501ffeb | 2026-11-19T01:14:42Z |
+| AC7 | test | record 014 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 4781cd1+f19da3d2803366b5 | 2026-11-19T01:19:21Z |
+| AC8 | test | record 015 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 4781cd1+f19da3d2803366b5 | 2026-11-19T01:19:30Z |
+| AC26 | test | record 016 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 4781cd1+f19da3d2803366b5 | 2026-11-19T01:19:38Z |
+| AC35 | test | record 017 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 4781cd1+f19da3d2803366b5 | 2026-11-19T01:19:47Z |
+| AC38 | test | record 018 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 4781cd1+f19da3d2803366b5 | 2026-11-19T01:19:59Z |
+| AC39 | test | record 019 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 4781cd1+f19da3d2803366b5 | 2026-11-19T01:20:19Z |
+| AC9 | test | record 020 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | ca4f056+8d011de4cf680157 | 2026-11-19T01:22:22Z |
+| AC28 | test | record 021 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | ca4f056+8d011de4cf680157 | 2026-11-19T01:22:32Z |
+| AC37 | test | record 022 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | ca4f056+8d011de4cf680157 | 2026-11-19T01:22:39Z |
+| AC5 | test | record 023 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 7c551ad+e3f3f85ebe3ee5d3 | 2026-11-19T01:34:02Z |
+| AC10 | test | record 024 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 7c551ad+e3f3f85ebe3ee5d3 | 2026-11-19T01:34:08Z |
+| AC11 | test | record 025 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | b759773+dde1001f5c4172da | 2026-11-19T01:53:30Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review
