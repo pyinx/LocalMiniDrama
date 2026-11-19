@@ -77,6 +77,72 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC20 | test:live | record 039 | cli | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | pass | 7280bdf+67cb2f309e91aff2 | 2026-11-19T06:04:12Z |
 | AC17 | test | record 040 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 1289973+d11b6e6630254ab1 | 2026-11-19T06:14:45Z |
 | AC18 | test | record 041 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 1289973+d11b6e6630254ab1 | 2026-11-19T06:14:58Z |
+| ALL | test:one | record 042 | cli | `node --test 'backend-node/test/episodeCompose.test.js'` | pass | 54ec8d7+7b58dbfa513ad957 | 2026-11-19T08:07:54Z |
+| AC1 | test | record 044 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 5d0e5b5+8f921f23b62b4e5f | 2026-11-19T08:12:38Z |
+| AC2 | test | record 045 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | cad462d+a3c3289da01cb407 | 2026-11-19T08:12:54Z |
+| AC3 | test | record 046 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | cad462d+a3c3289da01cb407 | 2026-11-19T08:13:02Z |
+| AC4 | test | record 047 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | cad462d+fb351d03df22028f | 2026-11-19T08:13:25Z |
+| AC5 | test | record 048 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:13:45Z |
+| AC6 | test | record 049 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:04Z |
+| AC7 | test | record 050 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:12Z |
+| AC8 | test | record 051 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:19Z |
+| AC9 | test | record 052 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:25Z |
+| AC10 | test | record 053 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:32Z |
+| AC11 | test | record 054 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:38Z |
+| AC12 | test | record 055 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:44Z |
+| AC13 | test | record 056 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:14:55Z |
+| AC14 | test | record 057 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:15:05Z |
+| AC15 | test | record 058 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+fb351d03df22028f | 2026-11-19T08:15:11Z |
+| AC16 | test | record 059 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | cad462d+96072b1207b64a1d | 2026-11-19T08:15:20Z |
+| AC17 | test | record 060 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | cad462d+96072b1207b64a1d | 2026-11-19T08:15:29Z |
+| AC18 | test | record 061 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | cad462d+96072b1207b64a1d | 2026-11-19T08:15:36Z |
+| AC19 | test | record 062 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | cad462d+8999db1bfc309920 | 2026-11-19T08:15:46Z |
+| AC19 | build | record 063 | cli | `cd frontweb && npm run build` | pass | 8aeebcf+8999db1bfc309920 | 2026-11-19T08:15:56Z |
+| AC21 | test | record 064 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | fail(exit 1) | 8aeebcf+c818c898010fbef1 | 2026-11-19T08:16:04Z |
+| AC22 | test | record 065 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 8aeebcf+c818c898010fbef1 | 2026-11-19T08:16:11Z |
+| AC23 | test | record 066 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 8aeebcf+c818c898010fbef1 | 2026-11-19T08:16:18Z |
+| AC24 | test | record 067 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 8aeebcf+c818c898010fbef1 | 2026-11-19T08:16:26Z |
+| AC25 | test | record 068 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:16:34Z |
+| AC26 | test | record 069 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:16:42Z |
+| AC27 | test | record 070 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:16:50Z |
+| AC28 | test | record 071 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:16:57Z |
+| AC29 | test | record 072 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:06Z |
+| AC30 | test | record 073 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:14Z |
+| AC31 | test | record 074 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:22Z |
+| AC20 | test:live | record 070 | cli | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:26Z |
+| AC32 | build | record 075 | cli | `cd frontweb && npm run build` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:30Z |
+| AC33 | test | record 077 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:38Z |
+| AC34 | test | record 078 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:46Z |
+| AC35 | test | record 079 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:17:53Z |
+| AC36 | test | record 080 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:18:07Z |
+| AC37 | test | record 082 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:18:16Z |
+| AC38 | test | record 083 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:18:25Z |
+| AC39 | test | record 084 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:18:35Z |
+| AC40 | test | record 085 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:18:43Z |
+| AC1 | test | record 086 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:04Z |
+| AC2 | test | record 087 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:13Z |
+| AC3 | test | record 088 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:32Z |
+| AC19 | test | record 088 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:39Z |
+| AC4 | test | record 089 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:42Z |
+| AC5 | test | record 090 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:50Z |
+| AC19 | build | record 089 | cli | `cd frontweb && npm run build` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:59Z |
+| AC6 | test | record 091 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:19:59Z |
+| AC25 | test | record 092 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:13Z |
+| AC7 | test | record 093 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:13Z |
+| AC8 | test | record 095 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:20Z |
+| AC9 | test | record 096 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:28Z |
+| AC10 | test | record 097 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:38Z |
+| AC11 | test | record 098 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:46Z |
+| AC12 | test | record 099 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:20:58Z |
+| AC13 | test | record 100 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:07Z |
+| AC14 | test | record 101 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:15Z |
+| AC15 | test | record 102 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:25Z |
+| AC16 | test | record 103 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:33Z |
+| AC17 | test | record 104 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:51Z |
+| AC3 | test | record 104 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:57Z |
+| AC18 | test | record 105 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:21:59Z |
+| AC21 | test | record 106 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:22:06Z |
+| AC17 | test | record 107 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 68f5f88+c818c898010fbef1 | 2026-11-19T08:22:53Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review
@@ -88,7 +154,22 @@ to its id, severity `verdict` and disposition `met`. When the table is final, re
 
 | # | Finding | Severity | Disposition | Where |
 |---|---|---|---|---|
-| | | | | |
+| AC19 | 独立复审实跑后端 297、前端 33，零失败零跳过，前端生产构建通过；最终 68f5f88 两项遗留场景独立复验 9/9 通过。 | verdict | met | 独立代码审核，2026-11-19 |
+| AC32 | 独立浏览器在 5689 逐项核对八组状态，含纯旧分镜对照、缺失角色阻断、即梦禁用原因、体检错误。报价可用状态及金额为浏览器内模拟响应，止于确认弹窗。 | verdict | met | 创作页与配置页，2026-11-19 |
+| R1 | 后一次报价能覆盖已确认生成的提示词。 | blocking | fixed (4faddd6) | jimeng/renderer.js |
+| R2 | 提交超时可将上次运行的成片写回。 | blocking | fixed (4faddd6) | jimeng/renderer.js |
+| R3 | 批次内另一分镜改变后，旧 token 仍接受提交。 | blocking | fixed | 54ec8d7，batch token invalid after config change |
+| R4 | 通用更新可写入 IR 投影以外的角色值。 | should-fix | fixed (8aeebcf) | storyboardService.js |
+| R5 | 旧提示词异步生成期间获得 IR，完成时仍覆写文本。 | should-fix | fixed (8aeebcf) | routes/storyboards.js |
+| R6 | 规划完成补时后可超过模型时长上限。 | should-fix | fixed (8aeebcf) | segmentIr/planner.js |
+| R7 | 显式指定的尾帧缺失时静默降级。 | should-fix | fixed (8aeebcf) | segmentCompile/index.js |
+| R8 | 12 秒成片只有开头字卡，软字幕合成后只剩 2 秒。 | blocking | fixed (5d0e5b5) | structuredEpisodePost.js |
+| R9 | 缺片时拼接列表和字幕、配音时间轴不一致。 | should-fix | fixed (5d0e5b5) | videoMergeService.js |
+| R10 | 导出或导入时同名场景合并，丢失独立连续性。 | should-fix | fixed | 327ee5b，4 个往返测试通过 |
+| R11 | 输入图片符号链接与 CLI 结果路径缺少真实路径边界。 | should-fix | fixed (4faddd6) | storagePaths.js，jimeng/renderer.js |
+| R12 | 逐句配音产生永久中间文件，调用路径暴露已有凭据日志。 | should-fix | fixed (5d0e5b5) | structuredEpisodePost.js，ttsService.js |
+| R14 | 错项、缺项等报价返回仍可签发确认；直接请求可能绕过余额不足的界面限制。 | blocking | fixed (68f5f88) | jimengNovelRenderer.test.js |
+| R13 | 尾帧提取实际取倒数一秒的第一帧，双色视频复现。 | should-fix | fixed | 54ec8d7，extracts last frame |
 
 ## Deferred
 
@@ -101,5 +182,4 @@ the user did not agree to is not a deferral; say so here.
 
 ## Residual risks
 
-What you could not verify, what you assumed, and what remains unknown. Confidence must match
-the evidence above.
+真实生成画质与各厂商付费请求的最终接受情况未经测量。即梦付费提交与恢复由假 CLI 验证，真实账号只验证免费操作。65 个测试引用从 `::名称` 补全为 `文件::名称`，逐行比较只涉及路径前缀；冻结规格的再确认尚待用户明确同意。
