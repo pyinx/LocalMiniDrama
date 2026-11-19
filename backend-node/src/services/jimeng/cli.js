@@ -15,17 +15,27 @@ function fail(code, message) {
   return { status: 'error', data: null, error: { code, message } };
 }
 
-function parseEnvelope(text) {
+/**
+ * 解析 -j 输出。大多数命令输出 {status, data, error} 信封；但个别命令（实测 `status -j`）直接输出数据对象，
+ * 这类裸对象只在退出码为 0 时视为成功数据。
+ */
+function parseEnvelope(text, exitedOk = true) {
   const s = String(text || '').trim();
   if (!s) return null;
   const start = s.indexOf('{');
   if (start < 0) return null;
+  let obj;
   try {
-    const r = envelope.safeParse(JSON.parse(s.slice(start)));
-    return r.success ? r.data : null;
+    obj = JSON.parse(s.slice(start));
   } catch (_) {
     return null;
   }
+  const r = envelope.safeParse(obj);
+  if (r.success) return r.data;
+  if (exitedOk && obj && typeof obj === 'object' && !Array.isArray(obj) && !('status' in obj && 'error' in obj)) {
+    return { status: 'success', data: obj, error: null };
+  }
+  return null;
 }
 
 /**
@@ -43,7 +53,7 @@ function createRunner(opts = {}) {
         (err, stdout, stderr) => {
           if (err && err.code === 'ENOENT') return resolve(fail('NOT_INSTALLED', `找不到 ${bin}，请先安装即梦 jimeng-novel CLI`));
           if (err && err.killed) return resolve(fail('TIMEOUT', 'jimeng-novel 超时未返回'));
-          const env = parseEnvelope(stdout) || parseEnvelope(stderr);
+          const env = parseEnvelope(stdout, !err) || parseEnvelope(stderr, false);
           if (env) return resolve({ status: env.status, data: env.data ?? null, error: env.error || null });
           resolve(fail('BAD_OUTPUT', `jimeng-novel 输出无法解析${err ? '（退出码 ' + err.code + '）' : ''}`));
         }

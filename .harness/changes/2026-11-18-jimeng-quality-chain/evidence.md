@@ -12,6 +12,15 @@ This file is for people. `hx check` reads only the records in `records/`, which 
 - 整份 spec 确认：2026-11-18 用户选择推荐版式与 15 字阈值（D15）、登录过期判未通过（D16），并选择「确认，开始实现」。
 - 2026-11-19 用户同意 AC18 测试名由 `::no 40-char overlap` 改为 `::no 15-char overlap`（另加检测器自检用例），与 D15 阈值一致；已 `hx confirm --restate`。这两项选择写入后执行 `hx confirm --restate`（需求在 gate 1 之后有变更，用户已逐轮同意）。
 
+## Incidents
+
+- 2026-11-19 单元测试副作用（已修复、已清理）：jimengNovelRenderer 单测的 afterEach 把 runner 复位为 null（= 真实 CLI），用例里路由起的后台提交/轮询在复位后落到真实 jimeng-novel，
+  在用户即梦账号上建了 4 个名为「测试剧」的空画布，并在 backend-node/data/storage/jimeng/drama_1 写了绑定目录。
+  核查：4 个画布节点数均为 0；绑定项目 credit get 显示 deductedTotal 0、runs 0；余额前后均为 181——未提交任何生成、未扣费。
+  处理：逐个确认名称与 0 节点后删除 4 个画布（D8 授权范围内）、删除本地绑定目录；renderer 在 node 测试进程中（NODE_TEST_CONTEXT）除 JIMENG_LIVE=1 外一律拒绝真实 CLI；
+  单测 afterEach 改为复位成拒绝型 runner；全量 265 个测试前后对比画布列表无新增。
+- 2026-11-19 实测发现契约偏差：`jimeng-novel status -j` 输出裸对象而非 {status,data,error} 信封（能力报告的推断有误）；CLI 端口改为退出码 0 时接受裸对象并补单测。
+
 ## Baseline
 
 Recorded before the first change, so pre-existing failures cannot be blamed on this work.
@@ -64,6 +73,8 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC16 | test | record 035 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a257185+4bc2d9cba06df027 | 2026-11-19T06:00:50Z |
 | AC34 | test | record 036 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a257185+4bc2d9cba06df027 | 2026-11-19T06:01:05Z |
 | AC31 | test | record 037 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | a257185+4bc2d9cba06df027 | 2026-11-19T06:01:27Z |
+| AC20 | test:live | record 038 | cli | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | fail(exit 1) | 7280bdf+9eab70250b5f2ddf | 2026-11-19T06:02:47Z |
+| AC20 | test:live | record 039 | cli | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | pass | 7280bdf+67cb2f309e91aff2 | 2026-11-19T06:04:12Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review

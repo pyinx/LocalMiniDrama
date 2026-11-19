@@ -45,7 +45,18 @@ afterEach(async () => {
   await new Promise((r) => setTimeout(r, 60));
   aiConfigService.listConfigs = savedList;
   videoService.processVideoGeneration = savedProc;
-  renderer.setDeps({ runner: null, cfg: null, wait: { run: 5, result: 30, maxPolls: 120 } });
+  // 不能复位为 null（null = 真实 CLI）：仍在跑的后台任务一旦落到真实 CLI 就会在用户账号上建画布
+  renderer.setDeps({ runner: async () => ({ status: 'error', data: null, error: { code: 'TEST_ENDED', message: 'test ended' } }), cfg: { storage: { local_path: storage } }, wait: { run: 5, result: 30, maxPolls: 120 } });
+});
+
+describe('jimeng renderer never reaches the real CLI from unit tests', () => {
+  it('real runner blocked inside the test process', async () => {
+    renderer.setDeps({ runner: null });
+    aiConfigService.listConfigs = () => [JIMENG];
+    const st = await renderer.status(null);
+    assert.equal(st.available, false);
+    assert.match(st.message, /测试进程中禁止/);
+  });
 });
 
 async function post(body) {
@@ -235,5 +246,20 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
     const changed = await post({ storyboard_id: ids.sbLegacy, jimeng_confirmation: c.token });
     assert.equal(changed.body.error.code, 'confirmation_stale');
     assert.equal((await post({ storyboard_id: ids.sbIr, jimeng_confirmation: c.token })).statusCode, 201, 'unchanged node in the batch still confirmed');
+  });
+});
+
+describe('jimeng CLI output parsing', () => {
+  const { parseEnvelope } = require('../src/services/jimeng/cli');
+  it('cli accepts bare status object and envelopes', () => {
+    // 实测：`jimeng-novel status -j` 输出裸对象；`credit get -j` 输出信封
+    assert.deepEqual(parseEnvelope('{"logged_in":true,"expires_at":"2026-11-19T19:51:38+08:00"}'), { status: 'success', data: { logged_in: true, expires_at: '2026-11-19T19:51:38+08:00' }, error: null });
+    const env = parseEnvelope('本次空间：个人空间\n{"context":{},"data":{"balance":181},"error":null,"status":"success"}');
+    assert.equal(env.status, 'success');
+    assert.equal(env.data.balance, 181);
+    const e = parseEnvelope('{"context":{},"data":null,"error":{"code":"INVALID_ARGUMENT","message":"x"},"status":"error"}', false);
+    assert.equal(e.error.code, 'INVALID_ARGUMENT');
+    assert.equal(parseEnvelope('{"logged_in":true}', false), null, 'bare object on a failed exit is not success');
+    assert.equal(parseEnvelope('not json'), null);
   });
 });

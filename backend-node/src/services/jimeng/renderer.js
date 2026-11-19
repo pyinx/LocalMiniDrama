@@ -46,8 +46,12 @@ function activeConfig(db) {
     .find((c) => c.is_active && String(c.api_protocol || '').trim().toLowerCase() === PROTOCOL) || null;
 }
 
+/** 在 node 测试进程里禁止落到真实 CLI（真实 CLI 会在用户账号上建画布、甚至扣积分），除非显式 JIMENG_LIVE=1 */
+const testBlockedRunner = async () => ({ status: 'error', data: null, error: { code: 'TEST_BLOCKED', message: '测试进程中禁止调用真实 jimeng-novel（设置 JIMENG_LIVE=1 才允许）' } });
+
 function runnerFor(db) {
   if (deps.runner) return deps.runner;
+  if (process.env.NODE_TEST_CONTEXT && process.env.JIMENG_LIVE !== '1') return testBlockedRunner;
   const config = activeConfig(db);
   let settings = {};
   try { settings = typeof config?.settings === 'string' ? JSON.parse(config.settings) : config?.settings || {}; } catch (_) {}
