@@ -43,3 +43,58 @@ describe('runFfmpegConcat', () => {
     );
   });
 });
+
+const { createIrTestDb, sampleIr } = require('./helpers/segmentIrFixtures');
+const { ffmpegSkip, makeClip, tmpStorage } = require('./helpers/mediaFixtures');
+const config = require('../src/config');
+const taskService = require('../src/services/taskService');
+const structuredPost = require('../src/services/structuredEpisodePost');
+const legacyPost = require('../src/services/mergedEpisodePostProcess');
+
+function setupMerge(t) {
+  const root = tmpStorage();
+  const { db, ids } = createIrTestDb();
+  t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.mock.method(config, 'loadConfig', () => ({ storage: { local_path: root } }));
+  t.mock.method(global, 'fetch', () => { throw new Error('unexpected network access'); });
+  async function merge(scenes, merge_options) {
+    const item = videoMergeService.create(db, log, { drama_id: ids.dramaId, episode_id: ids.episodeId, scenes, merge_options });
+    await videoMergeService.processVideoMerge(db, log, item.merge_id, '');
+    return videoMergeService.getById(db, item.merge_id);
+  }
+  return { root, db, ids, merge };
+}
+
+describe('整集合并使用完整素材时间线', () => {
+  it('中间片段解析失败时合并和任务失败，不发布部分成片', { skip: ffmpegSkip }, async (t) => {
+    const { root, db, ids, merge } = setupMerge(t);
+    const clip = makeClip(path.join(root, 'a.mp4'), 1, null);
+    const item = await merge([clip, 'missing.mp4', clip].map(video_url => ({ video_url, duration: 9 })));
+    assert.equal(item.status, 'failed');
+    assert.equal(global.fetch.mock.callCount(), 0);
+    assert.match(item.error_msg, /2/);
+    assert.equal(taskService.getTask(db, item.task_id).status, 'failed');
+    assert.equal(db.prepare('SELECT video_url FROM episodes WHERE id=?').get(ids.episodeId).video_url, null);
+    assert.equal(item.merged_url, null);
+    assert.equal(fs.existsSync(path.join(root, 'projects')), false);
+  });
+
+  for (const kind of ['legacy', 'structured']) {
+    it(`${kind} 后期与成片共用拼接顺序和实测时长`, { skip: ffmpegSkip }, async (t) => {
+      const { root, db, ids, merge } = setupMerge(t);
+      if (kind === 'structured') db.prepare('UPDATE storyboards SET segment_ir=? WHERE id=?').run(JSON.stringify(sampleIr(ids)), ids.sbIr);
+      const post = kind === 'structured' ? t.mock.method(structuredPost, 'runStructuredEpisodePost', () => ({ ok: true }))
+        : t.mock.method(legacyPost, 'runMergedEpisodePostProcess', () => ({ ok: true }));
+      const scenes = [ids.sbLegacy, ids.sbIr].map((scene_id, i) => ({ scene_id, duration: 9, video_url: makeClip(path.join(root, `${i}.mp4`), i+1, null) }));
+      const item = await merge(scenes, { watermark_text: 'test' });
+      assert.equal(item.status, 'completed');
+      assert.equal(post.mock.callCount(), 1);
+      const { scenes: actual, mergedAbsPath } = post.mock.calls[0].arguments[2];
+      assert.deepEqual(actual.map(s => s.scene_id), scenes.map(s => s.scene_id));
+      assert.deepEqual(actual.map(s => s.duration), scenes.map(s => legacyPost.ffprobeDurationSec(s.video_url)));
+      assert.ok(Math.abs(legacyPost.ffprobeDurationSec(mergedAbsPath) - 3) < 0.1);
+      assert.equal(item.duration, 3);
+      assert.equal(JSON.parse(taskService.getTask(db, item.task_id).result).duration, 3);
+    });
+  }
+});

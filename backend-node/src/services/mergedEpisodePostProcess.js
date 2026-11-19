@@ -451,4 +451,7 @@ function ffprobeHasAudio(filePath) {
 module.exports = {
   runMergedEpisodePostProcess,
   ffprobeDurationSec,
+  ffprobeHasAudio,
+  runFfmpeg,
+  escapeFfmpegPath,
 };

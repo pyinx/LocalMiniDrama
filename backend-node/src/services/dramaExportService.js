@@ -169,6 +169,33 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
     }
   }
 
+  // ---- 结构化分镜相关：变体与 IR（导入时按 original_id 重映射） ----
+  const tableExists = (name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  const variantsOf = (table, col, parentIds) => {
+    if (!tableExists(table) || !parentIds.length) return [];
+    return db.prepare(`SELECT * FROM ${table} WHERE ${col} IN (${parentIds.map(() => '?').join(',')}) AND deleted_at IS NULL ORDER BY sort_order, id`).all(...parentIds);
+  };
+  const variantFilesToPack = [];
+  const exportVariant = (v, category, prefix, fields) => {
+    const out = { original_id: v.id };
+    for (const f of fields) out[f] = v[f] ?? null;
+    if (v.local_path) {
+      const zipPath = `media/${category}/${prefix}_${v.id}${extOf(v.local_path)}`;
+      variantFilesToPack.push({ localRelPath: v.local_path, zipPath });
+      out.image_file = zipPath;
+    } else {
+      out.image_url = v.image_url || null;
+    }
+    return out;
+  };
+  const parseStoredJson = (raw) => {
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  };
   // ---- 8. 组装 project.json ----
   // 收集 extra_images 需要打包的文件：{ localRelPath, zipPath }
   const extraFilesToPack = [];
@@ -239,6 +266,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         script_content: ep.script_content,
         ...(ep.novel_source ? { novel_source: JSON.parse(ep.novel_source) } : {}),
         duration: ep.duration,
+        continuity: parseStoredJson(ep.continuity_json),
         storyboards: sbs.map(sb => {
           const igsForThis = allImagesBySb[sb.id] || [];
           // 兼容：仍提供 image_file（指向首帧或最新一张），旧版导入器可继续工作
@@ -266,7 +294,10 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
             .map(id => propIdToIndex[id])
             .filter(idx => idx !== undefined);
 
+          const archive = takeArchive.packBoard(db, storagePath, sb, extras, zip, ep.episode_number);
           return {
+            original_id: sb.id,
+            segment_ir: parseStoredJson(sb.segment_ir),
             storyboard_number: sb.storyboard_number,
             title: sb.title,
             description: sb.description,
@@ -307,7 +338,8 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
             scene_index: sceneIndex,
             prop_indices: propIndices,
             image_file: sbImageFile,
-            ...takeArchive.packBoard(db, storagePath, sb, extras, zip, ep.episode_number),
+            ...archive,
+            video_created_at: archive.video_takes.find(take => take.key === archive.default_take_key)?.created_at ?? null,
             ...(sb.creative_review_lock != null && { creative_review_lock: sb.creative_review_lock }),
             audio_file: sbAudioFile,
             narration_audio_file: sbNarrationAudioFile,
@@ -343,6 +375,12 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         return zipPath;
       });
       return {
+        original_id: c.id,
+        is_group: !!c.is_group,
+        tts_voice: c.tts_voice || null,
+        wardrobes: variantsOf('character_wardrobes', 'character_id', [c.id]).map((w) =>
+          exportVariant(w, 'characters', 'wardrobe', ['name', 'change_phrase', 'prompt', 'episode_range', 'sort_order'])
+        ),
         name: c.name,
         role: c.role,
         description: c.description,
@@ -364,6 +402,10 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         return zipPath;
       });
       return {
+        original_id: s.id,
+        states: variantsOf('scene_states', 'scene_id', [s.id]).map((st) =>
+          exportVariant(st, 'scenes', 'scene_state', ['name', 'kind', 'state_phrase', 'prompt', 'sort_order'])
+        ),
         location: s.location,
         time: s.time,
         prompt: s.prompt,
@@ -382,6 +424,10 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         return zipPath;
       });
       return {
+        original_id: p.id,
+        states: variantsOf('prop_states', 'prop_id', [p.id]).map((st) =>
+          exportVariant(st, 'props', 'prop_state', ['name', 'state_phrase', 'prompt', 'sort_order'])
+        ),
         name: p.name,
         type: p.type,
         description: p.description,
@@ -424,6 +470,12 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   for (const { localRelPath, zipPath } of extraFilesToPack) {
     const abs = localPathToAbs(storagePath, localRelPath);
     const buf = safeReadFile(abs);
+    if (buf) zip.addFile(zipPath, buf);
+  }
+
+  // 造型 / 场景状态 / 道具状态图片
+  for (const { localRelPath, zipPath } of variantFilesToPack) {
+    const buf = safeReadFile(localPathToAbs(storagePath, localRelPath));
     if (buf) zip.addFile(zipPath, buf);
   }
 

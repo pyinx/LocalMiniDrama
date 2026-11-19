@@ -31,6 +31,7 @@ function rowToItem(r) {
     duration: r.duration ?? undefined,
     task_id: r.task_id,
     error_msg: r.error_msg ?? undefined,
+    post_info: (() => { try { return r.post_info ? JSON.parse(r.post_info) : undefined; } catch (_) { return undefined; } })(),
     created_at: r.created_at,
     completed_at: r.completed_at,
   };
@@ -115,6 +116,7 @@ async function resolveVideoToLocalPath(videoUrl, baseUrl, storageRoot, tempDir, 
       return localPath;
     }
   }
+  if (!/^https?:\/\//i.test(u)) return null;
   // 4) 远程 URL：下载到 temp
   const ext = u.includes('.mp4') ? '.mp4' : u.includes('.webm') ? '.webm' : '.mp4';
   const destPath = path.join(tempDir, `dl_${Date.now()}_${index}${ext}`);
@@ -125,8 +127,8 @@ async function resolveVideoToLocalPath(videoUrl, baseUrl, storageRoot, tempDir, 
     fs.writeFileSync(destPath, buf);
     log.info('Video merge: downloaded to temp', { index, dest: destPath });
     return destPath;
-  } catch (e) {
-    log.warn('Video merge: download failed', { index, url: u, error: e.message });
+  } catch {
+    log.warn('Video merge: download failed', { index });
     return null;
   }
 }
@@ -173,7 +175,7 @@ function runFfmpegConcatOnce(listFile, outputPath, transcode, log) {
 
 /** 使用 ffmpeg concat 合并多个视频文件：先流拷贝，失败再重编码兜底 */
 function runFfmpegConcat(localPaths, outputPath, log) {
-  const listFile = path.join(path.dirname(outputPath), `concat_list_${Date.now()}.txt`);
+  const listFile = path.join(path.dirname(outputPath), `concat_list_${path.basename(outputPath)}.txt`);
   try {
     const lines = localPaths.map((p) => {
       const normalized = p.replace(/\\/g, '/');
@@ -258,21 +260,15 @@ async function renderMerge(db, log, r, baseUrl, work) {
   const now = new Date().toISOString();
   db.prepare('UPDATE video_merges SET status = ? WHERE id = ?').run('processing', mergeId);
   const taskService = require('./taskService');
-  if (scenes.length === 0) {
-    db.prepare('UPDATE video_merges SET status = ?, error_msg = ? WHERE id = ?').run('failed', '无有效视频片段', mergeId);
-    if (taskId) taskService.updateTaskError(db, taskId, '无有效视频片段');
-    return;
+  function fail(message) {
+    db.prepare('UPDATE video_merges SET status = ?, error_msg = ? WHERE id = ?').run('failed', message, mergeId);
+    if (taskId) taskService.updateTaskError(db, taskId, message);
   }
-  const first = scenes[0];
-  const mergedUrlFallback = first && first.video_url ? first.video_url : null;
-  if (!mergedUrlFallback) {
-    db.prepare('UPDATE video_merges SET status = ?, error_msg = ? WHERE id = ?').run('failed', '首段无视频地址', mergeId);
-    if (taskId) taskService.updateTaskError(db, taskId, '首段无视频地址');
-    return;
-  }
+  if (!Array.isArray(scenes) || scenes.length === 0) return fail('无有效视频片段');
 
   const snapshot = JSON.stringify(scenes);
-  let totalDuration = scenes.reduce((sum, s) => sum + (Number(s.duration) || 0), 0);
+  const ffmpegAvailable = hasLocalFfmpeg();
+  const { ffprobeDurationSec } = require('./mergedEpisodePostProcess');
   const storageRoot = getStorageRoot();
 
   const localPaths = [];
@@ -284,7 +280,7 @@ async function renderMerge(db, log, r, baseUrl, work) {
   let mixedLayout = false;
   for (let i = 0; i < scenes.length; i++) {
     const p = await resolveVideoToLocalPath(
-      scenes[i].video_url,
+      scenes[i]?.video_url,
       baseUrl,
       storageRoot,
       tempDir,
@@ -308,25 +304,33 @@ async function renderMerge(db, log, r, baseUrl, work) {
       if (firstInfo && firstInfo.layout !== info.layout) mixedLayout = true;
       firstInfo ||= info;
       sc.duration = info.seconds;
-      if (mergeOpts.burn_dialogue_audio && (sc.sound.dialogue?.trim() || sc.sound.audio_local_path)) {
-        const audio = sc.sound.audio_local_path;
-        if (!audio || !fs.existsSync(path.resolve(storageRoot, audio))) {
-          if (complete) throw new Error(label + '缺少对白配音');
-          draftWarnings.push(label + '缺少对白配音，草稿中该镜对白为静音');
-        }
-      }
+    } else {
+      if (!p) return fail(`第 ${i + 1} 段视频无法解析`);
+      scenes[i].duration = ffmpegAvailable ? ffprobeDurationSec(p) : Number(scenes[i].duration) || 0;
+      if (ffmpegAvailable && !scenes[i].duration) return fail(`第 ${i + 1} 段视频时长无法读取`);
     }
     if (p) {
       localPaths.push(p);
-      usableScenes.push(scenes[i]);
+      usableScenes.push({ ...scenes[i], localPath: p });
     }
   }
   if (mode === 'draft') {
     if (!usableScenes.length) throw new Error(draftWarnings.join('；') || '没有可预览的镜头');
-    scenes = usableScenes;
   }
-
-  const ffmpegAvailable = hasLocalFfmpeg();
+  scenes = usableScenes;
+  const totalDuration = scenes.reduce((sum, sc) => sum + sc.duration, 0);
+  const postKind = choosePostProcessor(db, scenes, mergeOpts);
+  if (mode && postKind === 'legacy' && mergeOpts.burn_dialogue_audio) {
+    for (const sc of scenes) {
+      if (!sc.sound?.dialogue?.trim() && !sc.sound?.audio_local_path) continue;
+      const audio = sc.sound.audio_local_path;
+      if (!audio || !fs.existsSync(path.resolve(storageRoot, audio))) {
+        const label = `第 ${sc.storyboard_number ?? sc.scene_id} 镜`;
+        if (complete) throw new Error(label + '缺少对白配音');
+        draftWarnings.push(label + '缺少对白配音，草稿中该镜对白为静音');
+      }
+    }
+  }
   log.info('Video merge: ffmpeg check', {
     merge_id: mergeId,
     has_ffmpeg: ffmpegAvailable,
@@ -371,24 +375,23 @@ async function renderMerge(db, log, r, baseUrl, work) {
 
   const shotRange = scenes.map(s => s.storyboard_number ?? s.scene_id).join('、');
   if (mode && !mergedRelativePath) throw new Error(`第 ${shotRange} 镜无法合成，请检查 FFmpeg 和源文件`);
-  const postNeed =
-    !!mergeOpts.burn_narration_subtitles
-    || !!mergeOpts.burn_dialogue_audio
-    || !!(mergeOpts.watermark_text && String(mergeOpts.watermark_text).trim());
-  if (mergedRelativePath && ffmpegAvailable && postNeed) {
+  if (mergedRelativePath && postKind) {
     const mergedAbsPath = path.join(storageRoot, mergedRelativePath.replace(/\//g, path.sep));
     if (fs.existsSync(mergedAbsPath)) {
-      const mergedPP = require('./mergedEpisodePostProcess');
-      const post = await mergedPP.runMergedEpisodePostProcess(db, log, {
-        mergedAbsPath,
-        storageRoot,
-        scenes,
-        episodeId,
-        mergeOpts,
-      }).catch(err => {
+      const runPost = postKind === 'structured'
+        ? require('./structuredEpisodePost').runStructuredEpisodePost
+        : require('./mergedEpisodePostProcess').runMergedEpisodePostProcess;
+      let post;
+      try {
+        post = await runPost(db, log, { mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts });
+      } catch (err) {
         if (mode !== 'draft') throw err;
-        return { ok: false, error: err.message };
-      });
+        post = { ok: false, error: err.message };
+      }
+      if (post.info) {
+        db.prepare('UPDATE video_merges SET post_info = ? WHERE id = ?')
+          .run(JSON.stringify({ ...post.info, error: post.ok ? undefined : post.error }), mergeId);
+      }
       if (post.ok && post.relativePath) {
         mergedRelativePath = post.relativePath;
         log.info('Video merge: merged episode post-process', { merge_id: mergeId, out: mergedRelativePath });
@@ -403,15 +406,15 @@ async function renderMerge(db, log, r, baseUrl, work) {
   }
 
   if (mode) {
-    totalDuration = scenes.reduce((sum, sc) => sum + sc.duration, 0);
-    const wantsAudio = mergeOpts.burn_dialogue_audio || mergeOpts.burn_narration_subtitles;
+    const wantsAudio = mergeOpts.burn_dialogue_audio ||
+      (postKind === 'structured' ? mergeOpts.bgm?.url : mergeOpts.burn_narration_subtitles);
     const info = await inspectDeliveryClip(path.join(storageRoot, mergedRelativePath), `第 ${shotRange} 镜合成结果`, complete && wantsAudio);
     if (!complete && wantsAudio && !info.hasAudio) draftWarnings.push(`第 ${shotRange} 镜草稿未包含所选音轨`);
     if (Math.abs(info.seconds - totalDuration) > Math.max(firstInfo.frame, info.frame) + 0.001 ||
         Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(`第 ${shotRange} 镜合成后画幅或时长不符`);
   }
 
-  const finalMergedUrl = mergedRelativePath || mergedUrlFallback;
+  const finalMergedUrl = mergedRelativePath || scenes[0].video_url;
   db.transaction(() => {
     if (complete) {
       const fresh = require('./dramaService').episodeDeliveryInputs(db, episodeId, baseUrl);
@@ -435,7 +438,20 @@ async function renderMerge(db, log, r, baseUrl, work) {
   }
 }
 
+/**
+ * 合成后走哪条后期：结构化剧集（任一分镜有 IR）走结构化后期，其中逐句台词轨替代旧的 burn_dialogue_audio；
+ * 其余沿用原后期；没有任何后期选项返回 null。
+ */
+function choosePostProcessor(db, scenes, mergeOpts) {
+  const o = mergeOpts || {};
+  const legacyNeed = !!o.burn_narration_subtitles || !!o.burn_dialogue_audio || !!(o.watermark_text && String(o.watermark_text).trim());
+  const structuredNeed = legacyNeed || !!(o.dialogue_subtitles || o.cards || o.review_sheets || (o.bgm && o.bgm.url));
+  if (structuredNeed && require('./structuredEpisodePost').isStructuredEpisode(db, scenes)) return 'structured';
+  return legacyNeed ? 'legacy' : null;
+}
+
 module.exports = {
+  choosePostProcessor,
   list,
   getById,
   hasPublishedDelivery,

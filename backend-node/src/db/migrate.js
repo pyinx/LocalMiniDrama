@@ -380,6 +380,7 @@ function ensureAllColumns(database) {
   // --- video_merges ---
   ensureColumns(database, 'video_merges', [
     { name: 'episode_id',   type: 'INTEGER' },
+    { name: 'post_info',    type: 'TEXT' },   // 结构化后期结果：字幕方式/降级原因、审片拼图、告警
     { name: 'drama_id',     type: 'INTEGER' },
     { name: 'title',        type: 'TEXT' },
     { name: 'provider',     type: 'TEXT' },
@@ -571,6 +572,20 @@ function ensureAllColumns(database) {
     )`);
   } catch (e) {
     console.warn('scene_states / prop_states init failed:', e.message);
+  }
+
+  // --- 即梦渲染报价确认：一次报价一个 token，覆盖若干节点；每个节点只能消费一次 ---
+  try {
+    database.exec(`CREATE TABLE IF NOT EXISTS jimeng_confirmations (
+      token      TEXT PRIMARY KEY,
+      episode_id INTEGER,
+      items      TEXT NOT NULL,
+      total      REAL,
+      balance    REAL,
+      created_at TEXT NOT NULL
+    )`);
+  } catch (e) {
+    console.warn('jimeng_confirmations init failed:', e.message);
   }
 
   // --- global_settings（全局键值设置表） ---

@@ -8,6 +8,7 @@ const videoClient = require('../services/videoClient');
 const segmentReplanService = require('../services/segmentReplanService');
 const segmentCompileService = require('../services/segmentCompileService');
 const episodeContinuityService = require('../services/episodeContinuityService');
+const jimengRenderer = require('../services/jimeng/renderer');
 const { lintEpisode } = require('../services/segmentCompile/episodeLint');
 const { lintDialogueFidelity } = require('../services/segmentCompile/lint');
 const { parseSegmentIr } = require('../services/segmentIr/schema');
@@ -30,6 +31,17 @@ const promptI18n = require('../services/promptI18n');
 const angleService = require('../services/angleService');
 const { buildUniversalSegmentUserPromptBundle } = require('../services/universalSegmentPromptBundle');
 const { normalizeUniversalSegmentShotDurations } = require('../services/universalSegmentDurationNormalize');
+
+/** 流已开始，写回失败只能通过末尾 error 事件报告。 */
+function saveStreamedUniversalPrompt(db, id, text, writeNd) {
+  try {
+    if (storyboardService.saveLegacyUniversalPrompt(db, id, text)) return true;
+    writeNd({ type: 'error', code: 'NOT_FOUND', message: '分镜不存在' });
+  } catch (err) {
+    writeNd({ type: 'error', code: err.code || 'INTERNAL_ERROR', message: err.message });
+  }
+  return false;
+}
 
 /** 润色接口：邻镜结构化摘要（含全能片段与其它提示词字段） */
 function formatNeighborShotPolishContext(row) {
@@ -338,6 +350,41 @@ function routes(db, log) {
         response.internalError(res, err.message);
       }
     },
+    jimengStatus: async (req, res) => {
+      try {
+        response.success(res, await jimengRenderer.status(db));
+      } catch (err) {
+        log.error('jimeng status', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 即梦整集（或所选分镜）报价：免费，返回一次性确认 token */
+    jimengEstimate: async (req, res) => {
+      try {
+        const body = req.body || {};
+        const r = await jimengRenderer.estimate(db, log, req.params.episode_id, body.storyboard_ids, { model: body.model || undefined });
+        response.success(res, { confirmation: r });
+      } catch (err) {
+        if (err.code === 'jimeng_unavailable') return response.error(res, 503, err.code, err.message, { reason: err.reason });
+        if (err.code === 'segment_compile_blocked') return response.error(res, 422, err.code, err.message, { findings: err.findings });
+        if (err.code === 'jimeng_cli_error') return response.error(res, 502, err.code, err.message, { cli_code: err.cli_code });
+        if (err.code) return response.error(res, 422, err.code, err.message);
+        log.error('jimeng estimate', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 剧本体检：只诊断，不改写剧本 */
+    scriptReview: async (req, res) => {
+      try {
+        const r = await require('../services/scriptReviewService').reviewEpisode(db, log, req.params.episode_id, { model: (req.body || {}).model });
+        response.success(res, r);
+      } catch (err) {
+        if (err.code === 'not_found') return response.notFound(res, err.message);
+        if (err.code === 'empty_script' || err.code === 'script_review_invalid') return response.error(res, 422, err.code, err.message);
+        log.error('script review', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
     getEpisodeContinuity: (req, res) => {
       const table = episodeContinuityService.getContinuity(db, req.params.episode_id);
       if (!table) return response.notFound(res, '剧集不存在');
@@ -360,6 +407,7 @@ function routes(db, log) {
         const result = segmentReplanService.replanEpisode(db, log, req.params.episode_id, req.body || {});
         response.success(res, result);
       } catch (err) {
+        if (err && err.code === 'segment_replan_blocked') return response.error(res, 422, err.code, err.message, { findings: err.findings });
         if (err && err.code === 'no_segment_ir') return response.error(res, 409, 'no_segment_ir', err.message);
         if (err && err.code === 'not_found') return response.notFound(res, err.message);
         log.error('storyboards replanEpisode', { error: err.message });
@@ -680,12 +728,7 @@ function routes(db, log) {
         text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
         text = normalizeUniversalSegmentAtImageSpacing(text);
         text = enforceUniversalStyleLine(text, built.styleZh);
-        const nowIso = new Date().toISOString();
-        db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-          text,
-          nowIso,
-          sbId
-        );
+        if (!storyboardService.saveLegacyUniversalPrompt(db, sbId, text)) return response.notFound(res, '分镜不存在');
         log.info('[分镜] generateUniversalSegmentPrompt 完成', { id: sbId, len: text.length, duration_sec: durationSec });
         response.success(res, { universal_segment_text: text });
       } catch (err) {
@@ -751,12 +794,7 @@ function routes(db, log) {
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
       text = enforceUniversalStyleLine(text, built.styleZh);
-      const nowIso = new Date().toISOString();
-      db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-        text,
-        nowIso,
-        sbId
-      );
+      if (!saveStreamedUniversalPrompt(db, sbId, text, writeNd)) return res.end();
       log.info('[分镜] generateUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
       res.end();
@@ -880,12 +918,7 @@ function routes(db, log) {
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
       text = enforceUniversalStyleLine(text, built.styleZh);
-      const nowIso = new Date().toISOString();
-      db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-        text,
-        nowIso,
-        sbId
-      );
+      if (!saveStreamedUniversalPrompt(db, sbId, text, writeNd)) return res.end();
       log.info('[分镜] polishUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
       res.end();
@@ -1220,6 +1253,11 @@ function routes(db, log) {
           'UPDATE storyboards SET movement = ?, lighting_style = ?, depth_of_field = ?, updated_at = ? WHERE id = ?'
         );
 
+        const updateIrLighting = db.prepare(
+          overwrite
+            ? 'UPDATE storyboards SET lighting_style = ?, depth_of_field = ?, updated_at = ? WHERE id = ?'
+            : 'UPDATE storyboards SET lighting_style = COALESCE(?, lighting_style), depth_of_field = COALESCE(?, depth_of_field), updated_at = ? WHERE id = ?'
+        );
         for (const row of rows) {
           const inferred = angleService.inferPhotographyParams(row);
           // 只更新缺少的字段（除非 overwrite=true）
@@ -1227,7 +1265,12 @@ function routes(db, log) {
           const newLighting   = overwrite ? inferred.lighting_style : (row.lighting_style ? null : inferred.lighting_style);
           const newDof        = overwrite ? inferred.depth_of_field : (row.depth_of_field  ? null : inferred.depth_of_field);
 
-          if (overwrite) {
+          if (row.segment_ir) {
+            if (newLighting || newDof || (overwrite && newMovement)) {
+              updateIrLighting.run(newLighting, newDof, now, row.id);
+              updated++;
+            }
+          } else if (overwrite) {
             if (inferred.movement || inferred.lighting_style || inferred.depth_of_field) {
               stmtOverwrite.run(inferred.movement, inferred.lighting_style, inferred.depth_of_field, now, row.id);
               updated++;

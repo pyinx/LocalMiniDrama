@@ -54,7 +54,7 @@ const SHOT_LINE_CAP = 2;
 
 function stats(shots) {
   return {
-    seconds: shots.reduce((n, s) => n + s.seconds, 0),
+    seconds: shots.reduce((n, s, i) => n + (i === shots.length - 1 ? requiredShotSeconds(s, true) : s.seconds), 0),
     lines: shots.reduce((n, s) => n + s.lines.length, 0),
     cuts: shots.slice(1).filter((s) => s.cut === 'hard').length,
     events: shots.filter((s) => s.event).length,
@@ -126,12 +126,15 @@ function splitIr(ir, groups) {
   });
 }
 
+function requiredShotSeconds(shot, closing) {
+  const need = lineSeconds(shot.lines) + (closing ? CLOSING_SECONDS : 0);
+  return Math.max(shot.seconds, Math.ceil(need - 1e-9));
+}
+
 /** 镜头时长不得短于其台词耗时（段尾镜头另加收束时间） */
 function applyDialogueFloors(ir, withClosing) {
   ir.shots.forEach((shot, i) => {
-    const need = lineSeconds(shot.lines) + (withClosing && i === ir.shots.length - 1 ? CLOSING_SECONDS : 0);
-    const floor = Math.max(1, Math.ceil(need - 1e-9));
-    if (shot.seconds < floor) shot.seconds = floor;
+    shot.seconds = requiredShotSeconds(shot, withClosing && i === ir.shots.length - 1);
   });
   ir.duration_s = ir.shots.reduce((n, s) => n + s.seconds, 0);
 }
@@ -184,8 +187,9 @@ function planSegments(irs, caps, opts = {}) {
       if (s.lines.length > SHOT_LINE_CAP) {
         findings.push({ level: 'warn', code: 'shot_lines_over_capacity', where: { source, shot }, msg: `单个镜头 ${s.lines.length} 句台词（建议 ≤${SHOT_LINE_CAP}），请拆镜或切到听者反应` });
       }
-      if (s.seconds > caps.duration.max) {
-        findings.push({ level: 'block', code: 'shot_exceeds_max', where: { source, shot }, msg: `单个镜头 ${s.seconds} 秒超过模型上限 ${caps.duration.max} 秒，需要拆镜` });
+      const standaloneSeconds = requiredShotSeconds(s, true);
+      if (standaloneSeconds > caps.duration.max) {
+        findings.push({ level: 'block', code: 'shot_exceeds_max', where: { source, shot }, msg: `单个镜头 ${standaloneSeconds} 秒超过模型上限 ${caps.duration.max} 秒，需要拆镜` });
       }
     });
     const st = stats(ir.shots);

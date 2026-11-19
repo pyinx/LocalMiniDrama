@@ -46,12 +46,12 @@ async function synthesizeWithMinimax(text, voiceId, apiKey, groupId, model) {
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
         if (res.statusCode !== 200) {
-          reject(new Error(`MiniMax TTS HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString()}`));
+          reject(new Error(`MiniMax TTS HTTP ${res.statusCode}`));
           return;
         }
         const data = JSON.parse(Buffer.concat(chunks).toString());
         if (data.base_resp?.status_code !== 0) {
-          reject(new Error(`MiniMax TTS error: ${data.base_resp?.status_msg || 'unknown'}`));
+          reject(new Error(`MiniMax TTS error: ${Number.isInteger(data.base_resp?.status_code) ? data.base_resp.status_code : 'unknown'}`));
           return;
         }
         const audioHex = data.data?.audio;
@@ -98,7 +98,7 @@ async function synthesizeWithOpenai(text, voice, apiKey, baseUrl, model, speed) 
       res.on('end', () => {
         const buf = Buffer.concat(chunks);
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`OpenAI TTS HTTP ${res.statusCode}: ${buf.toString('utf-8').slice(0, 500)}`));
+          reject(new Error(`OpenAI TTS HTTP ${res.statusCode}`));
           return;
         }
         resolve(buf);
@@ -145,7 +145,6 @@ async function synthesize(db, log, { text, storyboard_id, config, storage_base, 
       ttsModel || 'speech-02-hd'
     );
   } else if (provider === 'openai' || ttsConfig.base_url) {
-    console.log('==c sxy synthesizeWithOpenai', text, voiceId, ttsConfig.api_key, ttsConfig.base_url, ttsModel, finalSpeed);
     audioBuffer = await synthesizeWithOpenai(
       text,
       voiceId || 'alloy',

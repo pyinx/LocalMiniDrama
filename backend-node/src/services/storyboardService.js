@@ -2,6 +2,7 @@
 const { parseSegmentIr, readStoredIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
 const { planSegments } = require('./segmentIr/planner');
 const {
+  IR_OWNED_FIELDS,
   projectLegacyFields,
   ownedFieldChanges,
   SegmentIrOwnedError,
@@ -112,14 +113,14 @@ function updateStoryboard(db, log, id, req) {
   // 前端可能传 character_ids，与 characters 统一：存为 JSON 字符串
   const charactersValue = req.character_ids !== undefined ? req.character_ids : req.characters;
   let parsedDramaCharIdsForSync = null;
-  if (charactersValue !== undefined) {
+  if (!row.segment_ir && charactersValue !== undefined) {
     updates.push('characters = ?');
     const jsonStr = Array.isArray(charactersValue) ? JSON.stringify(charactersValue) : (typeof charactersValue === 'string' ? charactersValue : '[]');
     params.push(jsonStr);
     parsedDramaCharIdsForSync = parseDramaCharacterIds(charactersValue) ?? [];
   }
   for (const key of allowed) {
-    if (key === 'characters') continue;
+    if (key === 'characters' || (row.segment_ir && IR_OWNED_FIELDS.includes(key))) continue;
     if (req[key] !== undefined) {
       updates.push(key + ' = ?');
       const val = req[key];
@@ -160,6 +161,16 @@ function hasSegmentIr(db, id) {
 /** 旧的通用生成/润色、按音频拆分等会改写 IR 所有字段的入口统一用它拦截 */
 function assertNotSegmentIr(db, id) {
   if (hasSegmentIr(db, id)) throw new SegmentIrOwnedError([]);
+}
+
+/** AI 可能在等待期间失去写权限，所有权条件必须与最终写入在同一条 SQL 中。 */
+function saveLegacyUniversalPrompt(db, id, text) {
+  const result = db.prepare(`UPDATE storyboards SET universal_segment_text = ?, updated_at = ?
+    WHERE id = ? AND deleted_at IS NULL AND (segment_ir IS NULL OR segment_ir = '')`)
+    .run(text, new Date().toISOString(), id);
+  if (result.changes) return true;
+  assertNotSegmentIr(db, id);
+  return false;
 }
 
 /**
@@ -330,6 +341,7 @@ module.exports = {
   parseDramaCharacterIds,
   hasSegmentIr,
   assertNotSegmentIr,
+  saveLegacyUniversalPrompt,
   saveSegmentIr,
   createStoryboard,
   insertBeforeStoryboard,

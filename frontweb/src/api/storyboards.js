@@ -102,6 +102,18 @@ export const storyboardsAPI = {
   episodeSegmentCheck(episodeId) {
     return request.get(`/episodes/${episodeId}/segment-check`)
   },
+  /** 剧本体检（只诊断不改写）：{ script: { format, stats, lines }, report: { gates, dimensions, weighted_total, grade, problems } } */
+  scriptReview(episodeId) {
+    return request.post(`/episodes/${episodeId}/script-review`, {})
+  },
+  /** 即梦可选后端是否可用：{ available, reason?, message? } */
+  jimengStatus() {
+    return request.get('/integrations/jimeng/status')
+  },
+  /** 即梦报价（免费）：返回 { confirmation: { token, items, total, balance, price_status, affordable } } */
+  jimengEstimate(episodeId, storyboardIds) {
+    return request.post(`/episodes/${episodeId}/jimeng/estimate`, { storyboard_ids: storyboardIds })
+  },
   getEpisodeContinuity(episodeId) {
     return request.get(`/episodes/${episodeId}/continuity`)
   },

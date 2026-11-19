@@ -144,13 +144,14 @@ import { irToForm, formToIr, newShotForm, newSubjectForm, newLineForm, FACING_OP
 const props = defineProps({
   storyboard: { type: Object, required: true },
 })
-const emit = defineEmits(['saved'])
+const emit = defineEmits(['saved', 'preview-blocked'])
 
 const form = ref(irToForm(props.storyboard.segment_ir))
 const dirty = ref(false)
 const saving = ref(false)
 const previewing = ref(false)
 const preview = ref(null)
+watch(preview, (value) => emit('preview-blocked', !!value?.blocked))
 const saveErrors = ref([])
 const planFindings = ref([])
 const openShots = ref([])
@@ -158,6 +159,7 @@ const openShots = ref([])
 watch(
   () => props.storyboard.segment_ir,
   (ir) => {
+    preview.value = null
     if (ir && !dirty.value) form.value = irToForm(ir)
   }
 )
