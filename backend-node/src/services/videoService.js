@@ -531,6 +531,14 @@ async function processVideoGeneration(db, log, videoGenId) {
       } catch (_) {}
     }
     const rowForAspect = { ...row, aspect_ratio: aspectForVideo || row.aspect_ratio };
+    // 结构化分镜：路由里已编译好（提示词/参考图/首尾帧/时长），这里只取请求开关，不再二次编译
+    let compiledRequest = {};
+    if (row.compiled_json) {
+      try {
+        compiledRequest = JSON.parse(row.compiled_json).request || {};
+      } catch (_) {}
+      if (row.duration > 0) effectiveDuration = row.duration;
+    }
     const hasOmniRefs = !!(reference_urls && reference_urls.length > 0);
     // DashScope 各模型分支读帧/读参考图互不相交（kf2v/i2v 只读帧，vace/r2v 只读参考图），
     // 传统模式下参考图列表就是分镜主图本身，不能因参考图非空而丢掉首帧/尾帧。
@@ -567,6 +575,8 @@ async function processVideoGeneration(db, log, videoGenId) {
       files_base_url: filesBaseUrl,
       storage_local_path: storageLocalPath,
       video_gen_id: videoGenId,
+      generate_audio: compiledRequest.generate_audio,
+      prompt_extend: compiledRequest.prompt_extend,
     });
     const now2 = new Date().toISOString();
     if (result.error) {

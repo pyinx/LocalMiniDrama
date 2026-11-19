@@ -262,6 +262,13 @@ function generateStoryboard(db, log) {
       // 显式处理 model 为空的情况，转为 undefined 以便 service 层触发默认逻辑
       const model = (body.model && String(body.model).trim()) ? body.model : undefined;
       log.info('Generate storyboard request', { episode_id: req.params.episode_id, storyboard_count: body.storyboard_count, video_duration: body.video_duration });
+      if (body.structured) {
+        const structured = require('../services/structuredStoryboardService');
+        return response.success(res, structured.startStructuredStoryboardGeneration(db, log, req.params.episode_id, {
+          model,
+          videoModel: body.video_model || undefined,
+        }));
+      }
       const resData = await dramaService.generateStoryboard(db, log, req.params.episode_id, {
         model: model,
         style: body.style,

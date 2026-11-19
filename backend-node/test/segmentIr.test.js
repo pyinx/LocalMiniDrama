@@ -73,3 +73,45 @@ describe('segment IR schema (AC5)', () => {
     assert.equal(parseSegmentIr(null).ok, false);
   });
 });
+
+describe('POST /videos rejects bad IR before any request (AC5)', () => {
+  const { createIrTestDb, mockRes, noopLog } = require('./helpers/segmentIrFixtures');
+  const videoService = require('../src/services/videoService');
+  const videoRoutes = require('../src/routes/videos');
+  const storyboardService = require('../src/services/storyboardService');
+
+  it('invalid ir rejected before request', () => {
+    const { db, ids } = createIrTestDb();
+    const original = videoService.processVideoGeneration;
+    let dispatched = 0;
+    videoService.processVideoGeneration = () => { dispatched++; };
+    try {
+      const counts = () => [
+        db.prepare('SELECT COUNT(*) AS n FROM video_generations').get().n,
+        db.prepare('SELECT COUNT(*) AS n FROM async_tasks').get().n,
+      ];
+      const before = counts();
+      const routes = videoRoutes(db, noopLog);
+
+      db.prepare('UPDATE storyboards SET segment_ir = ? WHERE id = ?').run('{"version":1,"shots":[]}', ids.sbIr);
+      const bad = mockRes();
+      routes.create({ body: { drama_id: ids.dramaId, storyboard_id: ids.sbIr, prompt: 'x' } }, bad);
+      assert.equal(bad.statusCode, 422);
+      assert.equal(bad.body.error.code, 'segment_ir_invalid');
+
+      // 合法 IR，但引用的角色已删除 → 编译阻断
+      storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, sampleIr({ sceneId: ids.sceneId, linId: ids.linId, hrId: ids.hrId }));
+      db.prepare('UPDATE characters SET deleted_at = ? WHERE id = ?').run(new Date().toISOString(), ids.hrId);
+      const blocked = mockRes();
+      routes.create({ body: { drama_id: ids.dramaId, storyboard_id: ids.sbIr, prompt: 'x' } }, blocked);
+      assert.equal(blocked.statusCode, 422);
+      assert.equal(blocked.body.error.code, 'segment_compile_blocked');
+      assert.ok(blocked.body.error.details.findings.some((f) => f.code === 'asset_missing'));
+
+      assert.deepEqual(counts(), before, 'no task and no generation row');
+      assert.equal(dispatched, 0, 'no video request dispatched');
+    } finally {
+      videoService.processVideoGeneration = original;
+    }
+  });
+});

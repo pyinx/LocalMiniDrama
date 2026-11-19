@@ -6,6 +6,8 @@ const episodeStoryboardService = require('../services/episodeStoryboardService')
 const { enforceUniversalStyleLine } = require('../services/universalOmniMultiBeatFormat');
 const videoClient = require('../services/videoClient');
 const segmentReplanService = require('../services/segmentReplanService');
+const segmentCompileService = require('../services/segmentCompileService');
+const episodeContinuityService = require('../services/episodeContinuityService');
 
 /** 结构化分镜（IR）相关错误：所有权冲突 409，IR 不合法 422；其他错误返回 false 交给调用方 */
 function sendSegmentIrError(res, err) {
@@ -292,6 +294,39 @@ function routes(db, log) {
       } catch (err) {
         if (sendSegmentIrError(res, err)) return;
         log.error('storyboards update', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 按当前（或指定）视频模型即时编译结构化分镜，返回 prompt、参考图与检查结果；不落库 */
+    compilePreview: (req, res) => {
+      try {
+        const body = req.body || {};
+        const r = segmentCompileService.compileStoryboard(db, req.params.id, { model: body.model || undefined });
+        if (!r.ok) {
+          if (r.code === 'not_found') return response.notFound(res, r.message);
+          if (r.code === 'legacy_storyboard') return response.error(res, 409, 'legacy_storyboard', r.message);
+          return response.error(res, 422, r.code, r.message, { errors: r.errors });
+        }
+        const { prompt, refs, duration_s, request, family } = r.compiled;
+        response.success(res, { prompt, refs, duration_s, request, family, findings: r.findings, blocked: r.blocked, protocol: r.target.protocol, model: r.target.model });
+      } catch (err) {
+        log.error('storyboards compilePreview', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    getEpisodeContinuity: (req, res) => {
+      const table = episodeContinuityService.getContinuity(db, req.params.episode_id);
+      if (!table) return response.notFound(res, '剧集不存在');
+      response.success(res, table);
+    },
+    putEpisodeContinuity: (req, res) => {
+      try {
+        const table = episodeContinuityService.setContinuity(db, req.params.episode_id, (req.body || {}).continuity);
+        if (!table) return response.notFound(res, '剧集不存在');
+        response.success(res, table);
+      } catch (err) {
+        if (err.code === 'continuity_invalid') return response.error(res, 422, 'continuity_invalid', err.message);
+        log.error('storyboards putEpisodeContinuity', { error: err.message });
         response.internalError(res, err.message);
       }
     },

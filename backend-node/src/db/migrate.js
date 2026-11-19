@@ -117,6 +117,7 @@ function ensureAllColumns(database) {
   // --- episodes ---
   ensureColumns(database, 'episodes', [
     { name: 'drama_id',       type: 'INTEGER DEFAULT 0' },
+    { name: 'continuity_json', type: 'TEXT' },  // 剧集级连续性表 { [scene_id]: { props, position_lock, axis_lock, ambience } }
     { name: 'episode_number', type: 'INTEGER DEFAULT 0' },
     { name: 'title',          type: 'TEXT DEFAULT \'\'' },
     { name: 'script_content', type: 'TEXT' },
@@ -343,6 +344,8 @@ function ensureAllColumns(database) {
   // --- video_generations ---
   ensureColumns(database, 'video_generations', [
     { name: 'drama_id',             type: 'INTEGER' },
+    { name: 'compiled_json',        type: 'TEXT' },     // 结构化分镜编译结果（refs/请求开关/findings），异步生成直接使用
+    { name: 'run_key',              type: 'TEXT' },     // 即梦渲染：本次提交的运行标识
     { name: 'storyboard_id',        type: 'INTEGER' },
     { name: 'provider',             type: 'TEXT' },
     { name: 'prompt',               type: 'TEXT' },

@@ -625,6 +625,7 @@ async function callVolcengineOmniVideoApi(config, log, opts) {
     storage_local_path,
     video_gen_id,
     voice_reference_url,   // Seedance 2.0 音色参考（全能模式专用）
+    generate_audio,        // 结构化分镜编译结果：是否让模型原生出人声
   } = opts;
 
   const url = buildVideoUrl(config);
@@ -648,6 +649,7 @@ async function callVolcengineOmniVideoApi(config, log, opts) {
   if (resolution) body.resolution = resolution;
   if (seed != null) body.seed = Number(seed);
   if (camera_fixed != null) body.camera_fixed = Boolean(camera_fixed);
+  if (typeof generate_audio === 'boolean') body.generate_audio = generate_audio;
 
   if (urls.length) {
     for (let i = 0; i < urls.length; i++) {
@@ -1634,12 +1636,15 @@ async function callDashScopeVideoApi(config, log, opts) {
     reference_urls,
     duration,
     aspect_ratio,
+    prompt_extend: promptExtendOpt,
     files_base_url,
     storage_local_path,
     video_gen_id,
   } = opts;
   const base = (config.base_url || '').replace(/\/$/, '');
   const model = modelName || 'wan2.2-kf2v-flash';
+  // 结构化分镜已按 Wan 写法编译过，关掉服务端改写；未指定时保持原有默认（开启）
+  const promptExtend = typeof promptExtendOpt === 'boolean' ? promptExtendOpt : true;
   // 未传比例时保持各模型原有尺寸；传了比例则必须映射到该模型支持的尺寸，不支持就在请求前报错
   const wanCaps = getVideoCaps({ protocol: 'dashscope', model });
   const ratioKey = aspect_ratio ? String(aspect_ratio).trim() : '';
@@ -1699,14 +1704,14 @@ async function callDashScopeVideoApi(config, log, opts) {
     body = {
       model,
       input: { prompt: prompt || '', first_frame_url: firstUrl, last_frame_url: lastUrl },
-      parameters: { resolution: '480P', prompt_extend: true },
+      parameters: { resolution: '480P', prompt_extend: promptExtend },
     };
   } else if (model === 'wan2.6-t2v') {
     url = base + DASHSCOPE_VIDEO_GENERATION;
     body = {
       model,
       input: { prompt: prompt || '' },
-      parameters: { size: sizeForRatio || '1280*720', prompt_extend: true, duration: dur, shot_type: 'multi' },
+      parameters: { size: sizeForRatio || '1280*720', prompt_extend: promptExtend, duration: dur, shot_type: 'multi' },
     };
   } else if (model === 'wan2.6-i2v-flash') {
     url = base + DASHSCOPE_VIDEO_GENERATION;
@@ -1716,7 +1721,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     body = {
       model,
       input: { prompt: prompt || '', img_url: imgUrl },
-      parameters: { resolution: '720P', prompt_extend: true, duration: dur, shot_type: 'multi' },
+      parameters: { resolution: '720P', prompt_extend: promptExtend, duration: dur, shot_type: 'multi' },
     };
   } else if (model === 'wanx2.1-vace-plus') {
     url = base + DASHSCOPE_VIDEO_GENERATION;
@@ -1726,7 +1731,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     body = {
       model,
       input: { function: 'image_reference', prompt: prompt || '', ref_images_url: refs },
-      parameters: { prompt_extend: true, obj_or_bg: ['obj', 'bg'], size: sizeForRatio || '1280*720' },
+      parameters: { prompt_extend: promptExtend, obj_or_bg: ['obj', 'bg'], size: sizeForRatio || '1280*720' },
     };
   } else if (model === 'wan2.6-r2v-flash') {
     url = base + DASHSCOPE_VIDEO_GENERATION;
@@ -1736,7 +1741,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     body = {
       model,
       input: { prompt: prompt || '', reference_urls: refs },
-      parameters: sizeForRatio ? { prompt_extend: true, size: sizeForRatio } : { prompt_extend: true },
+      parameters: sizeForRatio ? { prompt_extend: promptExtend, size: sizeForRatio } : { prompt_extend: promptExtend },
     };
   } else {
     return { error: '????????????: ' + model };
@@ -4189,6 +4194,7 @@ async function callVideoApi(db, log, opts) {
       reference_urls: opts.reference_urls,
       duration: opts.duration,
       aspect_ratio,
+      prompt_extend: opts.prompt_extend,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
       video_gen_id: opts.video_gen_id,
@@ -4245,6 +4251,7 @@ async function callVideoApi(db, log, opts) {
       video_gen_id: opts.video_gen_id,
       // 为将来可灵 Omni 也支持音色参考做准备（当前 Seedance 2.0 不走此分支）
       voice_reference_url: opts.voice_reference_url,
+      generate_audio: opts.generate_audio,
     });
   }
 
@@ -4265,6 +4272,7 @@ async function callVideoApi(db, log, opts) {
       video_gen_id: opts.video_gen_id,
       // 关键：把 callVideoApi 里自动注入的 Seedance 2.0 音色参考音频透传下去
       voice_reference_url: opts.voice_reference_url,
+      generate_audio: opts.generate_audio,
     });
   }
 
@@ -4290,6 +4298,7 @@ async function callVideoApi(db, log, opts) {
       storage_local_path: opts.storage_local_path,
       video_gen_id: opts.video_gen_id,
       voice_reference_url: opts.voice_reference_url,
+      generate_audio: opts.generate_audio,
     });
   }
 
@@ -4411,6 +4420,7 @@ async function callVideoApi(db, log, opts) {
   if (resolution) body.resolution = resolution;
   if (seed != null) body.seed = Number(seed);
   if (camera_fixed != null) body.camera_fixed = Boolean(camera_fixed);
+  if (isVolc && typeof opts.generate_audio === 'boolean') body.generate_audio = opts.generate_audio;
   if (volcTaskType) body.task_type = volcTaskType;
 
   // 按官方要求：first_frame 必须在 last_frame 之前；role 严格区分

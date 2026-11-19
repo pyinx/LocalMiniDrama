@@ -218,6 +218,9 @@ function setupRouter(cfg, db, log) {
   r.get('/episodes/:episode_id/storyboards', storyboards.episodeStoryboardsGet);
   r.post('/episodes/:episode_id/finalize', drama.finalizeEpisode);
   r.post('/episodes/:episode_id/replan', storyboards.replanEpisode);
+  r.get('/episodes/:episode_id/continuity', storyboards.getEpisodeContinuity);
+  r.put('/episodes/:episode_id/continuity', storyboards.putEpisodeContinuity);
+  r.post('/storyboards/:id/compile-preview', storyboards.compilePreview);
   r.get('/episodes/:episode_id/download', drama.downloadEpisodeVideo);
 
   // ---------- tasks ----------
