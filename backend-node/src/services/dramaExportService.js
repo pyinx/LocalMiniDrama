@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 
-const EXPORT_VERSION = '1.4';  // 1.4: 完整导出分镜图片历史（含首尾帧 first/last 绑定）、frame_prompts、layout_description 等，支持导入后恢复首尾帧模式数据
+const EXPORT_VERSION = '1.5';  // 1.5: 结构化分镜 IR、角色造型、场景/道具状态、剧集连续性表（以 original_id 在导入时重映射）  // 1.4: 完整导出分镜图片历史（含首尾帧 first/last 绑定）、frame_prompts、layout_description 等，支持导入后恢复首尾帧模式数据
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -113,7 +113,7 @@ function exportDrama(db, cfg, log, dramaId) {
     allImagesBySb[sbId] = igs.filter(ig => ig && ig.local_path);
 
     const vg = db.prepare(
-      "SELECT video_url, local_path FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1"
+      "SELECT video_url, local_path, created_at FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1"
     ).get(sbId);
     if (vg) videosBySb[sbId] = vg;
   }
@@ -196,6 +196,48 @@ function exportDrama(db, cfg, log, dramaId) {
     }
   }
 
+  // ---- 结构化分镜相关：变体与 IR（导入时按 original_id 重映射） ----
+  const tableExists = (name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  const variantsOf = (table, col, parentIds) => {
+    if (!tableExists(table) || !parentIds.length) return [];
+    return db.prepare(`SELECT * FROM ${table} WHERE ${col} IN (${parentIds.map(() => '?').join(',')}) AND deleted_at IS NULL ORDER BY sort_order, id`).all(...parentIds);
+  };
+  const variantFilesToPack = [];
+  const exportVariant = (v, category, prefix, fields) => {
+    const out = { original_id: v.id };
+    for (const f of fields) out[f] = v[f] ?? null;
+    if (v.local_path) {
+      const zipPath = `media/${category}/${prefix}_${v.id}${extOf(v.local_path)}`;
+      variantFilesToPack.push({ localRelPath: v.local_path, zipPath });
+      out.image_file = zipPath;
+    } else {
+      out.image_url = v.image_url || null;
+    }
+    return out;
+  };
+  /** IR 里的场景 id 指向去重后保留的场景，其余 id 原样带出、导入时映射 */
+  const exportIr = (raw) => {
+    if (!raw) return null;
+    try {
+      const ir = JSON.parse(raw);
+      if (ir && ir.scene && sceneDedupeIdMap.has(ir.scene.scene_id)) ir.scene.scene_id = sceneDedupeIdMap.get(ir.scene.scene_id);
+      return ir;
+    } catch (_) {
+      return null;
+    }
+  };
+  const exportContinuity = (raw) => {
+    if (!raw) return null;
+    try {
+      const t = JSON.parse(raw);
+      const out = {};
+      for (const [k, v] of Object.entries(t || {})) out[String(sceneDedupeIdMap.get(Number(k)) ?? k)] = v;
+      return out;
+    } catch (_) {
+      return null;
+    }
+  };
+
   // ---- 8. 组装 project.json ----
   // 收集 extra_images 需要打包的文件：{ localRelPath, zipPath }
   const extraFilesToPack = [];
@@ -220,6 +262,7 @@ function exportDrama(db, cfg, log, dramaId) {
         description: ep.description,
         script_content: ep.script_content,
         duration: ep.duration,
+        continuity: exportContinuity(ep.continuity_json),
         storyboards: sbs.map(sb => {
           const igsForThis = allImagesBySb[sb.id] || [];
           // 兼容：仍提供 image_file（指向首帧或最新一张），旧版导入器可继续工作
@@ -250,6 +293,8 @@ function exportDrama(db, cfg, log, dramaId) {
             .filter(idx => idx !== undefined);
 
           return {
+            original_id: sb.id,
+            segment_ir: exportIr(sb.segment_ir),
             storyboard_number: sb.storyboard_number,
             title: sb.title,
             description: sb.description,
@@ -290,6 +335,8 @@ function exportDrama(db, cfg, log, dramaId) {
             prop_indices: propIndices,
             image_file: sbImageFile,
             video_file: sbVideoFile,
+            // 保留生成时间：尾帧是否过期按「视频时间晚于取帧时间」判断，导入后不能变
+            video_created_at: vg && vg.created_at ? vg.created_at : null,
             audio_file: sbAudioFile,
             narration_audio_file: sbNarrationAudioFile,
             // 完整分镜图片历史（含首尾帧），导入后可恢复 getSbAllImages + 绑定
@@ -324,6 +371,12 @@ function exportDrama(db, cfg, log, dramaId) {
         return zipPath;
       });
       return {
+        original_id: c.id,
+        is_group: !!c.is_group,
+        tts_voice: c.tts_voice || null,
+        wardrobes: variantsOf('character_wardrobes', 'character_id', [c.id]).map((w) =>
+          exportVariant(w, 'characters', 'wardrobe', ['name', 'change_phrase', 'prompt', 'episode_range', 'sort_order'])
+        ),
         name: c.name,
         role: c.role,
         description: c.description,
@@ -343,7 +396,12 @@ function exportDrama(db, cfg, log, dramaId) {
         extraFilesToPack.push({ localRelPath: relPath, zipPath });
         return zipPath;
       });
+      const sameSceneIds = [...sceneDedupeIdMap.entries()].filter(([, kept]) => kept === s.id).map(([orig]) => orig);
       return {
+        original_id: s.id,
+        states: variantsOf('scene_states', 'scene_id', sameSceneIds.length ? sameSceneIds : [s.id]).map((st) =>
+          exportVariant(st, 'scenes', 'scene_state', ['name', 'kind', 'state_phrase', 'prompt', 'sort_order'])
+        ),
         location: s.location,
         time: s.time,
         prompt: s.prompt,
@@ -362,6 +420,10 @@ function exportDrama(db, cfg, log, dramaId) {
         return zipPath;
       });
       return {
+        original_id: p.id,
+        states: variantsOf('prop_states', 'prop_id', [p.id]).map((st) =>
+          exportVariant(st, 'props', 'prop_state', ['name', 'state_phrase', 'prompt', 'sort_order'])
+        ),
         name: p.name,
         type: p.type,
         description: p.description,
@@ -440,6 +502,12 @@ function exportDrama(db, cfg, log, dramaId) {
   for (const { localRelPath, zipPath } of extraFilesToPack) {
     const abs = localPathToAbs(storagePath, localRelPath);
     const buf = safeReadFile(abs);
+    if (buf) zip.addFile(zipPath, buf);
+  }
+
+  // 造型 / 场景状态 / 道具状态图片
+  for (const { localRelPath, zipPath } of variantFilesToPack) {
+    const buf = safeReadFile(localPathToAbs(storagePath, localRelPath));
     if (buf) zip.addFile(zipPath, buf);
   }
 

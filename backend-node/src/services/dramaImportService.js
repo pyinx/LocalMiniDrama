@@ -151,7 +151,59 @@ function importDrama(db, cfg, log, zipBuffer) {
   return result;
 }
 
+/** 变体（造型/场景状态/道具状态）：插行并把图片落到新项目目录；返回 original_id → 新 id */
+function importVariants(db, storagePath, projectDir, files, list, opts, now) {
+  const map = new Map();
+  if (!Array.isArray(list)) return map;
+  const tableOk = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(opts.table);
+  if (!tableOk) return map;
+  for (const v of list) {
+    if (!v || !v.name) continue;
+    const localPath = saveMediaFile(storagePath, projectDir, opts.category, files, v.image_file, opts.prefix);
+    const cols = [opts.parentCol, ...opts.fields, 'image_url', 'local_path', 'created_at', 'updated_at'];
+    const vals = [opts.parentId, ...opts.fields.map((f) => v[f] ?? null), localPath ? null : v.image_url || null, localPath, now, now];
+    const info = db.prepare(`INSERT INTO ${opts.table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...vals);
+    if (v.original_id != null) map.set(Number(v.original_id), Number(info.lastInsertRowid));
+  }
+  return map;
+}
+
+/**
+ * 把导出包里的 IR 引用的旧 id 换成新 id。必需的引用（角色、场景、道具）映射不到时返回 null（该分镜退回旧链路），
+ * 可选引用（造型、状态、首尾帧图、尾帧来源段）映射不到时去掉。
+ */
+function remapIr(ir, m) {
+  const req = (map, id) => (map.has(Number(id)) ? map.get(Number(id)) : undefined);
+  const opt = (map, id) => (id == null ? null : map.has(Number(id)) ? map.get(Number(id)) : null);
+  const out = JSON.parse(JSON.stringify(ir));
+  out.scene.scene_id = req(m.scenes, ir.scene.scene_id);
+  if (out.scene.scene_id === undefined) return null;
+  out.scene.state_id = opt(m.sceneStates, ir.scene.state_id);
+  for (const c of out.cast) {
+    c.character_id = req(m.characters, c.character_id);
+    if (c.character_id === undefined) return null;
+    c.wardrobe_id = opt(m.wardrobes, c.wardrobe_id);
+  }
+  for (const p of out.prop_refs || []) {
+    p.prop_id = req(m.props, p.prop_id);
+    if (p.prop_id === undefined) return null;
+    p.state_id = opt(m.propStates, p.state_id);
+  }
+  const cont = out.continuity || { mode: 'refs' };
+  for (const [key, map] of [['first_frame_image_id', m.images], ['last_frame_image_id', m.images], ['tail_ref_from', m.storyboards]]) {
+    if (cont[key] == null) continue;
+    const v = opt(map, cont[key]);
+    if (v == null) delete cont[key];
+    else cont[key] = v;
+  }
+  if (cont.mode === 'first_last' && cont.first_frame_image_id == null) cont.mode = 'refs';
+  out.continuity = cont;
+  return out;
+}
+
 function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
+  const idMaps = { characters: new Map(), wardrobes: new Map(), scenes: new Map(), sceneStates: new Map(), props: new Map(), propStates: new Map(), storyboards: new Map(), images: new Map() };
+  const pendingIr = []; // [{ sbId, ir }]
 
   // ---- 创建 drama ----
   const dramaInfo = db.prepare(
@@ -184,10 +236,15 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     const localPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.image_file, 'char_imp');
     const extraImagesJson = saveExtraImages(storagePath, projectDir, 'characters', files, c.extra_image_files, 'char_extra_imp');
     const info = db.prepare(
-      `INSERT INTO characters (drama_id, name, role, description, personality, appearance, voice_style, polished_prompt, local_path, extra_images, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(dramaId, c.name, c.role || null, c.description || null, c.personality || null, c.appearance || null, c.voice_style || null, c.polished_prompt || null, localPath, extraImagesJson, i, now, now);
+      `INSERT INTO characters (drama_id, name, role, description, personality, appearance, voice_style, polished_prompt, local_path, extra_images, sort_order, is_group, tts_voice, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(dramaId, c.name, c.role || null, c.description || null, c.personality || null, c.appearance || null, c.voice_style || null, c.polished_prompt || null, localPath, extraImagesJson, i, c.is_group ? 1 : 0, c.tts_voice || null, now, now);
     charNewIds.push(info.lastInsertRowid);
+    if (c.original_id != null) idMaps.characters.set(Number(c.original_id), Number(info.lastInsertRowid));
+    for (const [o, n] of importVariants(db, storagePath, projectDir, files, c.wardrobes, {
+      table: 'character_wardrobes', parentCol: 'character_id', parentId: info.lastInsertRowid, category: 'characters', prefix: 'wardrobe_imp',
+      fields: ['name', 'change_phrase', 'prompt', 'episode_range', 'sort_order'],
+    }, now)) idMaps.wardrobes.set(o, n);
   }
 
   // ---- 导入剧集（先建好所有集，再关联角色/场景/道具） ----
@@ -220,6 +277,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     if (sceneDedupeMap.has(dedupeKey)) {
       // 同 location+time 已存在，直接复用，不重复插入
       sceneNewIds.push(sceneDedupeMap.get(dedupeKey));
+      if (s.original_id != null) idMaps.scenes.set(Number(s.original_id), Number(sceneDedupeMap.get(dedupeKey)));
       continue;
     }
     const epIdx = s.episode_index;
@@ -234,6 +292,11 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     ).run(dramaId, epId, s.location || '', s.time || '', s.prompt || '', s.polished_prompt || null, localPath, extraImagesJson, now, now);
     sceneNewIds.push(info.lastInsertRowid);
     sceneDedupeMap.set(dedupeKey, info.lastInsertRowid);
+    if (s.original_id != null) idMaps.scenes.set(Number(s.original_id), Number(info.lastInsertRowid));
+    for (const [o, n] of importVariants(db, storagePath, projectDir, files, s.states, {
+      table: 'scene_states', parentCol: 'scene_id', parentId: info.lastInsertRowid, category: 'scenes', prefix: 'scene_state_imp',
+      fields: ['name', 'kind', 'state_phrase', 'prompt', 'sort_order'],
+    }, now)) idMaps.sceneStates.set(o, n);
   }
 
   // ---- 导入道具（带 episode_id） ----
@@ -251,6 +314,11 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(dramaId, epId, p.name, p.type || null, p.description || null, p.prompt || null, localPath, extraImagesJson, now, now);
     propNewIds.push(pInfo.lastInsertRowid);
+    if (p.original_id != null) idMaps.props.set(Number(p.original_id), Number(pInfo.lastInsertRowid));
+    for (const [o, n] of importVariants(db, storagePath, projectDir, files, p.states, {
+      table: 'prop_states', parentCol: 'prop_id', parentId: pInfo.lastInsertRowid, category: 'props', prefix: 'prop_state_imp',
+      fields: ['name', 'state_phrase', 'prompt', 'sort_order'],
+    }, now)) idMaps.propStates.set(o, n);
   }
 
   // ---- 导入分镜 ----
@@ -345,6 +413,8 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
          VALUES (${sbCols.map(() => '?').join(', ')})`
       ).run(...sbVals);
       const sbId = sbInfo.lastInsertRowid;
+      if (sb.original_id != null) idMaps.storyboards.set(Number(sb.original_id), Number(sbId));
+      if (sb.segment_ir) pendingIr.push({ sbId: Number(sbId), ir: sb.segment_ir });
 
       // 还原 storyboard_props（分镜与道具的关联）
       if (sbPropNewIds.length > 0) {
@@ -390,6 +460,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
             const newGenId = genInfo.lastInsertRowid;
             if (gen.original_id != null) {
               genOldToNew.set(Number(gen.original_id), { newId: newGenId, localPath: genLocalPath });
+              idMaps.images.set(Number(gen.original_id), Number(newGenId));
             }
           }
         }
@@ -411,7 +482,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
           db.prepare(
             `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, status, local_path, created_at, updated_at)
              VALUES (?, ?, 'imported', ?, 'completed', ?, ?, ?)`
-          ).run(dramaId, sbId, sb.video_prompt || '', videoLocalPath, now, now);
+          ).run(dramaId, sbId, sb.video_prompt || '', videoLocalPath, sb.video_created_at || now, now);
         }
       }
 
@@ -452,7 +523,34 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     }
   }
 
-  log.info('Drama imported', { drama_id: dramaId, title });
+  // ---- 结构化分镜 IR 与剧集连续性表：所有对象都建好后再重映射 id（尾帧来源可能指向后面的分镜） ----
+  const storyboardService = require('./storyboardService');
+  let irDropped = 0;
+  for (const { sbId, ir } of pendingIr) {
+    const mapped = remapIr(ir, idMaps);
+    if (!mapped) {
+      irDropped++;
+      log.warn('[导入] 结构化分镜引用的资产不在导出包内，该分镜退回旧链路', { storyboard_id: sbId });
+      continue;
+    }
+    try {
+      storyboardService.saveSegmentIr(db, log, sbId, mapped);
+    } catch (e) {
+      irDropped++;
+      log.warn('[导入] 结构化分镜校验失败，该分镜退回旧链路', { storyboard_id: sbId, error: e.message });
+    }
+  }
+  (data.episodes || []).forEach((ep, i) => {
+    if (!ep.continuity || !episodeIdList[i]) return;
+    const table = {};
+    for (const [k, v] of Object.entries(ep.continuity)) {
+      const n = idMaps.scenes.get(Number(k));
+      if (n != null) table[String(n)] = v;
+    }
+    db.prepare('UPDATE episodes SET continuity_json = ? WHERE id = ?').run(JSON.stringify(table), episodeIdList[i]);
+  });
+
+  log.info('Drama imported', { drama_id: dramaId, title, segment_ir: pendingIr.length - irDropped, segment_ir_dropped: irDropped });
   return { drama_id: dramaId, title };
 }
 

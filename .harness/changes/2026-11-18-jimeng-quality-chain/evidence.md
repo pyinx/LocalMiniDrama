@@ -59,6 +59,7 @@ cannot replace it. Test totals must show nothing failed, skipped, or left unrun 
 | AC13 | test | record 030 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 9445e30+73748845895bdc07 | 2026-11-19T05:36:59Z |
 | AC27 | test | record 031 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 9445e30+73748845895bdc07 | 2026-11-19T05:37:06Z |
 | AC14 | test | record 032 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 3e64516+758120eb6eae127d | 2026-11-19T05:40:26Z |
+| AC24 | test | record 033 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 6882edc+2f6512f858fd66d1 | 2026-11-19T05:45:07Z |
 <!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
 
 ## Review
