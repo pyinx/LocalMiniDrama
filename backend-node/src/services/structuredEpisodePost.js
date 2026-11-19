@@ -35,15 +35,15 @@ function segmentIsNative(db, storyboardId) {
   }
 }
 
-function loadSegments(db, scenes, clipDurations) {
-  return scenes.map((sc, i) => {
+function loadSegments(db, scenes) {
+  return scenes.map((sc) => {
     const sbId = Number(sc.scene_id);
     const row = db.prepare('SELECT segment_ir FROM storyboards WHERE id = ?').get(sbId);
     const parsed = row && row.segment_ir ? parseSegmentIr(row.segment_ir) : null;
     return {
       storyboard_id: sbId,
       ir: parsed && parsed.ok ? parsed.ir : null,
-      clip_s: clipDurations[i] || Number(sc.duration) || 5,
+      clip_s: Number(sc.duration) || 5,
       native: segmentIsNative(db, sbId),
     };
   });
@@ -63,11 +63,11 @@ function makeVoiceOf(db, timeline) {
   };
 }
 
-function defaultSynthesize(db, log, storageRoot) {
+function defaultSynthesize(db, log, tmpDir) {
   const ttsService = require('./ttsService');
   return async ({ text, voice }) => {
-    const r = await ttsService.synthesize(db, log, { text, storyboard_id: null, storage_base: storageRoot, voice_id: voice || undefined });
-    return path.join(storageRoot, r.local_path.replace(/\//g, path.sep));
+    const r = await ttsService.synthesize(db, log, { text, storyboard_id: null, storage_base: tmpDir, voice_id: voice || undefined });
+    return path.join(tmpDir, r.local_path.replace(/\//g, path.sep));
   };
 }
 
@@ -99,7 +99,7 @@ function buildFramesSheet(videoPath, duration, outPath, log) {
 }
 
 /**
- * @param {{ mergedAbsPath, storageRoot, scenes, clipDurations?: number[], episodeId, mergeOpts, cfg?, synthesize?, filters?: Set<string> }} opts
+ * @param {{ mergedAbsPath, storageRoot, scenes, episodeId, mergeOpts, cfg?, synthesize?, filters?: Set<string> }} opts
  * @returns {Promise<{ ok: boolean, relativePath?: string, info?: object, error?: string }>}
  */
 async function runStructuredEpisodePost(db, log, opts) {
@@ -110,7 +110,7 @@ async function runStructuredEpisodePost(db, log, opts) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `drama-struct-post-${episodeId || 0}-`));
   const info = { subtitles: { method: 'none', burned: false }, sheets: {}, warnings: [], dialogue_track: false };
   try {
-    const timeline = buildTimeline(loadSegments(db, scenes, opts.clipDurations || []));
+    const timeline = buildTimeline(loadSegments(db, scenes));
     const wantSubs = !!(mergeOpts.dialogue_subtitles || mergeOpts.burn_narration_subtitles);
     const wantCards = !!mergeOpts.cards;
     const wantDub = !!mergeOpts.burn_dialogue_audio;
@@ -122,7 +122,7 @@ async function runStructuredEpisodePost(db, log, opts) {
     if (wantDub) {
       const track = await buildDialogueTrack({
         timeline,
-        synthesize: opts.synthesize || defaultSynthesize(db, log, storageRoot),
+        synthesize: opts.synthesize || defaultSynthesize(db, log, tmpDir),
         voiceOf: makeVoiceOf(db, timeline),
         totalDuration: videoDur,
         tmpDir,
@@ -199,7 +199,7 @@ async function runStructuredEpisodePost(db, log, opts) {
         softSubInputs.forEach((_, k) => args.push(`-metadata:s:s:${k}`, `title=${k === 0 && srtPath ? '台词' : '字卡'}`));
       }
       const outAbs = `${base}_post.mp4`;
-      args.push('-movflags', '+faststart', '-shortest', outAbs);
+      args.push('-movflags', '+faststart', '-t', videoDur.toFixed(3), outAbs);
       if (!runFfmpeg(args, log, 'structured_post') || !fs.existsSync(outAbs)) return { ok: false, error: '成片后期合成失败', info };
       info.output = path.relative(storageRoot, outAbs).replace(/\\/g, '/');
     }

@@ -2,12 +2,14 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('node:child_process');
+const { getFfprobePath } = require('../src/utils/ffmpegPath');
 const { buildTimeline, planDialogueLines, estimatedLineSeconds, buildDialogueSrt, buildCardsSrt } = require('../src/services/episodeSubtitles');
 const { runStructuredEpisodePost } = require('../src/services/structuredEpisodePost');
 const storyboardService = require('../src/services/storyboardService');
 const { parseSegmentIr } = require('../src/services/segmentIr/schema');
 const { createIrTestDb, sampleIr, noopLog } = require('./helpers/segmentIrFixtures');
-const { ffmpegSkip, makeClip, makeTone, concat, meanVolume, streams, tmpStorage } = require('./helpers/mediaFixtures');
+const { ffmpegSkip, makeClip, makeTone, concat, meanVolume, tmpStorage } = require('./helpers/mediaFixtures');
 
 const IDS = { sceneId: 3, linId: 1, hrId: 2 };
 
@@ -20,13 +22,13 @@ function parseSrt(srt) {
 }
 
 /** 准备一集：第 1 段为 IR（8 秒内容实拍 2 秒，测缩放），第 2 段为旧分镜 */
-function setupEpisode(storage) {
+function setupEpisode(storage, tailSeconds = 2) {
   const { db, ids } = createIrTestDb();
   storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, sampleIr(ids, { cards: [{ text: '人事部', at_s: 0, hold_s: 1 }] }));
   const clipA = makeClip(path.join(storage, 'a.mp4'), 2, null);
-  const clipB = makeClip(path.join(storage, 'b.mp4'), 2, -6);
+  const clipB = makeClip(path.join(storage, 'b.mp4'), tailSeconds, -6);
   const merged = concat([clipA, clipB], path.join(storage, 'merged.mp4'));
-  const scenes = [{ scene_id: ids.sbIr, duration: 8 }, { scene_id: ids.sbLegacy, duration: 2 }];
+  const scenes = [{ scene_id: ids.sbIr, duration: 2 }, { scene_id: ids.sbLegacy, duration: tailSeconds }];
   const cfg = { storage: { local_path: storage, base_url: 'http://localhost:5679/static' } };
   return { db, ids, merged, scenes, cfg };
 }
@@ -62,7 +64,7 @@ describe('structured episode compose (AC13)', () => {
     const { db, merged, scenes, cfg } = setupEpisode(storage);
     const bgm = makeTone(path.join(storage, 'bgm.wav'), 3, 220, -3);
     const r = await runStructuredEpisodePost(db, noopLog, {
-      mergedAbsPath: merged, storageRoot: storage, scenes, clipDurations: [2, 2], episodeId: 1, cfg,
+      mergedAbsPath: merged, storageRoot: storage, scenes, episodeId: 1, cfg,
       mergeOpts: { bgm: { url: bgm, volume_db: -18 } }, filters: new Set(),
     });
     assert.equal(r.ok, true, r.error);
@@ -78,28 +80,54 @@ describe('structured episode compose (AC13)', () => {
     assert.ok(tail > -60, 'BGM loops past its own 3s length');
   });
 
-  it('soft subtitle fallback', { skip: ffmpegSkip }, async () => {
-    const storage = tmpStorage();
-    const { db, merged, scenes, cfg } = setupEpisode(storage);
-    const r = await runStructuredEpisodePost(db, noopLog, {
-      mergedAbsPath: merged, storageRoot: storage, scenes, clipDurations: [2, 2], episodeId: 1, cfg,
-      mergeOpts: { dialogue_subtitles: true, cards: true }, filters: new Set(['amix']),
+  for (const withBgm of [false, true]) {
+    it(withBgm ? 'soft subtitle fallback with looping BGM' : 'soft subtitle fallback', { skip: ffmpegSkip }, async (t) => {
+      const storage = tmpStorage();
+      t.after(() => fs.rmSync(storage, { recursive: true, force: true }));
+      const bgm = withBgm ? { url: makeTone(path.join(storage, 'bgm.wav'), 0.5) } : null;
+      const { db, merged, scenes, cfg } = setupEpisode(storage);
+      const r = await runStructuredEpisodePost(db, noopLog, {
+        mergedAbsPath: merged, storageRoot: storage, scenes, episodeId: 1, cfg,
+        mergeOpts: { dialogue_subtitles: true, cards: true, bgm }, filters: new Set(['amix']),
+      });
+      assert.equal(r.ok, true, r.error);
+      assert.equal(r.info.subtitles.method, 'mov_text');
+      assert.equal(r.info.subtitles.burned, false);
+      assert.match(r.info.subtitles.reason, /subtitles 滤镜/);
+      const { streams: s } = JSON.parse(execFileSync(getFfprobePath(), ['-v', 'error', '-show_entries',
+        'stream=codec_type,duration', '-of', 'json', path.join(storage, r.relativePath)], { encoding: 'utf8' }));
+      assert.equal(s.filter((x) => x.codec_type === 'subtitle').length, 2, 'dialogue + cards as soft subtitle tracks');
+      for (const type of ['video', 'audio']) {
+        const duration = Number(s.find((x) => x.codec_type === type)?.duration);
+        assert.ok(Math.abs(duration - 4) <= 0.05, `${type} lasts ${duration}s, expected 4s`);
+      }
+      const cards = parseSrt(fs.readFileSync(path.join(storage, 'merged.cards.srt'), 'utf8'));
+      assert.deepEqual(cards.map(({ start, end }) => [start, end]), [[0, 2]]);
+      assert.ok(fs.existsSync(path.join(storage, 'merged.srt')));
     });
-    assert.equal(r.ok, true, r.error);
-    assert.equal(r.info.subtitles.method, 'mov_text');
-    assert.equal(r.info.subtitles.burned, false);
-    assert.match(r.info.subtitles.reason, /subtitles 滤镜/);
-    const s = streams(path.join(storage, r.relativePath));
-    assert.equal(s.filter((x) => x.codec_type === 'subtitle').length, 2, 'dialogue + cards as soft subtitle tracks');
-    assert.ok(s.some((x) => x.codec_type === 'audio'), 'original audio kept');
-    assert.ok(fs.existsSync(path.join(storage, 'merged.srt')));
+  }
+
+  it('12 秒成片仅带开头 2 秒字卡时保留结尾画面', { skip: ffmpegSkip }, async (t) => {
+    const storage = tmpStorage();
+    t.after(() => fs.rmSync(storage, { recursive: true, force: true }));
+    const { db, merged, scenes } = setupEpisode(storage, 10);
+    t.after(() => db.close());
+    const result = await runStructuredEpisodePost(db, noopLog, {
+      mergedAbsPath: merged, storageRoot: storage, scenes, mergeOpts: { cards: true }, filters: new Set(),
+    });
+    assert.equal(result.ok, true, result.error);
+    const duration = execFileSync(getFfprobePath(), ['-v', 'error', '-select_streams', 'v:0', '-show_entries',
+      'stream=duration', '-of', 'csv=p=0', path.join(storage, result.relativePath)], { encoding: 'utf8' });
+    assert.ok(Math.abs(Number(duration) - 12) < 0.05, `视频轨实际时长 ${duration}`);
+    const cards = parseSrt(fs.readFileSync(path.join(storage, 'merged.cards.srt'), 'utf8'));
+    assert.deepEqual(cards.map(({ start, end }) => [start, end]), [[0, 2]]);
   });
 
   it('seams and frames sheets', { skip: ffmpegSkip }, async () => {
     const storage = tmpStorage();
     const { db, merged, scenes, cfg } = setupEpisode(storage);
     const r = await runStructuredEpisodePost(db, noopLog, {
-      mergedAbsPath: merged, storageRoot: storage, scenes, clipDurations: [2, 2], episodeId: 1, cfg,
+      mergedAbsPath: merged, storageRoot: storage, scenes, episodeId: 1, cfg,
       mergeOpts: { review_sheets: true }, filters: new Set(),
     });
     assert.equal(r.ok, true, r.error);
