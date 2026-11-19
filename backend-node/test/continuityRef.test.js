@@ -8,7 +8,7 @@ const storyboardService = require('../src/services/storyboardService');
 const segmentCompileService = require('../src/services/segmentCompileService');
 const { parseSegmentIr } = require('../src/services/segmentIr/schema');
 const { createIrTestDb, sampleIr, mockRes, noopLog } = require('./helpers/segmentIrFixtures');
-const { ffmpegSkip, makeClip, tmpStorage } = require('./helpers/mediaFixtures');
+const { ffmpegSkip, makeClip, concat, tmpStorage } = require('./helpers/mediaFixtures');
 
 const IDS = { sceneId: 3, linId: 1, hrId: 2 };
 const ir = (o) => parseSegmentIr(sampleIr(IDS, o)).ir;
@@ -55,10 +55,15 @@ describe('continuity tail frame (AC14)', () => {
 
   it('extracts last frame', { skip: ffmpegSkip }, () => {
     const dir = tmpStorage();
-    const clip = makeClip(path.join(dir, 'c.mp4'), 2, null, 440, 'green');
+    const intro = makeClip(path.join(dir, 'intro.mp4'), 2, null, 440, 'red');
+    const ending = makeClip(path.join(dir, 'ending.mp4'), 0.25, null, 440, 'blue');
+    const clip = concat([intro, ending], path.join(dir, 'c.mp4'));
     const out = path.join(dir, 'last.jpg');
     assert.deepEqual(tailFrameLinkService.extractLastFrame(clip, out), { ok: true });
-    assert.ok(fs.statSync(out).size > 100);
+    const { execFileSync } = require('child_process');
+    const { getFfmpegPath } = require('../src/utils/ffmpegPath');
+    const rgb = execFileSync(getFfmpegPath(), ['-v', 'error', '-i', out, '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']);
+    assert.ok(rgb[2] > 200 && rgb[0] < 50, `expected blue ending, got ${[...rgb]}`);
     assert.equal(tailFrameLinkService.extractLastFrame(path.join(dir, 'missing.mp4'), path.join(dir, 'x.jpg')).ok, false);
   });
 

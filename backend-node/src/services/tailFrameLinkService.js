@@ -12,7 +12,6 @@ function extractLastFrame(videoAbsPath, outAbsPath) {
     '-i', videoAbsPath,
     '-update', '1',
     '-q:v', '2',
-    '-frames:v', '1',
     '-y',
     outAbsPath
   ], { encoding: 'utf8', timeout: 60000 });
@@ -110,7 +109,6 @@ function routes(db, cfg, log) {
         const outputRelPath = `media/images/${outputFileName}`;
 
         // 6. 使用 ffmpeg 提取最后一帧
-        // 使用 -sseof -1 定位到最后一秒，然后取第一帧
         log.info('[尾帧衔接] 开始提取', { from: video.local_path, to: outputRelPath });
 
         const extracted = extractLastFrame(videoAbsPath, outputAbsPath);

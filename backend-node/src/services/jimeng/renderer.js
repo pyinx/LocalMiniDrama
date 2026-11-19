@@ -223,9 +223,13 @@ function prepareSubmit(db, log, storyboardId, token, opts = {}) {
       .prepare("SELECT id FROM video_generations WHERE storyboard_id = ? AND provider = ? AND status = 'processing' AND deleted_at IS NULL")
       .get(sbId, PROTOCOL);
     if (busy) throw codedError('generation_in_progress', '这条分镜正在即梦生成中，不会重复提交', { video_generation_id: busy.id });
-    const spec = buildNodeSpec(db, sbId, opts);
-    if (spec.hash !== item.config_hash || spec.key !== item.key) {
-      throw codedError('confirmation_stale', '报价之后分镜或参考图有改动，请重新报价');
+    let spec;
+    for (const quoted of items) {
+      const current = buildNodeSpec(db, quoted.storyboard_id, opts);
+      if (current.hash !== quoted.config_hash || current.key !== quoted.key) {
+        throw codedError('confirmation_stale', '报价之后批次内有分镜或参考图改动，请重新报价');
+      }
+      if (quoted === item) spec = current;
     }
     item.consumed = true;
     db.prepare('UPDATE jimeng_confirmations SET items = ? WHERE token = ?').run(JSON.stringify(items), row.token);

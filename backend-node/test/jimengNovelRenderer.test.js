@@ -245,7 +245,11 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
     storyboardService.saveSegmentIr(db, noopLog, ids.sbLegacy, ir);
     const changed = await post({ storyboard_id: ids.sbLegacy, jimeng_confirmation: c.token });
     assert.equal(changed.body.error.code, 'confirmation_stale');
-    assert.equal((await post({ storyboard_id: ids.sbIr, jimeng_confirmation: c.token })).statusCode, 201, 'unchanged node in the batch still confirmed');
+    const sibling = await post({ storyboard_id: ids.sbIr, jimeng_confirmation: c.token });
+    assert.equal(sibling.statusCode, 409);
+    assert.equal(sibling.body.error.code, 'confirmation_stale');
+    assert.equal(genCount(), 0);
+    assert.equal(cli.count('node', 'run'), 0);
   });
 });
 

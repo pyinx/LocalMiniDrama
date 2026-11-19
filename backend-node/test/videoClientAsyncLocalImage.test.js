@@ -106,11 +106,13 @@ describe('videoClient local image reads do not block the event loop', () => {
     }
   });
 
-  it('loadViduReferenceImageBuffer: missing local file falls back to fetch (returns null without server)', async () => {
+  it('loadViduReferenceImageBuffer: missing local file falls back to fetch (returns null without server)', async (t) => {
+    const fetchAttempt = t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('fetch failed'); });
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lmd-storage-'));
     try {
       const result = await loadViduReferenceImageBuffer(`${LOCAL_BASE}/static/missing.png`, null, dir, fakeLog, 1);
       assert.equal(result, null);
+      assert.equal(fetchAttempt.mock.calls[0].arguments[0], `${LOCAL_BASE}/static/missing.png`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
