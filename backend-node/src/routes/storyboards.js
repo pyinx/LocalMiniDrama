@@ -4,6 +4,8 @@ const response = require('../response');
 const storyboardService = require('../services/storyboardService');
 const episodeStoryboardService = require('../services/episodeStoryboardService');
 const { enforceUniversalStyleLine } = require('../services/universalOmniMultiBeatFormat');
+const videoClient = require('../services/videoClient');
+const segmentReplanService = require('../services/segmentReplanService');
 
 /** 结构化分镜（IR）相关错误：所有权冲突 409，IR 不合法 422；其他错误返回 false 交给调用方 */
 function sendSegmentIrError(res, err) {
@@ -293,12 +295,25 @@ function routes(db, log) {
         response.internalError(res, err.message);
       }
     },
+    /** 按当前视频模型重新规划本集的结构化分镜（拆段、重编号）；旧分镜不动 */
+    replanEpisode: (req, res) => {
+      try {
+        const result = segmentReplanService.replanEpisode(db, log, req.params.episode_id, req.body || {});
+        response.success(res, result);
+      } catch (err) {
+        if (err && err.code === 'no_segment_ir') return response.error(res, 409, 'no_segment_ir', err.message);
+        if (err && err.code === 'not_found') return response.notFound(res, err.message);
+        log.error('storyboards replanEpisode', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
     /** 结构化分镜编辑：校验 IR 并投影旧字段（IR 分镜的唯一编辑入口） */
     updateSegmentIr: (req, res) => {
       try {
         const ir = req.body && req.body.ir;
         if (ir == null) return response.badRequest(res, 'ir 必填');
-        const sb = storyboardService.saveSegmentIr(db, log, req.params.id, ir);
+        const { caps } = videoClient.resolveVideoTarget(db);
+        const sb = storyboardService.saveSegmentIr(db, log, req.params.id, ir, { caps });
         if (!sb) return response.notFound(res, '分镜不存在');
         response.success(res, sb);
       } catch (err) {

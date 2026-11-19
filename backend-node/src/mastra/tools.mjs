@@ -219,7 +219,10 @@ export function executeUpdateStoryboard(db, log, dramaId, input) {
   if (data.imagePrompt != null) patch.image_prompt = data.imagePrompt;
   try {
     // 结构化分镜（IR）与界面走同一入口：整段 IR 校验后投影旧字段
-    if (data.segmentIr != null) service.saveSegmentIr(db, log, data.id, data.segmentIr);
+    if (data.segmentIr != null) {
+      const { caps } = requireService('videoClient.js').resolveVideoTarget(db);
+      service.saveSegmentIr(db, log, data.id, data.segmentIr, { caps });
+    }
     if (Object.keys(patch).length) {
       const updated = service.updateStoryboard(db, log, data.id, patch);
       if (!updated) return fail('更新分镜失败');

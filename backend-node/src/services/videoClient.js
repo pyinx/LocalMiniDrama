@@ -988,6 +988,15 @@ function parseKlingOmniPollVideoUrl(data) {
 }
 
 // ??????????????????listConfigs ?? is_default DESC, priority DESC ??
+/** 当前会实际调用的视频配置、模型、协议与能力（与 callVideoApi 同一解析规则）；无配置时给保守能力 */
+function resolveVideoTarget(db, preferredModel) {
+  const config = getDefaultVideoConfig(db, preferredModel);
+  if (!config) return { config: null, model: null, protocol: null, caps: getVideoCaps({}) };
+  const model = normalizeVolcModel(getModelFromConfig(config, preferredModel), config);
+  const protocol = resolveVideoProtocol(config, preferredModel);
+  return { config, model, protocol, caps: getVideoCaps({ protocol, model }) };
+}
+
 function getDefaultVideoConfig(db, preferredModel) {
   const configs = aiConfigService.listConfigs(db, 'video');
   const active = configs.filter((c) => c.is_active);
@@ -4927,6 +4936,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
 
 module.exports = {
   getDefaultVideoConfig,
+  resolveVideoTarget,
   callVideoApi,
   pollVideoTask,
   buildVideoUrl,

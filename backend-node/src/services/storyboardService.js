@@ -1,5 +1,6 @@
 // 分镜：create, update, delete；帧提示词 get/save
 const { parseSegmentIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
+const { planSegments } = require('./segmentIr/planner');
 const {
   projectLegacyFields,
   ownedFieldChanges,
@@ -155,26 +156,37 @@ function assertNotSegmentIr(db, id) {
 }
 
 /**
- * 保存结构化分镜：校验 → 同一事务写入 IR 与投影字段 → 同步角色关联。
- * @returns 分镜 DTO；分镜不存在返回 null；IR 不合法抛 SegmentIrInvalidError
+ * 保存结构化分镜：校验 →（给了能力表时）单段规划 → 同一事务写入 IR 与投影字段 → 同步角色关联。
+ * 单段规划只做台词耗时下限与时长对齐；需要拆段时原样保存并在 plan_findings 里提示重新规划。
+ * @param {{ caps?: object }} [opts]
+ * @returns 分镜 DTO（规划过则带 plan_findings）；分镜不存在返回 null；IR 不合法抛 SegmentIrInvalidError
  */
-function saveSegmentIr(db, log, id, irInput) {
+function saveSegmentIr(db, log, id, irInput, opts = {}) {
   const sid = Number(id);
   const exists = db.prepare('SELECT id FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(sid);
   if (!exists) return null;
   const parsed = parseSegmentIr(irInput);
   if (!parsed.ok) throw new SegmentIrInvalidError(parsed.errors);
-  const p = projectLegacyFields(parsed.ir);
+  let ir = parsed.ir;
+  let planFindings = null;
+  if (opts.caps) {
+    const plan = planSegments([ir], opts.caps);
+    planFindings = plan.findings;
+    if (plan.segments.length === 1) ir = parseSegmentIr(plan.segments[0].ir).ir;
+    else planFindings.push({ level: 'warn', code: 'needs_replan', where: {}, msg: `这一段按当前模型需要拆成 ${plan.segments.length} 段，请对本集执行重新规划` });
+  }
+  const p = projectLegacyFields(ir);
   const now = new Date().toISOString();
   db.transaction(() => {
     db.prepare(
       `UPDATE storyboards SET segment_ir = ?, segment_ir_version = ?, dialogue = ?, action = ?, duration = ?,
          shot_type = ?, movement = ?, characters = ?, scene_id = ?, updated_at = ? WHERE id = ?`
-    ).run(JSON.stringify(parsed.ir), SEGMENT_IR_VERSION, p.dialogue, p.action, p.duration, p.shot_type, p.movement, p.characters, p.scene_id, now, sid);
+    ).run(JSON.stringify(ir), SEGMENT_IR_VERSION, p.dialogue, p.action, p.duration, p.shot_type, p.movement, p.characters, p.scene_id, now, sid);
     syncStoryboardCharacterLinks(db, sid, JSON.parse(p.characters));
   })();
-  log.info('Storyboard segment IR saved', { id: sid, shots: parsed.ir.shots.length });
-  return getStoryboardById(db, sid);
+  log.info('Storyboard segment IR saved', { id: sid, shots: ir.shots.length });
+  const dto = getStoryboardById(db, sid);
+  return planFindings ? { ...dto, plan_findings: planFindings } : dto;
 }
 
 function deleteStoryboard(db, log, id) {
