@@ -1,0 +1,62 @@
+# Evidence
+
+This file is for people. `hx check` reads only the records in `records/`, which `hx run` and
+`hx review` write. A row typed here never satisfies an acceptance criterion.
+
+## Gates
+
+- Gate 1（需求）：2026-11-18 用户在对话中对需求摘要选择「确认」，同一回答中允许即梦免费路径实测（D8）。确认后据 D8 补入 AC20（直接对应该回答，未改动其他条目），已在下一条消息中告知用户；用户随后回复「确认」，AC20 获得明确同意。
+- 需求变更（restate）：2026-11-18 用户明确要求「把 Wan 这两个 bug 也加进验收标准」→ 新增 AC21、AC22，Facts 与 Scope 第 1 项同步更新，Decisions 记为 D9。
+- 方案复查：两个独立评审代理因 API 限额（429）中断，由作者本人复查（非独立）。发现 R1–R6、C1–C6；用户决定 D10–D13，新增 AC23–AC33，修改 AC7/AC15/AC20，设计与任务重排。待用户重新确认整份 spec 后 `hx confirm --restate`。额度恢复后需在全新上下文重跑独立评审。
+- 第二轮独立评审（两个全新上下文代理，从中断处续跑）：准确性 10 条（2 阻断）、完整性 20 条（1 阻断）；全部并入 spec（D14，AC34–AC40，多条 AC 扩展）；角色设定图版式、防抄袭阈值待用户决定。
+- 整份 spec 确认：2026-11-18 用户选择推荐版式与 15 字阈值（D15）、登录过期判未通过（D16），并选择「确认，开始实现」。
+- 2026-11-19 用户同意 AC18 测试名由 `::no 40-char overlap` 改为 `::no 15-char overlap`（另加检测器自检用例），与 D15 阈值一致；已 `hx confirm --restate`。这两项选择写入后执行 `hx confirm --restate`（需求在 gate 1 之后有变更，用户已逐轮同意）。
+
+## Baseline
+
+Recorded before the first change, so pre-existing failures cannot be blamed on this work.
+
+| Check | Command | Result | Rev | At |
+|---|---|---|---|---|
+| test | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+146d86f6f9e24528 | 2026-11-18T07:11:21Z |
+
+## Criteria
+
+A criterion is met only when each key in its `Required commands` has a current, successful
+`hx run <key> --ac <id>` record. Only the latest record for that AC/key counts; another key
+cannot replace it. Test totals must show nothing failed, skipped, or left unrun unless deferred.
+
+| AC | Criterion | Evidence | Source | Command | Result | Rev | At |
+|---|---|---|---|---|---|---|---|
+| AC1 | test | record 002 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+a72fdbc800b8ae19 | 2026-11-18T12:22:21Z |
+| AC2 | test | record 003 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+a72fdbc800b8ae19 | 2026-11-18T12:22:40Z |
+| AC21 | test | record 004 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+a72fdbc800b8ae19 | 2026-11-18T12:22:46Z |
+| AC22 | test | record 005 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+a72fdbc800b8ae19 | 2026-11-18T12:22:51Z |
+| AC4 | test | record 006 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+79333efad95b7031 | 2026-11-18T12:34:15Z |
+| AC18 | test | record 007 | cli | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | pass | 16a32d4+bd851e980f45905c | 2026-11-19T00:39:01Z |
+<!-- hx run appends a row here for each record it writes. Rows you add are notes, not evidence. -->
+
+## Review
+
+Severity is `blocking`, `should-fix`, `nit`, `question`, or `verdict`. A blocking finding needs a
+disposition before `hx check` passes. A criterion whose Tests say `review` needs a row with `#` set
+to its id, severity `verdict` and disposition `met`. When the table is final, register it with
+`hx review --reviewer independent` (or `self`); that binds it to the current revision.
+
+| # | Finding | Severity | Disposition | Where |
+|---|---|---|---|---|
+| | | | | |
+
+## Deferred
+
+What this change did not do, and the number it maps to in the spec's `Deferred` table. A deferral
+the user did not agree to is not a deferral; say so here.
+
+| # | Item | Reported to user |
+|---|---|---|
+| | | |
+
+## Residual risks
+
+What you could not verify, what you assumed, and what remains unknown. Confidence must match
+the evidence above.
