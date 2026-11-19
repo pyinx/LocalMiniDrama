@@ -64,6 +64,9 @@ describe('jimeng free path (AC20, live)', { skip: live ? false : '需要 JIMENG_
       assert.equal(after.data.balance, before.data.balance, 'balance unchanged');
     } finally {
       aiConfigService.listConfigs = savedList;
+      // estimate 可能在画布绑定后、返回报价前失败，仍按绑定 ID 和唯一标题清理。
+      const binding = path.join(renderer.projectDir(ids.dramaId), '.jimeng-bound');
+      if (!projectId && fs.existsSync(binding)) projectId = fs.readFileSync(binding, 'utf8').trim();
       renderer.setDeps({ runner: null, cfg: null });
       if (projectId) {
         const list = await cli(['canvas', 'list', '--limit', '50']);
