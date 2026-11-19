@@ -1622,6 +1622,33 @@
               <span v-if="videoBurnDialogue" class="video-option-hint">开启后，将把各镜「配音」生成的对白 TTS 按分镜时长对齐并混入整集成片（无对白音频的分镜为静音）。可与「字幕」旁白同时开启，两条音轨会叠混。</span>
             </div>
           </el-form-item>
+          <template v-if="hasStructuredStoryboards">
+            <el-form-item label="台词字幕">
+              <div class="video-option-row">
+                <el-switch v-model="videoDialogueSubtitles" />
+                <span class="video-option-hint">结构化分镜：按镜头时间生成台词字幕（每行 ≤12 字，内心独白/旁白斜体）。本机 ffmpeg 不能烧录时自动改为软字幕。</span>
+              </div>
+            </el-form-item>
+            <el-form-item label="字卡">
+              <div class="video-option-row">
+                <el-switch v-model="videoCards" />
+                <span class="video-option-hint">把分镜里的关键文字以画面上方字卡叠加，不交给视频模型画。</span>
+              </div>
+            </el-form-item>
+            <el-form-item label="背景音乐">
+              <div class="video-option-row">
+                <el-input v-model="videoBgmUrl" placeholder="音乐文件地址（/static/… 或 http）" clearable class="video-watermark-input" />
+                <el-input-number v-model="videoBgmVolumeDb" :min="-40" :max="-6" :step="1" size="small" />
+                <span class="video-option-hint">dB，压在台词下面（默认 -18）</span>
+              </div>
+            </el-form-item>
+            <el-form-item label="审片拼图">
+              <div class="video-option-row">
+                <el-switch v-model="videoReviewSheets" />
+                <span class="video-option-hint">额外输出片段接缝拼图与每秒抽帧拼图，方便检查跳变。</span>
+              </div>
+            </el-form-item>
+          </template>
           <el-form-item label="水印">
             <div class="video-option-row">
               <el-switch v-model="videoWatermark" />
@@ -1670,6 +1697,19 @@
             class="video-preview-player"
             preload="metadata"
           />
+          <div v-if="latestMergePostInfo" class="video-post-info">
+            <div v-if="latestMergePostInfo.subtitles && latestMergePostInfo.subtitles.method !== 'none'">
+              字幕：{{ latestMergePostInfo.subtitles.burned ? '已烧录进画面' : '软字幕（播放器里可开关）' }}
+              <span v-if="latestMergePostInfo.subtitles.reason" class="video-option-hint">{{ latestMergePostInfo.subtitles.reason }}</span>
+            </div>
+            <div v-if="latestMergePostInfo.sheets && (latestMergePostInfo.sheets.seams || latestMergePostInfo.sheets.frames)">
+              审片：
+              <el-link v-if="latestMergePostInfo.sheets.seams" type="primary" :href="'/static/' + latestMergePostInfo.sheets.seams" target="_blank">接缝拼图</el-link>
+              <el-link v-if="latestMergePostInfo.sheets.frames" type="primary" :href="'/static/' + latestMergePostInfo.sheets.frames" target="_blank" style="margin-left:10px">每秒抽帧</el-link>
+            </div>
+            <FindingList v-if="latestMergePostInfo.warnings && latestMergePostInfo.warnings.length" :findings="latestMergePostInfo.warnings" />
+            <el-alert v-if="latestMergePostInfo.error" type="warning" :title="'后期未完成：' + latestMergePostInfo.error" show-icon :closable="false" />
+          </div>
         </div>
       </section>
     </main>
@@ -2679,6 +2719,8 @@ import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEdi
 import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
 import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
 import VariantEditor from '@/components/VariantEditor.vue'
+import FindingList from '@/components/FindingList.vue'
+import { videoMergesAPI } from '@/api/videoMerges'
 import { groupFindings, findingWhere } from '@/utils/segmentUi'
 import {
   generationStyleOptions,
@@ -2817,6 +2859,11 @@ const videoQuality = ref('high')
 const videoSubtitle = ref(false)
 /** 合成整集时把各镜对白 TTS（audio_local_path）按分镜时长对齐并混入成片 */
 const videoBurnDialogue = ref(false)
+const videoDialogueSubtitles = ref(true)
+const videoCards = ref(true)
+const videoBgmUrl = ref('')
+const videoBgmVolumeDb = ref(-18)
+const videoReviewSheets = ref(true)
 const videoWatermark = ref(false)
 /** 水印开启时烧录到成片右下角 */
 const videoWatermarkText = ref('')
@@ -2835,6 +2882,19 @@ function trackFilmCreateAction(_action, _payload = {}) {
   // 单机版：无埋点上报
 }
 /** 当前集合成视频的播放地址（用于按钮下方预览） */
+/** 本集最近一次合成的结构化后期结果（字幕方式与降级原因、审片拼图、告警） */
+const latestMergePostInfo = ref(null)
+async function loadLatestMergePostInfo(epId) {
+  latestMergePostInfo.value = null
+  if (!epId) return
+  try {
+    const list = await videoMergesAPI.list({ episode_id: epId })
+    const first = Array.isArray(list) ? list[0] : null
+    if (first && first.post_info && Number(epId) === Number(currentEpisodeId.value)) latestMergePostInfo.value = first.post_info
+  } catch (_) {}
+}
+watch(() => [currentEpisodeId.value, currentEpisode.value?.video_url], ([epId]) => loadLatestMergePostInfo(epId), { immediate: true })
+
 const currentEpisodeVideoUrl = computed(() => {
   const url = currentEpisode.value?.video_url
   if (!url || !String(url).trim()) return ''
@@ -7103,6 +7163,14 @@ function getFinalizeMergeOptions() {
     burn_narration_subtitles: !!videoSubtitle.value,
     burn_dialogue_audio: !!videoBurnDialogue.value,
     watermark_text: videoWatermark.value ? String(videoWatermarkText.value || '').trim().slice(0, 200) : '',
+    ...(hasStructuredStoryboards.value
+      ? {
+          dialogue_subtitles: !!videoDialogueSubtitles.value,
+          cards: !!videoCards.value,
+          review_sheets: !!videoReviewSheets.value,
+          bgm: String(videoBgmUrl.value || '').trim() ? { url: String(videoBgmUrl.value).trim(), volume_db: videoBgmVolumeDb.value } : undefined,
+        }
+      : {}),
   }
 }
 

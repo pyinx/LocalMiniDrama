@@ -30,6 +30,7 @@ function rowToItem(r) {
     duration: r.duration ?? undefined,
     task_id: r.task_id,
     error_msg: r.error_msg ?? undefined,
+    post_info: (() => { try { return r.post_info ? JSON.parse(r.post_info) : undefined; } catch (_) { return undefined; } })(),
     created_at: r.created_at,
     completed_at: r.completed_at,
   };
@@ -270,11 +271,18 @@ async function processVideoMerge(db, log, mergeId, baseUrl) {
   } catch (_) {
     mergeOpts = {};
   }
-  const postNeed =
-    !!mergeOpts.burn_narration_subtitles
-    || !!mergeOpts.burn_dialogue_audio
-    || !!(mergeOpts.watermark_text && String(mergeOpts.watermark_text).trim());
-  if (mergedRelativePath && ffmpegAvailable && postNeed) {
+  const postKind = choosePostProcessor(db, scenes, mergeOpts);
+  const structuredPost = require('./structuredEpisodePost');
+  if (mergedRelativePath && ffmpegAvailable && postKind === 'structured') {
+    // 结构化剧集：保留原音轨，逐句台词轨替代旧的 burn_dialogue_audio，两者不同时混入
+    const mergedAbsPath = path.join(storageRoot, mergedRelativePath.replace(/\//g, path.sep));
+    const { ffprobeDurationSec } = require('./mergedEpisodePostProcess');
+    const clipDurations = localPaths.length === scenes.length ? localPaths.map((p) => ffprobeDurationSec(p) || 0) : [];
+    const post = await structuredPost.runStructuredEpisodePost(db, log, { mergedAbsPath, storageRoot, scenes, clipDurations, episodeId, mergeOpts });
+    if (post.info) db.prepare('UPDATE video_merges SET post_info = ? WHERE id = ?').run(JSON.stringify({ ...post.info, error: post.ok ? undefined : post.error }), mergeId);
+    if (post.ok && post.relativePath) mergedRelativePath = post.relativePath;
+    else log.warn('Video merge: structured post-process failed', { merge_id: mergeId, err: post.error });
+  } else if (mergedRelativePath && ffmpegAvailable && postKind === 'legacy') {
     const mergedAbsPath = path.join(storageRoot, mergedRelativePath.replace(/\//g, path.sep));
     if (fs.existsSync(mergedAbsPath)) {
       const mergedPP = require('./mergedEpisodePostProcess');
@@ -311,7 +319,20 @@ async function processVideoMerge(db, log, mergeId, baseUrl) {
   }
 }
 
+/**
+ * 合成后走哪条后期：结构化剧集（任一分镜有 IR）走结构化后期，其中逐句台词轨替代旧的 burn_dialogue_audio；
+ * 其余沿用原后期；没有任何后期选项返回 null。
+ */
+function choosePostProcessor(db, scenes, mergeOpts) {
+  const o = mergeOpts || {};
+  const legacyNeed = !!o.burn_narration_subtitles || !!o.burn_dialogue_audio || !!(o.watermark_text && String(o.watermark_text).trim());
+  const structuredNeed = legacyNeed || !!(o.dialogue_subtitles || o.cards || o.review_sheets || (o.bgm && o.bgm.url));
+  if (structuredNeed && require('./structuredEpisodePost').isStructuredEpisode(db, scenes)) return 'structured';
+  return legacyNeed ? 'legacy' : null;
+}
+
 module.exports = {
+  choosePostProcessor,
   list,
   getById,
   create,

@@ -378,6 +378,7 @@ function ensureAllColumns(database) {
   // --- video_merges ---
   ensureColumns(database, 'video_merges', [
     { name: 'episode_id',   type: 'INTEGER' },
+    { name: 'post_info',    type: 'TEXT' },   // 结构化后期结果：字幕方式/降级原因、审片拼图、告警
     { name: 'drama_id',     type: 'INTEGER' },
     { name: 'title',        type: 'TEXT' },
     { name: 'provider',     type: 'TEXT' },

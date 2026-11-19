@@ -833,6 +833,13 @@ function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
       watermark_text: (body && body.watermark_text != null)
         ? String(body.watermark_text).trim().slice(0, 200)
         : '',
+      // 结构化剧集的成片选项（缺省时行为与原来一致）
+      dialogue_subtitles: !!(body && body.dialogue_subtitles),
+      cards: !!(body && body.cards),
+      review_sheets: !!(body && body.review_sheets),
+      bgm: body && body.bgm && body.bgm.url
+        ? { url: String(body.bgm.url), volume_db: Number.isFinite(Number(body.bgm.volume_db)) ? Number(body.bgm.volume_db) : undefined }
+        : undefined,
     },
   };
   const created = videoMergeService.create(db, log, mergeReq);

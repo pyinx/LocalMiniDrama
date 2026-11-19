@@ -79,7 +79,25 @@ function hasLocalFfmpeg() {
   return false;
 }
 
+let filterCache = null;
+/** 本机 ffmpeg 支持的滤镜名集合（缓存）；取不到时返回空集合 */
+function probeFfmpegFilters() {
+  if (filterCache) return filterCache;
+  const set = new Set();
+  try {
+    const { spawnSync } = require('child_process');
+    const r = spawnSync(getFfmpegPath(), ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+    for (const line of String(r.stdout || '').split('\n')) {
+      const m = line.match(/^\s*[A-Z.|]{2,3}\s+(\w+)\s+/);
+      if (m) set.add(m[1]);
+    }
+  } catch (_) {}
+  filterCache = set;
+  return set;
+}
+
 module.exports = {
+  probeFfmpegFilters,
   getFfmpegPath,
   getFfprobePath,
   hasLocalFfmpeg,
