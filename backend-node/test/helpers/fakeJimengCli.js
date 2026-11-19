@@ -49,8 +49,8 @@ function fakeJimengCli(opts = {}) {
     if (a === 'node' && b === 'result') {
       const n = node(key);
       if (!n.runId || !n.done.has(n.runId)) return ok({ items: [{ key, status: n.runId ? 'running' : 'idle' }] });
-      const rel = path.join('out', `${key.replace('/', '_')}_${n.runId}.mp4`);
-      fs.mkdirSync(path.join(ctx.cwd, 'out'), { recursive: true });
+      const rel = path.join(path.relative(ctx.cwd, arg(args, '--out')), `${key.replace('/', '_')}_${n.runId}.mp4`);
+      fs.mkdirSync(arg(args, '--out'), { recursive: true });
       fs.writeFileSync(path.join(ctx.cwd, rel), `video-${n.runId}`);
       return ok({ items: [{ key, status: 'succeeded', localPath: rel, credits: { deducted: 200 } }] });
     }

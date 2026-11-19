@@ -103,12 +103,12 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
     assert.equal(none.statusCode, 409);
     assert.equal(none.body.error.code, 'confirmation_required');
     assert.equal(genCount(), 0);
-    const { token } = await estimate();
+    const { token, items } = await estimate();
     const ok = await post({ storyboard_id: ids.sbIr, jimeng_confirmation: token });
     assert.equal(ok.statusCode, 201, JSON.stringify(ok.body));
     const row = gen(ok.body.data.id);
     assert.equal(row.provider, 'jimeng_novel');
-    assert.equal(row.provider_task_id, 'E01/S01', 'node key stored before node run');
+    assert.equal(row.provider_task_id, items[0].key, 'node key stored before node run');
     assert.equal(cli.count('node', 'run'), 0, 'run happens only in the background step');
     const legacy = await post({ storyboard_id: ids.sbLegacy, jimeng_confirmation: token });
     assert.equal(legacy.body.error.code, 'confirmation_required', 'storyboard not in this estimate');
@@ -133,8 +133,8 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
 
   it('refs become local paths', async () => {
     setup();
-    await estimate();
-    const create = cli.nodes.get('E01/S01').args;
+    const quote = await estimate();
+    const create = cli.nodes.get(quote.items[0].key).args;
     const refs = create.filter((_, i) => create[i - 1] === '--ref');
     assert.ok(refs.length >= 2);
     for (const r of refs) {
@@ -174,7 +174,7 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
     setup({ onRun: () => ({ status: 'error', data: null, error: { code: 'SUBMISSION_UNKNOWN', message: '提交结果不确定' } }) });
     const { token } = await estimate();
     const res = await post({ storyboard_id: ids.sbIr, jimeng_confirmation: token });
-    cli.finish('E01/S01');
+    cli.finish(gen(res.body.data.id).provider_task_id);
     await renderer.runSubmitted(db, noopLog, res.body.data.id);
     const row = gen(res.body.data.id);
     assert.equal(row.status, 'completed');
@@ -190,9 +190,9 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
     renderer.runSubmitted(db, noopLog, res.body.data.id);
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(cli.count('node', 'run'), 1);
-    assert.equal(gen(res.body.data.id).provider_task_id, 'E01/S01');
+    assert.equal(gen(res.body.data.id).provider_task_id, cli.calls.find(a => a[1] === 'run')[3]);
     // 重启：startup 恢复只查结果
-    cli.finish('E01/S01');
+    cli.finish(gen(res.body.data.id).provider_task_id);
     await videoService.resumePollForVideoGeneration(db, noopLog, res.body.data.id);
     assert.equal(gen(res.body.data.id).status, 'completed');
     assert.equal(cli.count('node', 'run'), 1, 'restart polls, does not resubmit');
@@ -201,13 +201,13 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
   it('rerender polls new run', async () => {
     setup();
     const first = await post({ storyboard_id: ids.sbIr, jimeng_confirmation: (await estimate()).token });
-    cli.finish('E01/S01');
+    cli.finish(gen(first.body.data.id).provider_task_id);
     await renderer.runSubmitted(db, noopLog, first.body.data.id);
     const g1 = gen(first.body.data.id);
     assert.equal(g1.status, 'completed');
 
     const second = await post({ storyboard_id: ids.sbIr, jimeng_confirmation: (await estimate()).token });
-    cli.finish('E01/S01');
+    cli.finish(gen(second.body.data.id).provider_task_id);
     await renderer.runSubmitted(db, noopLog, second.body.data.id);
     const g2 = gen(second.body.data.id);
     assert.notEqual(g2.run_key, g1.run_key);
@@ -216,13 +216,131 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
 
     // 一条仍记着旧 run 的进行中记录（例如重启后恢复）不能拿到新 run 的结果
     const now = new Date().toISOString();
-    const stale = Number(db.prepare("INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, provider_task_id, run_key, status, created_at, updated_at) VALUES (?, ?, 'jimeng_novel', 'p', 'E01/S01', ?, 'processing', ?, ?)")
-      .run(ids.dramaId, ids.sbIr, g1.run_key, now, now).lastInsertRowid);
+    const stale = Number(db.prepare("INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, provider_task_id, run_key, status, created_at, updated_at) VALUES (?, ?, 'jimeng_novel', 'p', ?, ?,  'processing', ?, ?)")
+      .run(ids.dramaId, ids.sbIr, g2.provider_task_id, g1.run_key, now, now).lastInsertRowid);
     await renderer.pollOnce(db, noopLog, stale);
     assert.equal(gen(stale).status, 'failed');
     assert.equal(gen(stale).local_path, null);
     assert.match(gen(stale).error_msg, /取代/);
   });
+
+  it('competing estimates keep separate nodes, prompts and reference bytes', async () => {
+    setup();
+    const [a, b] = await Promise.all([estimate(), estimate()]);
+    assert.notEqual(a.items[0].key, b.items[0].key);
+    assert.equal(cli.count('init'), 1);
+    const args = cli.nodes.get(a.items[0].key).args;
+    const promptFile = create => create[create.indexOf('--prompt-file') + 1].split('#')[0];
+    assert.notEqual(promptFile(args), promptFile(cli.nodes.get(b.items[0].key).args));
+    const refs = args.filter((_, i) => args[i - 1] === '--ref').map(x => x.split('=file:')[1]);
+    const id = renderer.prepareSubmit(db, noopLog, ids.sbIr, a.token);
+    const changed = sampleIr(ids);
+    changed.shots[0].action = '人事把协议重重拍在桌上';
+    storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, changed);
+    const c = await estimate();
+    const readPrompt = create => fs.readFileSync(path.join(renderer.projectDir(ids.dramaId), promptFile(create)), 'utf8');
+    assert.notEqual(readPrompt(args), readPrompt(cli.nodes.get(c.items[0].key).args));
+    assert.equal(readPrompt(args), `## 正文\n${gen(id).prompt}\n`);
+    writeImage('p/characters/lin.png', 'updated');
+    assert.ok(refs.every(p => fs.readFileSync(p, 'utf8') === 'img'));
+    await renderer.runSubmitted(db, noopLog, id);
+    assert.equal(cli.count('node', 'create'), 3);
+    assert.equal(cli.calls.find(c => c[1] === 'run')[3], a.items[0].key);
+  });
+
+  it('restart waits through a failed ownership query and rejects mismatched results', async () => {
+    setup();
+    const q = await estimate();
+    const id = renderer.prepareSubmit(db, noopLog, ids.sbIr, q.token);
+    await renderer.runSubmitted(db, noopLog, id);
+    const key = q.items[0].key;
+    cli.finish(key);
+    renderer.setDeps({ runner: async (args, ctx) => args[1] === 'get'
+      ? { status: 'error', error: { code: 'TIMEOUT' } } : cli.runner(args, ctx) });
+    const prior = cli.count('node', 'result');
+    assert.equal(await renderer.pollOnce(db, noopLog, id), 'pending');
+    assert.equal(cli.count('node', 'result'), prior);
+    for (const wrong of [{ key: 'other' }, { runId: 'other' }]) {
+      renderer.setDeps({ runner: async (args, ctx) => {
+        const r = await cli.runner(args, ctx);
+        if (args[1] === 'result') Object.assign(r.data.items[0], wrong);
+        return r;
+      } });
+      assert.equal(await renderer.pollOnce(db, noopLog, id), 'pending');
+      assert.equal(gen(id).local_path, null);
+    }
+    renderer.setDeps({ runner: cli.runner });
+    await videoService.resumePollForVideoGeneration(db, noopLog, id);
+    assert.equal(gen(id).status, 'completed');
+    assert.equal(cli.count('node', 'run'), 1);
+  });
+
+  it('legacy shared node with unknown run cannot adopt the current result', async () => {
+    setup();
+    const q = await estimate();
+    const id = renderer.prepareSubmit(db, noopLog, ids.sbIr, q.token);
+    db.prepare("UPDATE video_generations SET provider_task_id = 'E01/S01', compiled_json = '{}', run_key = 'submitting' WHERE id = ?").run(id);
+    await videoService.resumePollForVideoGeneration(db, noopLog, id);
+    assert.equal(gen(id).status, 'failed');
+    assert.equal(gen(id).local_path, null);
+    assert.equal(cli.count('node', 'result'), 0);
+    assert.equal(cli.count('node', 'run'), 0);
+  });
+
+  for (const identified of [true, false]) {
+    it(`legacy result with ${identified ? 'explicit' : 'missing'} run identity`, async () => {
+      setup();
+      const q = await estimate();
+      const id = renderer.prepareSubmit(db, noopLog, ids.sbIr, q.token);
+      const key = 'E01/S01';
+      await cli.runner(['node', 'run', '--key', key]);
+      cli.finish(key);
+      const runId = cli.nodes.get(key).runId;
+      db.prepare("UPDATE video_generations SET provider_task_id = ?, compiled_json = '{}', run_key = ? WHERE id = ?").run(key, runId, id);
+      renderer.setDeps({ runner: async (args, ctx) => {
+        const r = await cli.runner(args, ctx);
+        if (identified && args[1] === 'result') r.data.items[0].runId = runId;
+        return r;
+      } });
+      await videoService.resumePollForVideoGeneration(db, noopLog, id);
+      assert.equal(gen(id).status, identified ? 'completed' : 'failed');
+      assert.equal(Boolean(gen(id).local_path), identified);
+      assert.equal(cli.count('node', 'run'), 1);
+    });
+  }
+
+  it('external static URL and symlinked reference never reach node creation', async () => {
+    setup();
+    db.prepare('UPDATE characters SET local_path = NULL, image_url = ? WHERE id = ?').run('https://external.example/static/p/characters/lin.png', ids.linId);
+    await assert.rejects(estimate(), { code: 'reference_not_local' });
+    fs.symlinkSync(path.join(storage, 'p/characters/lin.png'), path.join(storage, 'ref.png'));
+    db.prepare('UPDATE characters SET local_path = ? WHERE id = ?').run('ref.png', ids.linId);
+    await assert.rejects(estimate(), { code: 'reference_outside_storage' });
+    assert.equal(cli.count('node', 'create'), 0);
+  });
+
+  for (const redirect of ['absolute', 'symlink']) {
+    it(`rejects ${redirect} output outside generation directory`, async () => {
+      setup();
+      const q = await estimate();
+      const id = renderer.prepareSubmit(db, noopLog, ids.sbIr, q.token);
+      cli.finish(q.items[0].key);
+      const other = path.join(storage, writeImage('unrelated.mp4', 'unrelated'));
+      renderer.setDeps({ runner: async (args, ctx) => {
+        const r = await cli.runner(args, ctx);
+        if (args[1] === 'result') {
+          const link = path.join(args[args.indexOf('--out') + 1], 'link.mp4');
+          if (redirect === 'symlink') fs.symlinkSync(other, link);
+          r.data.items[0].localPath = redirect === 'symlink' ? link : other;
+        }
+        return r;
+      } });
+      await renderer.runSubmitted(db, noopLog, id);
+      assert.equal(gen(id).status, 'failed');
+      assert.equal(gen(id).local_path, null);
+      assert.equal(db.prepare('SELECT video_url FROM storyboards WHERE id = ?').get(ids.sbIr).video_url, null);
+    });
+  }
 
   it('episode estimate single token', async () => {
     setup();
@@ -264,6 +382,8 @@ describe('jimeng CLI output parsing', () => {
     const e = parseEnvelope('{"context":{},"data":null,"error":{"code":"INVALID_ARGUMENT","message":"x"},"status":"error"}', false);
     assert.equal(e.error.code, 'INVALID_ARGUMENT');
     assert.equal(parseEnvelope('{"logged_in":true}', false), null, 'bare object on a failed exit is not success');
+    assert.equal(parseEnvelope('{"status":"success","data":{}}', false), null);
+    assert.equal(parseEnvelope('{"status":"error","error":"bad"}'), null);
     assert.equal(parseEnvelope('not json'), null);
   });
 });

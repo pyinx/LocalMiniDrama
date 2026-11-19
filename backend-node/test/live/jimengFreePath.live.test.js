@@ -51,11 +51,11 @@ describe('jimeng free path (AC20, live)', { skip: live ? false : '需要 JIMENG_
       projectId = fs.readFileSync(path.join(renderer.projectDir(ids.dramaId), '.jimeng-bound'), 'utf8').trim();
       assert.ok(projectId, 'canvas created and bound');
       assert.equal(c.items.length, 1);
-      assert.equal(c.items[0].key, 'E01/S01');
+      assert.match(c.items[0].key, /^E01\/S01-/);
       assert.ok(typeof c.total === 'number' && c.total > 0, 'estimate returned a price: ' + JSON.stringify(c));
       assert.ok(c.token);
 
-      const node = await cli(['node', 'get', '--key', 'E01/S01'], { cwd: renderer.projectDir(ids.dramaId) });
+      const node = await cli(['node', 'get', '--key', c.items[0].key], { cwd: renderer.projectDir(ids.dramaId) });
       assert.equal(node.status, 'success');
       const refs = node.data.config.generation.references || [];
       assert.ok(refs.length >= 2, 'local reference images uploaded: ' + JSON.stringify(refs));

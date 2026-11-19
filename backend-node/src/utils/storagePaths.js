@@ -2,6 +2,7 @@
  * 存储根内文件的 URL / 本地路径换算（结构化分镜编译、即梦 file: 参考、逐句 TTS 共用）。
  */
 const path = require('path');
+const fs = require('fs');
 
 function storageRoot(cfg) {
   const p = (cfg && cfg.storage && cfg.storage.local_path) || './data/storage';
@@ -27,10 +28,14 @@ function toPublicUrl(cfg, imageUrl, localPath) {
 function assertInsideStorage(cfg, absPath) {
   const root = path.resolve(storageRoot(cfg));
   const target = path.resolve(absPath);
-  if (target !== root && !target.startsWith(root + path.sep)) {
-    const err = new Error('文件不在存储目录内');
-    err.code = 'path_outside_storage';
-    throw err;
+  const rel = path.relative(root, target);
+  const outside = () => Object.assign(new Error('文件不在指定存储目录内'), { code: 'path_outside_storage' });
+  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) throw outside();
+  // 根本身由配置指定；其下每一级（包括尚未创建文件的父目录）均不能经符号链接重定向。
+  let current = root;
+  for (const part of rel.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) throw outside();
   }
   return target;
 }
@@ -42,7 +47,7 @@ function toLocalPath(cfg, urlOrPath) {
   const base = filesBaseUrl(cfg);
   let rel = null;
   if (base && s.startsWith(base + '/')) rel = s.slice(base.length + 1);
-  else if (s.includes('/static/')) rel = s.split('/static/')[1];
+  else if (s.startsWith('/static/')) rel = s.slice('/static/'.length);
   else if (/^https?:\/\//i.test(s)) return null;
   else if (path.isAbsolute(s)) return assertInsideStorage(cfg, s);
   else rel = s;

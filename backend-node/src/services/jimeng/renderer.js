@@ -14,7 +14,7 @@ const { createRunner } = require('./cli');
 const taskService = require('../taskService');
 const storageLayout = require('../storageLayout');
 const segmentCompileService = require('../segmentCompileService');
-const { storageRoot, toLocalPath, filesBaseUrl } = require('../../utils/storagePaths');
+const { storageRoot, toLocalPath, filesBaseUrl, assertInsideStorage } = require('../../utils/storagePaths');
 
 const PROTOCOL = 'jimeng_novel';
 const STATUS_TTL_MS = 60 * 1000;
@@ -89,12 +89,19 @@ async function assertAvailable(db) {
 
 /** 每部剧一个即梦画布，绑定目录在存储根下 */
 function projectDir(dramaId) {
-  return path.join(storageRoot(cfgNow()), 'jimeng', `drama_${Number(dramaId)}`);
+  return assertInsideStorage(cfgNow(), path.join(storageRoot(cfgNow()), 'jimeng', `drama_${Number(dramaId)}`));
 }
 
+const initializing = new Map();
 async function ensureProject(db, dramaId) {
   const dir = projectDir(dramaId);
-  fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true });
+  if (!initializing.has(dir)) initializing.set(dir, initProject(db, dramaId, dir).finally(() => initializing.delete(dir)));
+  return initializing.get(dir);
+}
+
+async function initProject(db, dramaId, dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of ['.jimeng/config.json', '.jimeng-bound']) assertInsideStorage(cfgNow(), path.join(dir, name));
   if (fs.existsSync(path.join(dir, '.jimeng', 'config.json')) || fs.existsSync(path.join(dir, '.jimeng-bound'))) return dir;
   const drama = db.prepare('SELECT title FROM dramas WHERE id = ?').get(Number(dramaId));
   const r = await runnerFor(db)(['init', '--title', (drama && drama.title) || `剧 ${dramaId}`], { cwd: dir });
@@ -107,10 +114,6 @@ function pad(n) {
   return String(Math.max(0, Number(n) || 0)).padStart(2, '0');
 }
 
-function fileHash(abs) {
-  return crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
-}
-
 function fileRef(cfg, url) {
   let abs;
   try {
@@ -120,6 +123,7 @@ function fileRef(cfg, url) {
   }
   if (!abs) throw codedError('reference_not_local', `参考图不是本地文件（${String(url).slice(0, 80)}），请先把图片保存到本地`);
   if (!fs.existsSync(abs)) throw codedError('reference_missing', `参考图文件不存在：${path.basename(abs)}`);
+  if (!fs.statSync(abs).isFile()) throw codedError('reference_not_local', '参考图必须是普通文件');
   return abs;
 }
 
@@ -139,29 +143,40 @@ function buildNodeSpec(db, storyboardId, opts = {}) {
   try { ratio = (JSON.parse(drama.metadata || '{}').aspect_ratio) || ratio; } catch (_) {}
   const cfg = cfgNow();
   const c = r.compiled;
-  const key = `E${pad(sb.episode_number)}/S${pad(sb.storyboard_number)}`;
-  const refs = c.refs.map((x) => ({ alias: x.alias, abs: fileRef(cfg, x.url) }));
-  const frames = {};
+  const files = [];
+  const addFile = (flag, url, alias = '') => {
+    const abs = fileRef(cfg, url);
+    const bytes = fs.readFileSync(abs);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    files.push({ flag, alias, digest, ext: path.extname(abs), bytes: opts.snapshot ? bytes : undefined });
+  };
+  c.refs.forEach(x => addFile('--ref', x.url, x.alias));
   if (c.request.mode === 'first_last') {
-    frames.first = fileRef(cfg, c.request.first_frame_url);
-    if (c.request.last_frame_url) frames.last = fileRef(cfg, c.request.last_frame_url);
+    addFile('--first-frame', c.request.first_frame_url);
+    if (c.request.last_frame_url) addFile('--last-frame', c.request.last_frame_url);
   }
   const resolution = opts.resolution || '720p';
-  const promptRel = path.join('prompts', `${key.replace('/', '_')}.md`);
-  const args = ['node', 'create', '--key', key, '--type', 'video', '--model', r.target.model, '--prompt-file', `${promptRel}#正文`];
-  refs.forEach((x) => args.push('--ref', `${x.alias}=file:${x.abs}`));
-  if (frames.first) args.push('--first-frame', `file:${frames.first}`);
-  if (frames.last) args.push('--last-frame', `file:${frames.last}`);
-  args.push('--param', `duration=${c.duration_s}`, '--param', `ratio=${ratio}`, '--param', `resolution=${resolution}`);
-  const hash = crypto
-    .createHash('sha256')
-    .update(JSON.stringify({ model: r.target.model, prompt: c.prompt, refs: refs.map((x) => [x.alias, fileHash(x.abs)]), frames: Object.values(frames).map(fileHash), duration: c.duration_s, ratio, resolution }))
-    .digest('hex');
-  return { key, hash, args, prompt: c.prompt, promptRel, sb, model: r.target.model, duration: c.duration_s, compiled: r };
+  const params = ['--param', `duration=${c.duration_s}`, '--param', `ratio=${ratio}`, '--param', `resolution=${resolution}`];
+  const hash = crypto.createHash('sha256').update(JSON.stringify([sb, r.target.model, c.prompt, params,
+    files.map(({ flag, alias, digest, ext }) => [flag, alias, digest, ext])])).digest('hex');
+  return { hash, files, params, prompt: c.prompt, sb, model: r.target.model, duration: c.duration_s, compiled: r };
 }
 
 async function writeNode(db, dir, spec) {
-  fs.writeFileSync(path.join(dir, spec.promptRel), `## 正文\n${spec.prompt}\n`, 'utf8');
+  const id = crypto.randomUUID();
+  spec.key = `E${pad(spec.sb.episode_number)}/S${pad(spec.sb.storyboard_number)}-${id}`;
+  const rel = path.join('quotes', id);
+  const snapshot = assertInsideStorage(cfgNow(), path.join(dir, rel));
+  fs.mkdirSync(snapshot, { recursive: true });
+  const promptRel = path.join(rel, 'prompt.md');
+  fs.writeFileSync(path.join(dir, promptRel), `## 正文\n${spec.prompt}\n`, { flag: 'wx' });
+  spec.args = ['node', 'create', '--key', spec.key, '--type', 'video', '--model', spec.model, '--prompt-file', `${promptRel}#正文`];
+  spec.files.forEach(({ flag, alias, bytes, ext }, i) => {
+    const dest = path.join(snapshot, `${i}${ext}`);
+    fs.writeFileSync(dest, bytes, { flag: 'wx' });
+    spec.args.push(flag, `${alias ? alias + '=' : ''}file:${dest}`);
+  });
+  spec.args.push(...spec.params);
   const r = await runnerFor(db)(spec.args, { cwd: dir });
   if (r.status !== 'success') throw cliError(r, `即梦节点 ${spec.key} 保存失败`);
 }
@@ -174,7 +189,7 @@ async function estimate(db, log, episodeId, storyboardIds, opts = {}) {
   await assertAvailable(db);
   const ids = [...new Set((storyboardIds || []).map(Number).filter(Boolean))];
   if (!ids.length) throw codedError('bad_request', '请选择要报价的分镜');
-  const specs = ids.map((id) => buildNodeSpec(db, id, opts));
+  const specs = ids.map((id) => buildNodeSpec(db, id, { ...opts, snapshot: true }));
   if (specs.some((s) => Number(s.sb.episode_id) !== Number(episodeId))) throw codedError('bad_request', '分镜不属于这一集');
   const dir = await ensureProject(db, specs[0].sb.drama_id);
   for (const spec of specs) await writeNode(db, dir, spec);
@@ -186,6 +201,7 @@ async function estimate(db, log, episodeId, storyboardIds, opts = {}) {
     storyboard_id: s.sb.id,
     key: s.key,
     config_hash: s.hash,
+    snapshot: true,
     credits: byKey.get(s.key) ? byKey.get(s.key).estimatedCredits : null,
     price_status: byKey.get(s.key) ? byKey.get(s.key).priceStatus : 'unknown',
     consumed: false,
@@ -226,7 +242,7 @@ function prepareSubmit(db, log, storyboardId, token, opts = {}) {
     let spec;
     for (const quoted of items) {
       const current = buildNodeSpec(db, quoted.storyboard_id, opts);
-      if (current.hash !== quoted.config_hash || current.key !== quoted.key) {
+      if (current.hash !== quoted.config_hash || !quoted.snapshot) {
         throw codedError('confirmation_stale', '报价之后批次内有分镜或参考图改动，请重新报价');
       }
       if (quoted === item) spec = current;
@@ -235,11 +251,11 @@ function prepareSubmit(db, log, storyboardId, token, opts = {}) {
     db.prepare('UPDATE jimeng_confirmations SET items = ? WHERE token = ?').run(JSON.stringify(items), row.token);
     const task = taskService.createTask(db, log, 'video_generation', String(spec.sb.drama_id));
     const now = new Date().toISOString();
-    const compiledJson = JSON.stringify({ family: 'jimeng', protocol: PROTOCOL, model: spec.model, node_key: spec.key, node_args: spec.args, prompt_rel: spec.promptRel, request: spec.compiled.compiled.request, findings: spec.compiled.findings });
+    const compiledJson = JSON.stringify({ family: 'jimeng', protocol: PROTOCOL, model: spec.model, node_key: item.key, quoted_node: true, request: spec.compiled.compiled.request, findings: spec.compiled.findings });
     const info = db.prepare(
       `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, model, duration, provider_task_id, compiled_json, status, task_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?)`
-    ).run(spec.sb.drama_id, sbId, PROTOCOL, spec.prompt, spec.model, spec.duration, spec.key, compiledJson, task.id, now, now);
+    ).run(spec.sb.drama_id, sbId, PROTOCOL, spec.prompt, spec.model, spec.duration, item.key, compiledJson, task.id, now, now);
     return Number(info.lastInsertRowid);
   })();
 }
@@ -249,20 +265,32 @@ function genRow(db, genId) {
 }
 
 function failGen(db, row, message) {
+  if (genRow(db, row.id)?.status !== 'processing') return;
   const now = new Date().toISOString();
   db.prepare("UPDATE video_generations SET status = 'failed', error_msg = ?, updated_at = ? WHERE id = ?").run(String(message).slice(0, 500), now, row.id);
   if (row.task_id) taskService.updateTaskError(db, row.task_id, message);
 }
 
+function outputDir(dir, row) {
+  return assertInsideStorage(cfgNow(), path.join(dir, 'out', String(row.id)));
+}
+
 function finalizeGen(db, log, row, dir, localPath) {
+  if (genRow(db, row.id)?.status !== 'processing') return;
   const cfg = cfgNow();
-  const src = path.resolve(dir, localPath);
-  if (!fs.existsSync(src)) return failGen(db, row, '即梦返回的视频文件不存在：' + path.basename(src));
   const sub = storageLayout.getProjectStorageSubdir(db, row.drama_id);
-  const relDir = sub ? `${String(sub).replace(/\\/g, '/')}/videos` : 'videos';
-  fs.mkdirSync(path.join(storageRoot(cfg), relDir), { recursive: true });
-  const rel = `${relDir}/jm_${row.id}_${Date.now()}${path.extname(src) || '.mp4'}`;
-  fs.copyFileSync(src, path.join(storageRoot(cfg), rel));
+  let rel;
+  try {
+    const src = assertInsideStorage({ storage: { local_path: outputDir(dir, row) } }, path.resolve(dir, localPath));
+    if (!/\.(mp4|mov|webm|m4v)$/i.test(src)) throw new Error('结果不是支持的视频文件');
+    if (!fs.statSync(src).isFile()) throw new Error('结果不是普通文件');
+    const relDir = path.join(sub, 'videos');
+    fs.mkdirSync(assertInsideStorage(cfg, path.join(storageRoot(cfg), relDir)), { recursive: true });
+    rel = `${sub}/videos/jm_${row.id}_${Date.now()}${path.extname(src) || '.mp4'}`;
+    fs.copyFileSync(src, assertInsideStorage(cfg, path.join(storageRoot(cfg), rel)), fs.constants.COPYFILE_EXCL);
+  } catch (e) {
+    return failGen(db, row, '即梦结果文件不可用：' + e.message);
+  }
   const base = filesBaseUrl(cfg);
   const url = base ? `${base}/${rel}` : `/static/${rel}`;
   const now = new Date().toISOString();
@@ -272,45 +300,62 @@ function finalizeGen(db, log, row, dir, localPath) {
   log.info('jimeng render completed', { id: row.id, key: row.provider_task_id });
 }
 
-function firstItem(data) {
-  if (!data) return {};
-  if (Array.isArray(data.items)) return data.items[0] || {};
-  return data;
+function matchingItem(data, key) {
+  const items = Array.isArray(data?.items) ? data.items : [data];
+  const matches = items.filter(item => item?.key === key);
+  return matches.length === 1 ? matches[0] : null;
 }
 
-/**
- * 查一次结果（不提交）。@returns 'done' | 'pending'
- */
+function quotedNode(row) {
+  try {
+    const meta = JSON.parse(row.compiled_json || '{}');
+    return meta?.quoted_node === true && meta.node_key === row.provider_task_id;
+  } catch {
+    return false;
+  }
+}
+
 async function pollOnce(db, log, genId) {
   const row = genRow(db, genId);
   if (!row || row.status !== 'processing') return 'done';
   const key = row.provider_task_id;
-  const dir = projectDir(row.drama_id);
-  const run = runnerFor(db);
-  const got = await run(['node', 'get', '--key', key], { cwd: dir });
-  if (got.status === 'success') {
-    const runId = got.data && got.data.state ? got.data.state.runId : null;
-    const known = row.run_key && row.run_key !== SUBMITTING;
-    if (known && runId && runId !== row.run_key) {
-      failGen(db, row, '这条分镜在即梦上已被新一次渲染取代，本次结果不再采用');
-      return 'done';
-    }
-    if (!known && runId) {
-      db.prepare('UPDATE video_generations SET run_key = ? WHERE id = ?').run(runId, row.id);
-      row.run_key = runId;
-    }
-    if (got.data && got.data.state && got.data.state.status === 'idle' && !runId) {
-      failGen(db, row, '即梦上这个节点没有提交记录（提交前中断），未扣费；请重新报价后提交');
-      return 'done';
-    }
+  const known = row.run_key && row.run_key !== SUBMITTING;
+  if (!known && (!quotedNode(row) || !row.run_key)) {
+    failGen(db, row, '缺少可确认归属的提交记录，请核对即梦记录后重新报价');
+    return 'done';
   }
-  const r = await run(['node', 'result', '--key', key, '--wait', String(deps.wait.result), '--out', path.join(dir, 'out')], { cwd: dir });
+  let dir, out;
+  try {
+    dir = projectDir(row.drama_id);
+    out = outputDir(dir, row);
+  } catch (e) {
+    failGen(db, row, e.message);
+    return 'done';
+  }
+  const run = runnerFor(db);
+  const getRun = async () => {
+    const got = await run(['node', 'get', '--key', key], { cwd: dir });
+    return got.status === 'success' && got.data?.key === key && got.data.state?.runId || null;
+  };
+  const runId = await getRun();
+  if (!runId) return 'pending';
+  if (known && runId !== row.run_key) {
+    failGen(db, row, '这条分镜在即梦上已被新一次渲染取代，本次结果不再采用');
+    return 'done';
+  }
+  if (!known) db.prepare("UPDATE video_generations SET run_key = ? WHERE id = ? AND run_key = ? AND status = 'processing'").run(runId, row.id, SUBMITTING);
+  const r = await run(['node', 'result', '--key', key, '--wait', String(deps.wait.result), '--out', out], { cwd: dir });
   if (r.status !== 'success') {
     if (PENDING_ERRORS.has(r.error && r.error.code)) return 'pending';
     failGen(db, row, `即梦查询失败：${(r.error && (r.error.message || r.error.code)) || '未知错误'}`);
     return 'done';
   }
-  const it = firstItem(r.data);
+  const it = matchingItem(r.data, key);
+  if (!it?.runId && !quotedNode(row)) {
+    failGen(db, row, '旧节点结果缺少可确认归属的运行标识，请核对即梦记录');
+    return 'done';
+  }
+  if (!it || (it.runId ? it.runId !== runId : await getRun() !== runId)) return 'pending';
   if (it.status === 'succeeded' && it.localPath) {
     finalizeGen(db, log, row, dir, it.localPath);
     return 'done';
@@ -331,29 +376,34 @@ async function poll(db, log, genId) {
 }
 
 /**
- * prepareSubmit 之后在后台执行：再保存一次节点（免费、幂等）→ 认领提交 → node run（唯一的提交点）→ 只查不重提。
+ * prepareSubmit 之后在后台执行：认领已报价的节点 → node run（唯一的提交点）→ 只查不重提。
  * 认领在库里原子完成（run_key 从空变为 submitting），同一条生成记录被重复调用时只有第一次会提交，其余只轮询。
  */
 async function runSubmitted(db, log, genId) {
   const row = genRow(db, genId);
   if (!row || row.status !== 'processing') return;
   if (row.run_key) return poll(db, log, genId);
-  const meta = JSON.parse(row.compiled_json || '{}');
-  const dir = await ensureProject(db, row.drama_id);
+  if (!quotedNode(row)) return poll(db, log, genId);
+  let dir, out;
+  try {
+    dir = projectDir(row.drama_id);
+    out = outputDir(dir, row);
+  } catch (e) {
+    return failGen(db, row, e.message);
+  }
   const run = runnerFor(db);
-  const saved = await run(meta.node_args, { cwd: dir });
-  if (saved.status !== 'success') return failGen(db, row, `即梦节点保存失败（未提交、未扣费）：${(saved.error && saved.error.message) || ''}`);
   const claim = db.prepare("UPDATE video_generations SET run_key = ? WHERE id = ? AND run_key IS NULL AND status = 'processing'").run(SUBMITTING, row.id);
-  if (claim.changes !== 1) return poll(db, log, genId);
-  const r = await run(['node', 'run', '--key', row.provider_task_id, '--wait', String(deps.wait.run), '--out', path.join(dir, 'out')], { cwd: dir });
+  if (claim.changes !== 1) return;
+  const r = await run(['node', 'run', '--key', row.provider_task_id, '--wait', String(deps.wait.run), '--out', out], { cwd: dir });
   if (r.status !== 'success') {
     const code = r.error && r.error.code;
     if (code === 'SUBMIT_REJECTED') return failGen(db, row, `即梦拒绝了提交（未扣费），请修改后重新报价：${(r.error && r.error.message) || ''}`);
     if (!PENDING_ERRORS.has(code)) return failGen(db, row, `即梦提交失败：${(r.error && (r.error.message || code)) || '未知错误'}`);
     log.warn('jimeng run outcome uncertain, polling only', { id: row.id, code });
   } else {
-    const it = firstItem(r.data);
-    if (it.runId) db.prepare('UPDATE video_generations SET run_key = ? WHERE id = ?').run(it.runId, row.id);
+    const it = matchingItem(r.data, row.provider_task_id);
+    if (!it?.runId) return poll(db, log, genId);
+    db.prepare("UPDATE video_generations SET run_key = ? WHERE id = ? AND run_key = ? AND status = 'processing'").run(it.runId, row.id, SUBMITTING);
     if (it.status === 'succeeded' && it.localPath) return finalizeGen(db, log, genRow(db, genId), dir, it.localPath);
     if (it.status === 'failed') return failGen(db, row, '即梦生成失败');
   }

@@ -31,8 +31,8 @@ function parseEnvelope(text, exitedOk = true) {
     return null;
   }
   const r = envelope.safeParse(obj);
-  if (r.success) return r.data;
-  if (exitedOk && obj && typeof obj === 'object' && !Array.isArray(obj) && !('status' in obj && 'error' in obj)) {
+  if (r.success) return exitedOk || r.data.status === 'error' ? r.data : null;
+  if (exitedOk && obj && typeof obj === 'object' && !Array.isArray(obj) && !('status' in obj || 'error' in obj)) {
     return { status: 'success', data: obj, error: null };
   }
   return null;
