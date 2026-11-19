@@ -196,14 +196,18 @@ async function estimate(db, log, episodeId, storyboardIds, opts = {}) {
   const r = await runnerFor(db)(['credit', 'estimate', ...specs.flatMap((s) => ['--key', s.key])], { cwd: dir });
   if (r.status !== 'success') throw cliError(r, '即梦报价失败');
   const d = r.data || {};
-  const byKey = new Map((d.items || []).map((it) => [it.key, it]));
+  const returned = Array.isArray(d.items) ? d.items : [];
+  const byKey = new Map(returned.map(it => [it?.key, it]));
+  if (returned.length !== specs.length || specs.some(spec => !byKey.has(spec.key))) {
+    throw codedError('jimeng_cli_error', '即梦报价返回的节点与请求不一致，请重新报价', { cli_code: 'BAD_OUTPUT' });
+  }
   const items = specs.map((s) => ({
     storyboard_id: s.sb.id,
     key: s.key,
     config_hash: s.hash,
     snapshot: true,
-    credits: byKey.get(s.key) ? byKey.get(s.key).estimatedCredits : null,
-    price_status: byKey.get(s.key) ? byKey.get(s.key).priceStatus : 'unknown',
+    credits: byKey.get(s.key).estimatedCredits ?? null,
+    price_status: byKey.get(s.key).priceStatus ?? 'unknown',
     consumed: false,
   }));
   const token = crypto.randomUUID();
@@ -235,6 +239,9 @@ function prepareSubmit(db, log, storyboardId, token, opts = {}) {
     const item = items.find((i) => Number(i.storyboard_id) === sbId);
     if (!item) throw codedError('confirmation_required', '这条分镜不在本次报价里，请重新报价');
     if (item.consumed) throw codedError('confirmation_consumed', '这次报价已经用过，请重新报价后再提交');
+    if (row.total != null && row.balance != null && Number(row.balance) < Number(row.total)) {
+      throw codedError('insufficient_credits', '本次整批报价超过即梦积分余额，请充值后重新报价');
+    }
     const busy = db
       .prepare("SELECT id FROM video_generations WHERE storyboard_id = ? AND provider = ? AND status = 'processing' AND deleted_at IS NULL")
       .get(sbId, PROTOCOL);

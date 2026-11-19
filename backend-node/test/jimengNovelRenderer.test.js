@@ -342,6 +342,61 @@ describe('jimeng renderer credits safety (AC16 / AC34)', () => {
     });
   }
 
+  function replaceEstimateItems(transform) {
+    renderer.setDeps({ runner: async (args, ctx) => {
+      const reply = await cli.runner(args, ctx);
+      if (args[0] === 'credit' && args[1] === 'estimate') reply.data.items = transform(reply.data.items);
+      return reply;
+    } });
+  }
+
+  for (const [issue, transform] of [
+    ['missing item', items => items.slice(1)],
+    ['duplicate key', ([first]) => [first, first]],
+    ['extra key', items => [...items, { key: 'foreign' }]],
+    ['only foreign keys', items => items.map((it, i) => ({ ...it, key: `foreign-${i}` }))],
+    ['missing key', ([first]) => [first, {}]],
+    ['null item', ([first]) => [first, null]],
+    ['missing items', () => undefined],
+  ]) {
+    it(`rejects estimate with ${issue} before issuing a token`, async () => {
+      setup();
+      replaceEstimateItems(transform);
+      await assert.rejects(estimate([ids.sbIr, ids.sbLegacy]), { code: 'jimeng_cli_error', cli_code: 'BAD_OUTPUT' });
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM jimeng_confirmations').get().n, 0);
+      assert.equal(genCount(), 0);
+      assert.equal(cli.count('node', 'run'), 0);
+    });
+  }
+
+  it('matches unordered estimate by key and preserves reference prices', async () => {
+    setup();
+    replaceEstimateItems(([first, second]) => [second, { ...first, estimatedCredits: 123, priceStatus: 'reference' }]);
+    const q = await estimate([ids.sbIr, ids.sbLegacy]);
+    assert.equal(q.price_status, 'reference');
+    assert.deepEqual(q.items.map(i => [i.storyboard_id, i.credits, i.price_status]), [
+      [ids.sbIr, 123, 'reference'], [ids.sbLegacy, 200, 'available'],
+    ]);
+    assert.ok(db.prepare('SELECT token FROM jimeng_confirmations WHERE token = ?').get(q.token));
+    assert.equal(cli.count('node', 'run'), 0);
+  });
+
+  it('direct submit rejects a quoted batch over the known balance', async () => {
+    setup();
+    renderer.setDeps({ runner: async (args, ctx) => {
+      const reply = await cli.runner(args, ctx);
+      if (args[0] === 'credit') reply.data.balance = 200;
+      return reply;
+    } });
+    const q = await estimate([ids.sbIr, ids.sbLegacy]);
+    assert.equal(q.affordable, false);
+    const res = await post({ storyboard_id: ids.sbIr, jimeng_confirmation: q.token });
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.body.error.code, 'insufficient_credits');
+    assert.equal(genCount(), 0);
+    assert.equal(cli.count('node', 'run'), 0);
+  });
+
   it('episode estimate single token', async () => {
     setup();
     const c = await estimate([ids.sbIr, ids.sbLegacy]);
