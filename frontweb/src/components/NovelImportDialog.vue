@@ -13,8 +13,12 @@
       <p>共 {{ preview.total }} 章，本批第 {{ rows[0].chapter.index }}–{{ rows.at(-1).chapter.index }} 章。勾选需要写入的集。</p>
       <div v-for="row in rows" :key="row.chapter.index" class="chapter">
         <el-checkbox v-model="row.selected" :disabled="!!busy">
-          第 {{ row.chapter.index }} 集 · {{ row.chapter.title }}
+          {{ row.chapter.title }}
         </el-checkbox>
+        <label class="target">目标集号
+          <el-input-number :model-value="row.targetNumber" :min="1" :precision="0" size="small" :disabled="!!busy"
+            :aria-label="'《' + row.chapter.title + '》目标集号'" @update:model-value="setTarget(row, $event)" />
+        </label>
         <span class="state">{{ row.target ? '更新已有集 · ' + (row.target.storyboards?.length || 0) + ' 镜' : '新增' }}</span>
         <details><summary>核对原文、现稿与拟采用剧本</summary>
           <strong>原文 · {{ row.chapter.source.text.length }} 字符</strong><pre>{{ row.chapter.source.text }}</pre>
@@ -28,13 +32,14 @@
         <el-button v-if="projectId" :disabled="!!busy" @click="refreshTargets">重新核对现有集</el-button>
       </div>
       <p v-if="progress" aria-live="polite">{{ progress }}</p>
+      <p v-if="selectionError" class="error" role="alert">{{ selectionError }}</p>
     </template>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <template #footer>
       <el-button :disabled="!!busy" @click="emit('close')">取消</el-button>
       <el-button v-if="preview" :disabled="!!busy" @click="back">更改章节范围</el-button>
       <el-button v-if="!preview" type="primary" :loading="busy === 'preview'" :disabled="!!busy || !text.trim()" @click="inspect">预览章节</el-button>
-      <el-button v-else type="primary" :loading="busy === 'apply'" :disabled="!!busy || !selected.length" @click="apply">
+      <el-button v-else type="primary" :loading="busy === 'apply'" :disabled="!!busy || !selected.length || !!selectionError" @click="apply">
         {{ projectId ? '采用' : '建项并采用' }}所选 {{ selected.length }} 集
       </el-button>
     </template>
@@ -44,6 +49,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { dramaAPI } from '@/api/drama'
+import { novelSelectionForm } from '@/utils/novelSelection'
 
 const props = defineProps({ projectId: [String, Number], project: { type: Object, required: true } })
 const emit = defineEmits(['close', 'saved'])
@@ -52,6 +58,8 @@ const start = ref(1)
 const limit = ref(10)
 const preview = ref(null)
 const rows = ref([])
+let existingEpisodes = []
+let originalFile
 const busy = ref('')
 const progress = ref('')
 const error = ref('')
@@ -60,6 +68,12 @@ onBeforeUnmount(() => { active = false })
 // getRandomValues also works on a LAN HTTP origin.
 const operationId = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
 const selected = computed(() => rows.value.filter(row => row.selected))
+const selectionError = computed(() => {
+  const numbers = selected.value.map(row => row.targetNumber)
+  if (numbers.some(n => !Number.isSafeInteger(n) || n < 1)) return '请为已选章节填写有效的目标集号。'
+  if (new Set(numbers).size !== numbers.length) return '已选章节的目标集号重复，请逐集核对。'
+  return ''
+})
 const remainingCalls = computed(() => selected.value.reduce((n, row) => n + row.chapter.source.parts.length - adaptedCount(row), 0))
 
 function adaptedCount(row) { return row.chapter.source.parts.filter(p => p.adaptation).length }
@@ -76,7 +90,12 @@ async function readFile(event) {
   catch { error.value = '文件读取失败，请重新选择文件。' }
   finally { busy.value = '' }
 }
-function back() { preview.value = null; rows.value = []; progress.value = ''; error.value = '' }
+function back() { preview.value = null; rows.value = []; originalFile = null; progress.value = ''; error.value = '' }
+function setTarget(row, number) {
+  row.targetNumber = number
+  row.target = existingEpisodes.find(ep => ep.episode_number === number) || null
+  row.selected = false
+}
 async function targets() {
   if (!props.projectId) return []
   return (await dramaAPI.get(props.projectId)).episodes || []
@@ -86,26 +105,29 @@ async function inspect() {
   error.value = ''
   try {
     const form = new FormData()
-    form.append('file', new Blob([text.value], { type: 'text/plain' }), 'novel.txt')
-    form.append('title', props.project.title)
+    originalFile = new Blob([text.value], { type: 'text/plain' })
+    const title = props.project.title
+    form.append('file', originalFile, 'novel.txt')
+    form.append('title', title)
+    form.append('compact', 'true')
     form.append('start_chapter', String(start.value))
     form.append('max_chapters', String(limit.value))
     const [result, existing] = await Promise.all([dramaAPI.previewNovel(form), targets()])
-    rows.value = result.chapters.map(chapter => ({
-      chapter, selected: false, target: existing.find(ep => ep.episode_number === chapter.index) || null,
-    }))
-    preview.value = result
+    existingEpisodes = existing
+    rows.value = result.chapters.map(chapter => {
+      const row = { chapter }
+      setTarget(row, chapter.episode_number ?? chapter.index)
+      return row
+    })
+    preview.value = { total: result.total, title }
   } catch (e) { error.value = e.message }
   finally { busy.value = '' }
 }
 async function refreshTargets() {
   busy.value = 'refresh'
   try {
-    const existing = await targets()
-    for (const row of rows.value) {
-      row.target = existing.find(ep => ep.episode_number === row.chapter.index) || null
-      row.selected = false
-    }
+    existingEpisodes = await targets()
+    for (const row of rows.value) setTarget(row, row.targetNumber)
     error.value = ''
   } catch (e) { error.value = e.message }
   finally { busy.value = '' }
@@ -131,19 +153,14 @@ async function adapt() {
   } finally { progress.value = ''; busy.value = '' }
 }
 async function apply() {
-  if (!selected.value.length || busy.value) return
+  if (!selected.value.length || selectionError.value || busy.value) return
   busy.value = 'apply'
   error.value = ''
   try {
-    const episodes = selected.value.map(({ chapter, target }) => ({
-      episode_number: chapter.index, title: chapter.title,
-      script_content: scriptFor({ chapter }), source: chapter.source,
-      expected: target ? { id: target.id, title: target.title, script_content: target.script_content, updated_at: target.updated_at } : null,
-    }))
-    let created = null
-    if (props.projectId) await dramaAPI.applyNovelEpisodes(props.projectId, episodes)
-    else created = await dramaAPI.createFromNovel(props.project, episodes, operationId)
-    emit('saved', { created, count: episodes.length, first: episodes[0].episode_number })
+    const creation = props.projectId ? undefined : { project: props.project, operation_id: operationId }
+    const form = novelSelectionForm(originalFile, preview.value.title, selected.value, creation)
+    const result = await dramaAPI.applyNovelSelection(props.projectId, form)
+    emit('saved', { created: creation ? result : null, count: selected.value.length, first: selected.value[0].targetNumber })
   } catch (e) { error.value = e.message }
   finally { busy.value = '' }
 }
@@ -153,6 +170,7 @@ async function apply() {
 .options { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .chapter { border-bottom: 1px solid var(--el-border-color); padding: 8px 0; }
 .state { margin-left: 8px; color: var(--el-text-color-secondary); }
+.target { display: inline-flex; gap: 6px; align-items: center; margin-left: 12px; }
 details { margin: 6px 0; }
 summary { cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font: inherit; }

@@ -55,6 +55,7 @@
               <strong>{{ label }}{{ shot.changes.includes(field) ? ' · 待复核' : field in shot.lock ? ' · 已锁定' : '' }}</strong>
               <p v-if="shot.changes.includes(field)">上次确认 · {{ format(shot.lock[field]) }}</p>
               <p>当前 · {{ format(shot.current[field]) }}</p>
+              <p v-if="field === 'visual' && shot.images_changed">请重新核对引用图片。图片已变化，或上次锁定仅记录了外观文字。</p>
               <el-button v-if="!(field in shot.lock) || shot.changes.includes(field)" size="small" :disabled="saving" @click="saveShot({action:'accept', field})">
                 {{ field in shot.lock ? '确认这次变化' : '锁定当前' + label }}
               </el-button>

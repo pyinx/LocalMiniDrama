@@ -81,3 +81,50 @@ test('preserves the last release on incomplete media', async t => {
   assert.equal(published(), release.merged_url);
   assert.ok(fs.statSync(path.join(root, release.merged_url)).size > 0);
 });
+
+test('delivers rotation-matrix, square-pixel and anamorphic shots at their displayed aspect ratio', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-ratio-'));
+  const db = new Database(':memory:');
+  t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  runMigrationsAndEnsure(db);
+  t.mock.method(config, 'loadConfig', () => ({ storage: { local_path: root } }));
+  db.exec(`INSERT INTO dramas(id,title,metadata) VALUES(1,'试镜','{"aspect_ratio":"9:16"}');
+    INSERT INTO episodes(id,drama_id,episode_number) VALUES(1,1,1);`);
+  const ffmpeg = args => execFileSync(getFfmpegPath(), ['-v', 'error', ...args], { cwd: root });
+  const make = (file, size, filter) => ffmpeg(['-f', 'lavfi', '-i', 'color=black:s=' + size + ':r=10:d=1',
+    '-vf', filter, '-c:v', 'libx264', file]);
+  make('sensor.mp4', '160x90', 'drawbox=0:0:80:90:red:t=fill');
+  try {
+    ffmpeg(['-display_rotation:v:0', '90', '-i', 'sensor.mp4', '-c', 'copy', 'rotated.mp4']);
+  } catch {
+    ffmpeg(['-y', '-i', 'sensor.mp4', '-c', 'copy', '-metadata:s:v:0', 'rotate=90', 'rotated.mp4']);
+  }
+  make('upright.mp4', '90x160', 'drawbox=0:0:90:80:blue:t=fill');
+  make('anamorphic.mp4', '90x120', 'drawbox=0:0:45:120:green:t=fill,setsar=3/4');
+  const clips = ['rotated.mp4', 'upright.mp4', 'anamorphic.mp4'];
+  const add = (file, number) => db.prepare(`INSERT INTO storyboards(episode_id,storyboard_number,video_url)
+    VALUES(1,?,?)`).run(number, '/static/' + file);
+  async function release() {
+    const job = drama.finalizeEpisode(db, log, 1, 'http://localhost:1/static', { delivery_mode: 'complete' });
+    for (let i = 0; i < 1000; i++) {
+      const row = merges.getById(db, job.merge_id);
+      if (row.status === 'failed') assert.fail(row.error_msg);
+      if (row.status === 'completed') return row.merged_url;
+      await delay(20);
+    }
+    assert.fail('合成超时');
+  }
+  const frame = (file, seconds) => ffmpeg(['-ss', String(seconds), '-i', file, '-frames:v', '1', '-vf', 'scale=4:4',
+    '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']);
+  add(clips[0], 1);
+  assert.deepEqual(frame(await release(), 0.2), frame(clips[0], 0.2));
+  add(clips[1], 2);
+  add(clips[2], 3);
+  const movie = await release();
+  for (const [i, clip] of clips.entries()) {
+    const expected = frame(clip, 0.2);
+    const output = frame(movie, i + 0.2);
+    assert.equal(output.length, expected.length);
+    assert.ok(output.every((byte, p) => Math.abs(byte - expected[p]) < 15), '第 ' + (i + 1) + ' 镜方向或构图改变');
+  }
+});

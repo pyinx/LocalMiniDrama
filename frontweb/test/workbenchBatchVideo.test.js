@@ -12,6 +12,7 @@ test('resuming a canvas batch reuses its task without requesting new inputs', ()
   }
   assert.throws(() => dispatchBatchVideo({ ...item, dispatch_state: 'unknown' }, unused, unused), /核查/)
   assert.throws(() => dispatchBatchVideo(null, unused, unused), /批次/)
+  assert.equal(dispatchBatchVideo({ ...item, video_id: null, status: 'completed' }, unused, unused).status, 'completed')
   assert.deepEqual(dispatchBatchVideo({ operation_key: 'batch-shot', status: 'waiting' },
     () => ({ prompt: '灯渐暗' }), body => body), { operation_key: 'batch-shot', prompt: '灯渐暗' })
 })

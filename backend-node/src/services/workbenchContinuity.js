@@ -1,9 +1,12 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
+const fs = require('node:fs');
+const { assetImageReference } = require('./assetImageReference');
 const { parseDramaMetadata } = require('../utils/dramaStyleMerge');
-const { catalog, creativeGuidance, directionOf, characterIds, scenarioFor, readLock } = require('./workbenchCreativeMethods');
+const { catalog, creativeGuidance, directionOf, projectCast, effectiveCast, scenarioFor, readLock } = require('./workbenchCreativeMethods');
 const { resolveTake, publicMedia, localFile } = require('./workbenchTakeService');
+const { episodeStoryboardRows } = require('./episodeStoryboardRows');
 
 function failure(status, message) { return Object.assign(new Error(message), { status }); }
 
@@ -49,60 +52,65 @@ function activeAppearance(character, episodeNumber) {
   return active.length ? active.map(s => s.appearance).join(' / ') : character.appearance || '';
 }
 
-// A review snapshot contains only the words the author saw, so a restored project can compare
-// its own asset IDs with the same approved text after remapping.
-function currentVisual(shot, assets, episodeNumber) {
-  const result = [];
-  for (const id of characterIds(shot.characters)) {
-    const row = assets.characters.get(id);
-    if (row) result.push(['角色', row.name, activeAppearance(row, episodeNumber)]);
-  }
-  // Empty JSON arrays mean explicitly no cast. Older projects can instead
-  // carry a library binding in storyboard_characters, in a different ID space.
-  if (!String(shot.characters || '').trim()) {
-    for (const row of assets.libraryCast.get(shot.id) || []) {
-      result.push(['角色', row.name, row.appearance || row.description]);
+// Archives assign new database IDs and local filenames. Compare local image content
+// and remote reference identities, keeping the displayed descriptions readable.
+function visualSnapshot(shot, assets, cast) {
+  const visual = [];
+  const images = [];
+  function addImage(label, reference) {
+    if (!reference) return;
+    if (!assets.imageDigests.has(reference)) {
+      const { local, url } = assetImageReference(reference, assets.staticBase);
+      const file = local && localFile(assets.storageRoot, local);
+      const hash = createHash('sha256');
+      if (file) hash.update(fs.readFileSync(file));
+      else hash.update(url ? 'reference:' + url : 'missing:' + local);
+      assets.imageDigests.set(reference, hash.digest('hex'));
     }
+    images.push([label, assets.imageDigests.get(reference)]);
+  }
+  function add(row, parts) {
+    const label = parts.filter(Boolean).join(' · ');
+    visual.push(label);
+    addImage(label + ' · 主图', row.local_path || row.image_url);
+    addImage(label + ' · 四视图', row.four_view_image_url);
+  }
+  for (const row of cast) {
+    const appearance = row.storyboard_id == null ? activeAppearance(row, shot.episode_number) : row.appearance || row.description;
+    add(row, ['角色', row.name, appearance]);
   }
   const scene = assets.scenes.get(shot.scene_id);
-  if (scene) result.push(['地点', scene.location, scene.time, scene.prompt]);
-  for (const prop of assets.props.get(shot.id) || []) result.push(['道具', prop.name, prop.prompt || prop.description]);
-  return result.map(parts => parts.filter(Boolean).join(' · ')).sort();
+  if (scene) add(scene, ['地点', scene.location, scene.time, scene.prompt]);
+  for (const prop of assets.props.get(shot.id) || []) add(prop, ['道具', prop.name, prop.prompt || prop.description]);
+  return { visual: visual.sort(), ...(images.length && { visual_images: images.sort() }) };
 }
 
-function projectAssets(db, id) {
-  const index = rows => new Map(rows.map(row => [row.id, row]));
-  const characters = index(db.prepare('SELECT id, name, appearance, stages FROM characters WHERE drama_id = ? AND deleted_at IS NULL').all(id));
-  const scenes = index(db.prepare('SELECT id, location, time, prompt FROM scenes WHERE drama_id = ? AND deleted_at IS NULL').all(id));
-  const libraryCast = new Map();
-  for (const row of db.prepare(`SELECT DISTINCT sc.storyboard_id, c.id, c.name, c.appearance, c.description
-    FROM storyboard_characters sc JOIN character_libraries c ON c.id = sc.character_id
-    JOIN storyboards s ON s.id = sc.storyboard_id JOIN episodes e ON e.id = s.episode_id
-    WHERE e.drama_id = ? AND e.deleted_at IS NULL AND s.deleted_at IS NULL AND c.deleted_at IS NULL
-      AND (c.drama_id = e.drama_id OR c.drama_id IS NULL)`).all(id)) {
-    if (!libraryCast.has(row.storyboard_id)) libraryCast.set(row.storyboard_id, []);
-    libraryCast.get(row.storyboard_id).push(row);
-  }
+function projectAssets(db, id, storageRoot, staticBase) {
+  const scenes = new Map(db.prepare(`SELECT id, location, time, prompt, local_path, image_url FROM scenes
+    WHERE drama_id=? AND deleted_at IS NULL`).all(id).map(row => [row.id, row]));
   const props = new Map();
-  for (const row of db.prepare(`SELECT sp.storyboard_id, p.name, p.description, p.prompt FROM props p
+  for (const row of db.prepare(`SELECT sp.storyboard_id, p.name, p.description, p.prompt, p.local_path, p.image_url FROM props p
     JOIN storyboard_props sp ON sp.prop_id = p.id WHERE p.drama_id = ? AND p.deleted_at IS NULL ORDER BY p.id`).all(id)) {
     if (!props.has(row.storyboard_id)) props.set(row.storyboard_id, []);
     props.get(row.storyboard_id).push(row);
   }
-  return { characters, scenes, props, libraryCast };
+  return { ...projectCast(db, id), scenes, props, storageRoot, staticBase, imageDigests: new Map() };
 }
 
 function describeShot(shot, drama, assets) {
   const lock = readLock(shot.creative_review_lock);
-  const current = { dialogue: shot.dialogue || '', visual: currentVisual(shot, assets, shot.episode_number) };
-  const changes = Object.keys(current).filter(key => Object.hasOwn(lock, key) && JSON.stringify(lock[key]) !== JSON.stringify(current[key]));
-  const method = scenarioFor(shot, lock.method);
-  const guidance = creativeGuidance(drama, 'video', shot);
+  const cast = effectiveCast(shot, assets);
+  const current = { dialogue: shot.dialogue || '', ...visualSnapshot(shot, assets, cast) };
+  const changes = ['dialogue', 'visual'].filter(key => Object.hasOwn(lock, key) && JSON.stringify(lock[key]) !== JSON.stringify(current[key]));
+  const imagesChanged = Object.hasOwn(lock, 'visual') && JSON.stringify(lock.visual_images || []) !== JSON.stringify(current.visual_images || []);
+  if (imagesChanged && !changes.includes('visual')) changes.push('visual');
+  const method = scenarioFor(shot, lock.method, cast.length);
+  const guidance = creativeGuidance(drama, 'video', shot, cast.length);
   const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   const creativeRevision = digest([current, method, shot.action, shot.description, guidance]);
   const reviewToken = digest([lock, creativeRevision]);
   return {
-    id: shot.id, number: shot.storyboard_number, title: shot.title || '', current, changes,
+    id: shot.id, number: shot.storyboard_number, title: shot.title || '', current, changes, images_changed: imagesChanged,
     lock, method, method_label: catalog.scenarios[method].label, checks: guidance.checks, review_token: reviewToken,
     creative_revision: creativeRevision, approved: lock.approval === creativeRevision,
   };
@@ -129,29 +137,29 @@ function openMediaReviews(db, dramaId) {
   return byShot;
 }
 
-function readWorkbench(db, id, storageRoot = './data/storage') {
+function readWorkbench(db, id, storageRoot = './data/storage', staticBase = '') {
   const drama = project(db, id);
-  const assets = projectAssets(db, drama.id);
+  const assets = projectAssets(db, drama.id, storageRoot, staticBase);
   const reviews = openMediaReviews(db, drama.id);
   const episodes = db.prepare(`SELECT id, episode_number AS number, title, TRIM(COALESCE(script_content, '')) != '' AS has_script
     FROM episodes WHERE drama_id = ? AND deleted_at IS NULL ORDER BY episode_number, id`).all(drama.id);
-  const byEpisode = new Map(episodes.map(e => [e.id, Object.assign(e, { shots: [] })]));
-  const shots = db.prepare(`SELECT s.*, e.episode_number FROM storyboards s JOIN episodes e ON s.episode_id = e.id
-    WHERE e.drama_id = ? AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY e.episode_number, s.storyboard_number, s.id`).all(drama.id);
-  for (const shot of shots) {
-    const item = describeShot(shot, drama, assets);
-    const current = resolveTake(db, shot);
-    item.video_state = current?.local_path
-      ? (localFile(storageRoot, current.local_path) ? 'local' : 'missing')
-      : (current?.video_url ? 'remote' : 'missing');
-    item.has_video = item.video_state !== 'missing';
-    item.current_take_id = current?.id ?? null;
-    item.adopted_id = shot.adopted_video_generation_id ?? null;
-    const notes = reviews.get(shot.id);
-    item.current_review = notes?.get(item.current_take_id) ?? null;
-    item.history_reviews = notes ? [...notes.values()].filter(take => take.id !== item.current_take_id) : [];
-    item.needs_review = item.changes.length > 0 || Boolean(item.current_review);
-    byEpisode.get(shot.episode_id).shots.push(item);
+  for (const ep of episodes) {
+    ep.shots = episodeStoryboardRows(db, ep.id).map(shot => {
+      shot.episode_number = ep.number;
+      const item = describeShot(shot, drama, assets);
+      const current = resolveTake(db, shot);
+      item.video_state = current?.local_path
+        ? (localFile(storageRoot, current.local_path) ? 'local' : 'missing')
+        : (current?.video_url ? 'remote' : 'missing');
+      item.has_video = item.video_state !== 'missing';
+      item.current_take_id = current?.id ?? null;
+      item.adopted_id = shot.adopted_video_generation_id ?? null;
+      const notes = reviews.get(shot.id);
+      item.current_review = notes?.get(item.current_take_id) ?? null;
+      item.history_reviews = notes ? [...notes.values()].filter(take => take.id !== item.current_take_id) : [];
+      item.needs_review = item.changes.length > 0 || Boolean(item.current_review);
+      return item;
+    });
   }
   return {
     id: drama.id, title: drama.title, direction: directionOf(drama), version: catalog.version,
@@ -159,13 +167,13 @@ function readWorkbench(db, id, storageRoot = './data/storage') {
   };
 }
 
-function reviewShot(db, dramaId, id, body) {
+function reviewShot(db, dramaId, id, body, storageRoot = './data/storage', staticBase = '') {
   return db.transaction(() => {
     const drama = project(db, dramaId);
     const shot = db.prepare(`SELECT s.*, e.episode_number FROM storyboards s JOIN episodes e ON s.episode_id = e.id
       WHERE s.id = ? AND e.drama_id = ? AND e.deleted_at IS NULL AND s.deleted_at IS NULL`).get(Number(id), drama.id);
     if (!shot) throw failure(404, '分镜不属于当前作品');
-    const item = describeShot(shot, drama, projectAssets(db, drama.id));
+    const item = describeShot(shot, drama, projectAssets(db, drama.id, storageRoot, staticBase));
     if (item.review_token !== body.review_token) throw failure(409, '镜头内容或已确认的事实发生变化，请刷新再确认');
     const lock = { ...item.lock };
     if (body.action === 'approve') {
@@ -180,6 +188,10 @@ function reviewShot(db, dramaId, id, body) {
       if (body.action === 'accept') lock[body.field] = item.current[body.field];
       else if (body.action === 'unlock') delete lock[body.field];
       else throw failure(400, '未知复核操作');
+      if (body.field === 'visual') {
+        if (body.action === 'accept' && item.current.visual_images) lock.visual_images = item.current.visual_images;
+        else delete lock.visual_images;
+      }
     }
     // updated_at also participates in legacy media selection; reviewing text must not change it.
     db.prepare('UPDATE storyboards SET creative_review_lock = ? WHERE id = ?').run(JSON.stringify(lock), shot.id);

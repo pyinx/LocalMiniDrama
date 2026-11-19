@@ -1052,8 +1052,7 @@ function routes(db, log) {
         const newRelPath = path.join(dirName, baseName + '_2x' + ext).replace(/\\/g, '/');
         const newFile = path.join(storageBase, newRelPath);
         await sharp(srcFile).resize(newW, newH, { kernel: 'lanczos3' }).toFile(newFile);
-        const now = new Date().toISOString();
-        db.prepare('UPDATE storyboards SET local_path = ?, updated_at = ? WHERE id = ?').run(newRelPath, now, id);
+        storyboardService.updateStoryboard(db, log, id, { local_path: newRelPath });
         log.info('storyboard upscale done', { id, newRelPath, newW, newH });
         response.success(res, { local_path: newRelPath, width: newW, height: newH });
       } catch (err) {
@@ -1068,11 +1067,12 @@ function routes(db, log) {
       try {
         const episodeId = Number(req.body?.episode_id);
         const overwrite = !!req.body?.overwrite; // 是否覆盖已有值
+        const preserved = new Set(req.body?.preserved_ids || []);
         if (!episodeId) return response.badRequest(res, 'episode_id 必填');
 
         const rows = db.prepare(
           'SELECT id, angle_s, shot_type, atmosphere, time, description, action, movement, lighting_style, depth_of_field FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC'
-        ).all(episodeId);
+        ).all(episodeId).filter(row => !preserved.has(row.id));
 
         let updated = 0;
         const now = new Date().toISOString();

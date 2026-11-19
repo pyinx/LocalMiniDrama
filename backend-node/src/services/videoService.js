@@ -433,6 +433,10 @@ function markDispatchUnknown(db, log, row, reason) {
 
 /** 未派发的请求可安全领取，已派发的请求只能恢复查询。 */
 function resumeProcessingVideoGenerations(db, log) {
+  // Older builds recorded ambiguous submit replies as failed/sent without a provider ID.
+  const unconfirmed = db.prepare(`SELECT id, task_id, error_msg FROM video_generations
+    WHERE status='failed' AND dispatch_state='sent' AND NULLIF(TRIM(provider_task_id),'') IS NULL AND deleted_at IS NULL`).all();
+  for (const row of unconfirmed) markDispatchUnknown(db, log, row, row.error_msg);
   const stuck = db
     .prepare(
       `SELECT id, task_id, dispatch_state FROM video_generations
@@ -572,9 +576,13 @@ async function processVideoGeneration(db, log, videoGenId) {
     });
     const now2 = new Date().toISOString();
     if (result.error) {
-      if (row.dispatch_state != null && !result.task_id && /timeout|timed out|超时|ECONN|ENET|EPIPE|network|网络|fetch failed|socket|SUBMISSION_UNKNOWN/i.test(result.error)) {
-        markDispatchUnknown(db, log, row, result.error);
-        return;
+      if (row.dispatch_state != null && !result.task_id) {
+        // An adapter error without an explicit rejection cannot prove the POST was rejected.
+        if (result.submission !== 'rejected') {
+          markDispatchUnknown(db, log, row, result.error);
+          return;
+        }
+        db.prepare("UPDATE video_generations SET dispatch_state='rejected' WHERE id=?").run(videoGenId);
       }
       if (result.task_id) db.prepare('UPDATE video_generations SET provider_task_id=? WHERE id=?').run(result.task_id, videoGenId);
       setVideoGenFailed(db, videoGenId, result.error, now2);
@@ -587,12 +595,6 @@ async function processVideoGeneration(db, log, videoGenId) {
       await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, directVideo.video_url, '', config);
       return;
     }
-    if (result.video_url) {
-      setVideoGenFailed(db, videoGenId, directVideo.error, now2);
-      if (row.task_id) taskService.updateTaskError(db, row.task_id, directVideo.error);
-      log.error('Video generation failed', { id: videoGenId, error: directVideo.error });
-      return;
-    }
     if (result.task_id) {
       db.prepare(
         'UPDATE video_generations SET status = ?, provider_task_id = ?, updated_at = ? WHERE id = ?'
@@ -601,11 +603,12 @@ async function processVideoGeneration(db, log, videoGenId) {
       return;
     }
     if (row.dispatch_state != null) {
-      markDispatchUnknown(db, log, row, '未返回厂商任务 ID 或视频地址。');
+      markDispatchUnknown(db, log, row, result.video_url ? directVideo.error : '未返回厂商任务 ID 或视频地址。');
       return;
     }
-    setVideoGenFailed(db, videoGenId, '未返回 task_id 或 video_url', now2);
-    if (row.task_id) taskService.updateTaskError(db, row.task_id, '未返回 task_id 或 video_url');
+    const reason = result.video_url ? directVideo.error : '未返回 task_id 或 video_url';
+    setVideoGenFailed(db, videoGenId, reason, now2);
+    if (row.task_id) taskService.updateTaskError(db, row.task_id, reason);
   } catch (err) {
     const now2 = new Date().toISOString();
     if (row.dispatch_state != null) {

@@ -4,7 +4,8 @@ const taskService = require('../services/taskService');
 const { normalizeAspectRatioForApi } = require('../services/videoClient');
 const batch = require('../services/workbenchVideoBatch');
 
-function routes(db, log) {
+function routes(db, log, cfg) {
+  const storageRoot = cfg?.storage?.local_path || './data/storage';
   return {
     list: (req, res) => {
       try {
@@ -74,7 +75,7 @@ function routes(db, log) {
             const planned = db.prepare(`SELECT b.*, e.drama_id FROM video_batch_items b
               JOIN episodes e ON e.id=b.episode_id WHERE b.operation_key=?`).get(operation);
             if (planned && (planned.storyboard_id !== storyboardId || planned.drama_id !== dramaId)) return { conflict: true };
-            const existing = planned ? batch.resolveBatchVideo(db, planned)
+            const existing = planned ? batch.resolveBatchVideo(db, planned, storageRoot)
               : db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(operation);
             if (existing) {
               if (existing.deleted_at || existing.drama_id !== dramaId || existing.storyboard_id !== storyboardId) return { conflict: true };
@@ -84,7 +85,7 @@ function routes(db, log) {
                   last_frame_url: lastFrameUrl, reference_image_urls: refImagesJson };
                 if (Object.entries(inputs).some(([key, value]) => existing[key] !== value)) return { conflict: true };
               }
-              return { id: existing.id, reused: true };
+              return { id: existing.id, reused: true, legacy: existing.id == null ? existing : null };
             }
           }
           const task = taskService.createTask(db, log, 'video_generation', String(dramaId));
@@ -96,7 +97,7 @@ function routes(db, log) {
         }).immediate();
         if (result.conflict) return response.error(res, 409, 'VIDEO_OPERATION_CONFLICT', '原提交内容已变化或记录已删除，请核查后重新发起');
         if (!result.reused) setImmediate(() => videoService.processVideoGeneration(db, log, result.id));
-        const item = videoService.getById(db, result.id);
+        const item = result.legacy || videoService.getById(db, result.id);
         if (result.reused) return response.success(res, item);
         response.created(res, item);
       } catch (err) {
@@ -152,7 +153,7 @@ function routes(db, log) {
       try {
         const ids = req.body?.storyboard_ids || [];
         if (!Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id) || id <= 0)) return response.badRequest(res, '分镜清单无效');
-        response.success(res, batch.openBatch(db, Number(req.params.episode_id), ids));
+        response.success(res, batch.openBatch(db, Number(req.params.episode_id), ids, storageRoot));
       } catch (err) {
         log.error('videos episode batch', { error: err.message });
         response.badRequest(res, err.message);

@@ -5,6 +5,7 @@ const AdmZip = require('adm-zip');
 
 const takeArchive = require('./workbenchTakeArchive');
 const { localFile } = require('./workbenchTakeService');
+const { assetImageReference } = require('./assetImageReference');
 const { parseDramaCharacterIds } = require('./storyboardService');
 const EXPORT_VERSION = '1.6'; // 分集角色名单、场景身份和角色阶段；保留旧字段。
 
@@ -94,7 +95,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   const storyboardsByEp = {};
   for (const ep of episodes) {
     storyboardsByEp[ep.id] = db.prepare(
-      'SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number'
+      'SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number, id'
     ).all(ep.id);
   }
 
@@ -175,6 +176,16 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   const libraryIndex = new Map();
   const libraryCast = new Map();
   const staticBase = (cfg.storage?.base_url || '').replace(/\/$/, '');
+  function packPrimaryImage(row, zipPrefix) {
+    const { local, url } = assetImageReference(row.local_path || row.image_url, staticBase);
+    const file = local && localFile(storagePath, local);
+    if (file) {
+      const image_file = zipPrefix + extOf(local);
+      zip.addFile(image_file, fs.readFileSync(file));
+      return { image_file };
+    }
+    return { image_file: null, ...(url && { image_url: url }) };
+  }
   const libraryRows = db.prepare(`SELECT DISTINCT sc.storyboard_id, c.* FROM storyboard_characters sc
     JOIN character_libraries c ON c.id=sc.character_id
     JOIN storyboards b ON b.id=sc.storyboard_id JOIN episodes e ON e.id=b.episode_id
@@ -339,7 +350,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         stages: c.stages ?? null,
         voice_style: c.voice_style,
         polished_prompt: c.polished_prompt || null,
-        image_file: c.local_path ? `media/characters/char_${c.id}${extOf(c.local_path)}` : null,
+        ...packPrimaryImage(c, `media/characters/char_${c.id}`),
         extra_image_files: extraFiles,
       };
     }),
@@ -357,7 +368,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         prompt: s.prompt,
         polished_prompt: s.polished_prompt || null,
         episode_index: epIdx >= 0 ? epIdx : null,
-        image_file: s.local_path ? `media/scenes/scene_${s.id}${extOf(s.local_path)}` : null,
+        ...packPrimaryImage(s, `media/scenes/scene_${s.id}`),
         extra_image_files: extraFiles,
       };
     }),
@@ -375,7 +386,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         description: p.description,
         prompt: p.prompt,
         episode_index: epIdx >= 0 ? epIdx : null,
-        image_file: p.local_path ? `media/props/prop_${p.id}${extOf(p.local_path)}` : null,
+        ...packPrimaryImage(p, `media/props/prop_${p.id}`),
         extra_image_files: extraFiles,
       };
     }),
@@ -405,33 +416,6 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         const buf = safeReadFile(abs);
         if (buf) zip.addFile(`media/audio/sb_${sb.id}_narration${extOf(sb.narration_audio_local_path)}`, buf);
       }
-    }
-  }
-
-  // 角色主图
-  for (const c of characters) {
-    if (c.local_path) {
-      const abs = localPathToAbs(storagePath, c.local_path);
-      const buf = safeReadFile(abs);
-      if (buf) zip.addFile(`media/characters/char_${c.id}${extOf(c.local_path)}`, buf);
-    }
-  }
-
-  // 场景主图
-  for (const s of scenes) {
-    if (s.local_path) {
-      const abs = localPathToAbs(storagePath, s.local_path);
-      const buf = safeReadFile(abs);
-      if (buf) zip.addFile(`media/scenes/scene_${s.id}${extOf(s.local_path)}`, buf);
-    }
-  }
-
-  // 道具主图
-  for (const p of props) {
-    if (p.local_path) {
-      const abs = localPathToAbs(storagePath, p.local_path);
-      const buf = safeReadFile(abs);
-      if (buf) zip.addFile(`media/props/prop_${p.id}${extOf(p.local_path)}`, buf);
     }
   }
 

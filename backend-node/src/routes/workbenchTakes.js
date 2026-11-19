@@ -11,6 +11,7 @@ module.exports = function registerTakes(router, db, cfg) {
   router.get('/dramas/:id/export-takes', handler(req => require('../services/workbenchTakeArchive').choices(db, req.params.id, cfg?.storage?.local_path || './data/storage')));
   const base = '/storyboards/:id/takes';
   router.get(base, handler(req => service.details(db, req.params.id)));
+  router.post(base + '/legacy', handler(req => service.registerLegacy(db, req.params.id, req.body)));
   router.put(base + '/adoption', handler(req => service.adopt(db, cfg, req.params.id, req.body)));
   router.put(base + '/:take/retention', handler(req =>
     service.keep(db, req.params.id, req.params.take, req.body.keep_in_archive)));

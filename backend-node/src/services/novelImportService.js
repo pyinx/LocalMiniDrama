@@ -1,32 +1,57 @@
 const aiClient = require('./aiClient');
 
 const PART_LIMIT = 2000;
-const heading = /^第\s*[〇零一二两三四五六七八九十百千万\d０-９]+\s*[章节集回]/u;
-const bracketHeading = /^[【《<＜［\[]\s*(第\s*[〇零一二两三四五六七八九十百千万\d０-９]+\s*[章节集回])\s*[】》>＞］\]]?\s*(.*)$/u;
+const heading = /^第\s*([〇零一二两三四五六七八九十百千万\d０-９]+)\s*([章节集回])/u;
+const brackets = { '【': '】', '《': '》', '<': '>', '＜': '＞', '［': '］', '[': ']', '「': '」' };
+
+function episodeNumber(token) {
+  const normalized = token.normalize('NFKC').replace(/〇/g, '零').replace(/两/g, '二');
+  const digits = '零一二三四五六七八九';
+  const units = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
+  let number;
+  if (/^\d+$/.test(normalized)) number = Number(normalized);
+  else if (/^[零一二三四五六七八九]+$/.test(normalized)) {
+    number = Number(Array.from(normalized, c => digits.indexOf(c)).join(''));
+  } else {
+    let total = 0, group = 0, digit = 0;
+    for (const c of normalized) {
+      if (digits.includes(c)) digit = digits.indexOf(c);
+      else if (c === '万') { total += (group + digit) * units[c]; group = digit = 0; }
+      else if (units[c]) { group += (digit || 1) * units[c]; digit = 0; }
+      else return null;
+    }
+    number = total + group + digit;
+  }
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
 
 function detectChaptersByRules(text) {
   const chapters = [];
   let title = '序章';
+  let episode = null;
   let lines = [];
   function finish() {
     const content = lines.join('\n').trim();
-    if (content) chapters.push({ title, content });
+    if (content) chapters.push({ title, content, ...(episode && { episode_number: episode }) });
     lines = [];
   }
   for (const line of text.split(/\r?\n/)) {
     const clean = line.trim();
-    const wrapped = clean.match(bracketHeading);
-    if (wrapped || heading.test(clean) || /^Chapter\s+\d+/i.test(clean) ||
+    const close = brackets[clean[0]];
+    const end = close ? clean.indexOf(close, 1) : -1;
+    const inside = end > 0 ? clean.slice(1, end).trim() : '';
+    const wrapped = heading.test(inside);
+    const numbered = (wrapped ? inside : clean).match(heading);
+    if (numbered || /^Chapter\s+\d+/i.test(clean) ||
         /^\d+[.、]\s*.{2,20}$/u.test(clean) || /^(?:【.{1,30}】|「.{1,30}」)$/u.test(clean)) {
       finish();
-      title = wrapped ? wrapped[1] : clean;
-      // 已定稿分集文本可将标题与正文写在同一行。
-      const episode = (wrapped ? wrapped[1] + wrapped[2] : clean).match(/^(第\s*[〇零一二两三四五六七八九十百千万\d０-９]+\s*集)\s*(.*)$/u);
-      if (episode) {
-        title = episode[1];
-        if (episode[2]) lines.push(episode[2]);
-      } else if (wrapped && wrapped[2]) {
-        lines.push(wrapped[2]);
+      episode = numbered?.[2] === '集' ? episodeNumber(numbered[1]) : null;
+      title = wrapped ? inside : clean;
+      // 括号里的副标题属于标题，闭括号之后才是同一行正文。
+      if (wrapped || numbered?.[2] === '集') {
+        if (!wrapped) title = numbered[0];
+        const firstLine = clean.slice(wrapped ? end + 1 : title.length).trim();
+        if (firstLine) lines.push(firstLine);
       }
     } else {
       lines.push(line);
@@ -70,14 +95,23 @@ async function adaptPart(db, log, { text, title, chapter_title, previous }) {
   return result.trim();
 }
 
-async function importNovel(db, log, { text, title, maxChapters = 20, startChapter = 1, aiSummarize }) {
+function readChapters(text, title) {
   if (typeof text !== 'string' || !text.trim()) throw Object.assign(new Error('小说内容不能为空'), { status: 400 });
-  if (!Number.isSafeInteger(maxChapters) || maxChapters < 1) {
-    throw Object.assign(new Error('章节数必须是正整数'), { status: 400 });
-  }
   const chapters = detectChaptersByRules(text);
   if (!chapters.length) chapters.push({ title: title || '第一集', content: text.trim() });
   else if (chapters.length === 1 && chapters[0].title === '序章') chapters[0].title = title || '第一集';
+  return chapters;
+}
+
+function scriptFromSource({ text, parts }) {
+  return parts.some(p => p.adaptation) ? parts.map(p => p.adaptation || text.slice(p.start, p.end)).join('\n\n') : text;
+}
+
+async function importNovel(db, log, { text, title, maxChapters = 20, startChapter = 1, aiSummarize, compact = false }) {
+  if (!Number.isSafeInteger(maxChapters) || maxChapters < 1) {
+    throw Object.assign(new Error('章节数必须是正整数'), { status: 400 });
+  }
+  const chapters = readChapters(text, title);
   if (!Number.isSafeInteger(startChapter) || startChapter < 1 || startChapter > chapters.length) {
     throw Object.assign(new Error('起始章节超出范围，共 ' + chapters.length + ' 章'), { status: 400 });
   }
@@ -99,16 +133,17 @@ async function importNovel(db, log, { text, title, maxChapters = 20, startChapte
         }
       }
     }
+    const source = { text: ch.content, parts };
     result.push({
       index: startChapter + result.length, title: ch.title, content: ch.content.slice(0, 300),
-      script: parts.some(p => p.adaptation) ? parts.map(p => p.adaptation || ch.content.slice(p.start, p.end)).join('\n\n') : ch.content,
-      source: { text: ch.content, parts },
+      ...(ch.episode_number && { episode_number: ch.episode_number }),
+      ...(!compact && { script: scriptFromSource(source) }), source,
     });
   }
   return { chapters: result, total: chapters.length };
 }
 
-function novelSourceJson(source) {
+function normalizeNovelSource(source) {
   const invalid = message => Object.assign(new Error(message), { status: 400 });
   if (typeof source?.text !== 'string' || !source.text.trim() || !Array.isArray(source.parts)) throw invalid('缺少章节原文');
   const parts = chapterParts(source.text);
@@ -119,7 +154,7 @@ function novelSourceJson(source) {
     if (typeof input.adaptation === 'string' && input.adaptation.trim()) part.adaptation = input.adaptation.trim();
     else if (input.error) part.error = '改编失败，保留此段原文';
   }
-  return JSON.stringify({ text: source.text, parts });
+  return { text: source.text, parts };
 }
 
 // 对照作者在预览时看到的正文。只更新本次采用的集，保留分镜、成片、描述及时长。
@@ -163,7 +198,27 @@ function applySelectedEpisodes(db, dramaId, rows, sourceFor = (_row, current) =>
 }
 
 function applyNovelEpisodes(db, dramaId, rows) {
-  return applySelectedEpisodes(db, dramaId, rows, row => novelSourceJson(row.source));
+  const prepared = Array.isArray(rows) ? rows.map(row => {
+    const source = normalizeNovelSource(row?.source);
+    const script = Object.hasOwn(row, 'script_content') ? row.script_content : scriptFromSource(source);
+    return { ...row, script_content: script, source };
+  }) : rows;
+  return applySelectedEpisodes(db, dramaId, prepared, row => JSON.stringify(row.source));
 }
 
-module.exports = { importNovel, detectChaptersByRules, adaptPart, applyNovelEpisodes, applySelectedEpisodes };
+// 采用时重新划分预览用的同一份文件。请求只携带目标、原文范围和改编结果。
+function episodesFromFile(text, selection) {
+  const chapters = readChapters(text, selection?.title);
+  if (!Array.isArray(selection?.episodes) || !selection.episodes.length) {
+    throw Object.assign(new Error('请至少选择一集'), { status: 400 });
+  }
+  return selection.episodes.map(row => {
+    const chapter = Number.isSafeInteger(row?.index) && chapters[row.index - 1];
+    if (!chapter) throw Object.assign(new Error('未找到预览章节，请重新预览'), { status: 400 });
+    const expected = row.expected?.script_is_source ? { ...row.expected, script_content: chapter.content } : row.expected;
+    return { episode_number: row.episode_number, title: chapter.title, expected,
+      source: { text: chapter.content, parts: row.parts } };
+  });
+}
+
+module.exports = { importNovel, detectChaptersByRules, adaptPart, applyNovelEpisodes, applySelectedEpisodes, episodesFromFile };

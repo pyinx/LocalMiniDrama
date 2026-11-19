@@ -17,6 +17,66 @@ const { getFfmpegPath } = require('../src/utils/ffmpegPath');
 const { takeWorkspace } = require('./helpers/workbenchTakes');
 const log = { info() {}, warn() {}, error() {} };
 
+test('filling missing shots reuses storyboard-only media even with a stale waiting slot', async t => {
+  const ws = await takeWorkspace(t);
+  const [shot] = ws.shots;
+  const batch = () => ws.request('POST', '/videos/episode/' + shot.episode_id + '/batch', { storyboard_ids: [shot.id] });
+  const [waiting] = await batch();
+  ws.db.prepare("UPDATE storyboards SET video_url='/static/old.mp4' WHERE id=?").run(shot.id);
+  assert.equal((await batch())[0].status, 'waiting');
+  require('node:fs').writeFileSync(path.join(ws.storage, 'old.mp4'), 'legacy clip');
+  const [ready] = await batch();
+  assert.equal(ready.status, 'completed');
+  assert.equal(ready.video_id, null);
+  const result = await ws.request('POST', '/videos', { drama_id: ws.id, storyboard_id: shot.id,
+    operation_key: waiting.operation_key, prompt: '补镜' });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.local_path, 'old.mp4');
+  assert.equal(ws.db.prepare('SELECT COUNT(*) AS n FROM video_generations').get().n, 0);
+  assert.equal(ws.db.prepare('SELECT COUNT(*) AS n FROM async_tasks').get().n, 0);
+});
+
+test('a successful provider reply without a handle cannot be dispatched twice', async t => {
+  const ws = await takeWorkspace(t);
+  const [accepted, rejected] = ws.shots;
+  let posts = 0;
+  const provider = http.createServer((req, res) => {
+    assert.equal(req.method, 'POST');
+    posts++;
+    res.writeHead(posts === 1 ? 200 : 400, { 'Content-Type': 'application/json' });
+    res.end(posts === 1 ? '{"accepted":true}' : '{"message":"invalid model"}');
+  }).listen(0, '127.0.0.1');
+  await once(provider, 'listening');
+  t.after(() => new Promise(resolve => provider.close(resolve)));
+  ws.db.prepare(`INSERT INTO ai_service_configs(service_type,provider,model,base_url,api_key,is_default,is_active)
+    VALUES('video','volcengine','["fixture"]',?,'test',1,1)`).run('http://127.0.0.1:' + provider.address().port);
+  t.mock.method(require('../src/config'), 'loadConfig', () => ws.cfg);
+  const post = (shot, key) => ws.request('POST', '/videos', {
+    drama_id: ws.id, storyboard_id: shot.id, operation_key: key, prompt: '镜头', model: 'fixture',
+  });
+  async function failed(id) {
+    for (let i = 0; i < 200; i++) {
+      const result = video.getById(ws.db, id);
+      if (result.status === 'failed') return result;
+      await delay(10);
+    }
+    assert.fail('submission did not settle');
+  }
+  const first = await post(accepted, 'single-accepted');
+  assert.equal((await failed(first.id)).dispatch_state, 'unknown');
+  const second = await post(rejected, 'single-rejected');
+  assert.equal((await failed(second.id)).dispatch_state, 'rejected');
+  // Restore an older failed/sent record as it would appear after upgrading.
+  ws.db.prepare("UPDATE video_generations SET dispatch_state='sent' WHERE id=?").run(first.id);
+  video.resumeProcessingVideoGenerations(ws.db, log);
+  const slots = await ws.request('POST', '/videos/episode/' + ws.episodes[0].id + '/batch',
+    { storyboard_ids: [accepted.id, rejected.id] });
+  assert.equal(slots[0].dispatch_state, 'unknown');
+  assert.equal((await post(accepted, slots[0].operation_key)).id, first.id);
+  assert.equal(slots[1].status, 'waiting');
+  assert.equal(posts, 2);
+});
+
 test('a waiting batch reuses later manual takes at submission and on reopen', async t => {
   const ws = await takeWorkspace(t);
   const episode = ws.episodes[0].id;

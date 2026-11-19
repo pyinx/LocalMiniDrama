@@ -1,4 +1,5 @@
 const takes = require('./workbenchTakeService');
+const { episodeStoryboardRows } = require('./episodeStoryboardRows');
 // 对应 Go application/services/drama_service.go
 
 const storageLayout = require('./storageLayout');
@@ -73,13 +74,8 @@ function getDrama(db, dramaId, baseUrl) {
     'SELECT * FROM episodes WHERE drama_id = ? AND deleted_at IS NULL ORDER BY episode_number ASC'
   ).all(drama.id);
   drama.episodes = episodes.map((e) => rowToEpisode(e));
-  const { dedupeStoryboardRowsByNumber } = require('./episodeStoryboardService');
   for (const ep of drama.episodes) {
-    const storyboards = dedupeStoryboardRowsByNumber(
-      db.prepare(
-        'SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC, id ASC'
-      ).all(ep.id)
-    );
+    const storyboards = episodeStoryboardRows(db, ep.id);
     ep.storyboards = storyboards.map((s) => rowToStoryboard(s, db));
     // 批量加载 storyboard_props，附加到对应分镜
     try {
@@ -196,12 +192,7 @@ function listDramas(db, query) {
     ).all(d.id);
     d.episodes = episodes.map((e) => {
       const ep = rowToEpisode(e);
-      const { dedupeStoryboardRowsByNumber } = require('./episodeStoryboardService');
-      const storyboards = dedupeStoryboardRowsByNumber(
-        db.prepare(
-          'SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number ASC, id ASC'
-        ).all(ep.id)
-      );
+      const storyboards = episodeStoryboardRows(db, ep.id);
       ep.storyboards = storyboards.map((s) => rowToStoryboard(s, db));
       try {
         const sbIds = ep.storyboards.map((s) => s.id);
@@ -760,7 +751,7 @@ function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
 }
 
 function episodeDeliveryInputs(db, episodeId, baseUrl) {
-  const boards = db.prepare('SELECT * FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL ORDER BY storyboard_number, id').all(episodeId);
+  const boards = episodeStoryboardRows(db, episodeId);
   return boards.map((sb, order) => ({
     scene_id: sb.id, storyboard_number: sb.storyboard_number, order,
     take_id: sb.adopted_video_generation_id ?? null,

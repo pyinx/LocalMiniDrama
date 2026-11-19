@@ -1509,7 +1509,7 @@
                   </el-button>
                 </template>
               </div>
-              <el-button v-if="getSbAllVideos(sb.id).length || sb.adopted_video_generation_id" size="small" @click="reviewBoard = sb">
+              <el-button v-if="sb.resolved_video || getSbAllVideos(sb.id).length || sb.adopted_video_generation_id" size="small" @click="reviewBoard = sb">
                 {{ sb.adopted_video_generation_id ? '已采用 #' + sb.adopted_video_generation_id + ' · 审片' : '选择采用版与审片' }}
               </el-button>
               <!-- 视频历史条：有多条历史时显示，点击可切换 -->
@@ -3048,11 +3048,10 @@ const navSteps = computed(() => {
   const sbImgStatus = sbImgGen ? 'generating' : sbImgDone ? 'done' : sbList.length > 0 ? 'partial' : 'pending'
 
   // 视频
-  const sbVideoAllDone = sbList.length > 0 && sbList.every(sb => getSbAllVideos(sb.id).length > 0)
-  const sbVideoSome = sbList.some(sb => getSbAllVideos(sb.id).length > 0)
+  const completedVideos = sbList.filter(sb => getSbVideo(sb.id)).length
   const sbVideoGen = batchVideoRunning.value || generatingSbVideoIds.size > 0
     || epRunning.some((t) => t.resourceType === GEN_RESOURCE.SB_VIDEO)
-  const videoStatus = sbVideoGen ? 'generating' : sbVideoAllDone ? 'done' : sbVideoSome ? 'partial' : 'pending'
+  const videoStatus = sbVideoGen ? 'generating' : completedVideos === 0 ? 'pending' : completedVideos === sbList.length ? 'done' : 'partial'
 
   return [
     { key: 'script',   label: '故事剧本',   anchor: 'anchor-script',     status: scriptStatus,    count: hasScript ? 1 : 0 },
@@ -3061,7 +3060,7 @@ const navSteps = computed(() => {
     { key: 'scenes',   label: '场景',        anchor: 'anchor-scenes',     status: sceneStatus,     count: sceneList.length },
     { key: 'sb',       label: '分镜脚本',   anchor: 'anchor-storyboard', status: sbScriptStatus,  count: sbList.length },
     { key: 'sbimg',    label: '分镜图',      anchor: 'anchor-storyboard', status: sbImgStatus,     count: sbList.length },
-    { key: 'video',    label: '分镜视频',   anchor: 'anchor-video',      status: videoStatus,     count: 0 },
+    { key: 'video',    label: '分镜视频',   anchor: 'anchor-video',      status: videoStatus,     count: completedVideos },
   ]
 })
 
@@ -3725,6 +3724,11 @@ function getSbVideo(storyboardId) {
   const sb = (store.storyboards || []).find(b => b.id === storyboardId)
   if (sb && 'resolved_video' in sb) return sb.resolved_video
   return getSbAllVideos(storyboardId)[0] || null
+}
+function needsBatchVideo(sb) {
+  if (getSbVideo(sb.id) || getSbAllVideos(sb.id).length) return false
+  if (isSbUniversalMode(sb.id)) return sbCanSubmitVideo(sb) && collectSbOmniReferenceAbsoluteUrls(sb).length > 0
+  return !!getSbFirstFrameUrl(sb)
 }
 /** 取下一个分镜（按 storyboard_number 顺序） */
 function getNextStoryboard(storyboardId) {
@@ -5929,7 +5933,7 @@ async function polishUniversalSegmentsAfterGeneration(opts = {}) {
 
   const rawList = store.currentEpisode?.storyboards || []
   const list = rawList.slice().sort((a, b) => (Number(a.storyboard_number) || 0) - (Number(b.storyboard_number) || 0))
-  const targets = list.filter((sb) => sb?.id && isSbUniversalMode(sb.id) && sbUniversalSegmentTrimmed(sb))
+  const targets = list.filter((sb) => sb?.id && !opts.preservedIds?.includes(sb.id) && isSbUniversalMode(sb.id) && sbUniversalSegmentTrimmed(sb))
 
   if (!targets.length) return { polished: 0, skipped: true }
 
@@ -6572,9 +6576,15 @@ async function onLinkTailFrameToNext(sb) {
   }
   linkingTailFrameIds.add(sb.id)
   try {
-    const data = await storyboardsAPI.linkTailFrame(sb.id, { drama_id: dramaId.value })
+    const data = await storyboardsAPI.linkTailFrame(sb.id, { drama_id: dramaId.value, next_storyboard_id: nextSb.id })
     if (data?.error) {
       throw new Error(data.error)
+    }
+    if (data?.next_storyboard_id === nextSb.id && data.new_first_frame_image_id) {
+      nextSb.first_frame_image_id = data.new_first_frame_image_id
+      nextSb.image_url = data.image_url
+      nextSb.local_path = data.local_path
+      sbSelectedImgId.value = { ...sbSelectedImgId.value, [nextSb.id]: data.new_first_frame_image_id }
     }
     ElMessage.success(`已将尾帧设为 #${nextSb.storyboard_number ?? nextSb.id} 的首帧`)
     // 刷新两个分镜的媒体
@@ -6676,10 +6686,13 @@ async function onGenerateStoryboard() {
       universal_omni_storyboard: !!storyboardUniversalOmni.value,
     })
     const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
+    let preservedIds = []
     if (taskId) {
       const pollRes = await pollTask(taskId, () => loadDrama(), meta)
       // failed / timeout：pollTask 内已展示对应提示，直接返回，不显示「完成」
       if (pollRes?.status !== 'completed') return
+      preservedIds = pollRes.result?.preserved_shot_ids || []
+      if (preservedIds.length) ElMessage.info(`已保留 ${preservedIds.length} 个有采用片、保留候选或审片记录的原镜头`)
       if (pollRes?.result?.truncated) {
         sbTruncatedWarning.value = true
         sbTruncatedDismissed.value = false
@@ -6687,8 +6700,8 @@ async function onGenerateStoryboard() {
     }
     await loadDrama()
     // 生成完成后静默补全空缺的摄影参数（只填未填字段，不覆盖 AI 已填的）
-    storyboardsAPI.batchInferParams(epId, false).catch(() => {})
-    const polishRes = await polishUniversalSegmentsAfterGeneration({})
+    storyboardsAPI.batchInferParams(epId, false, preservedIds).catch(() => {})
+    const polishRes = await polishUniversalSegmentsAfterGeneration({ preservedIds })
     const polishedN = polishRes?.polished ?? 0
     ElMessage.success(
       storyboardUniversalOmni.value
@@ -6850,16 +6863,7 @@ async function startBatchVideoGeneration() {
     }
     const boards = store.storyboards || []
     // 只处理：有参考图（经典=分镜主图；全能=场景/角色/道具，不含经典主图）且 还没有已完成视频 的分镜
-    const todo = boards.filter((sb) => {
-      const vidList = sbVideos.value[sb.id] || []
-      if (getSbVideo(sb.id)) return false
-      if (vidList.some((v) => v.status === 'completed' && recordHasPlayableVideoUrl(v))) return false
-      if (isSbUniversalMode(sb.id)) {
-        if (!sbCanSubmitVideo(sb)) return false
-        return collectSbOmniReferenceAbsoluteUrls(sb).length > 0
-      }
-      return !!getSbFirstFrameUrl(sb)
-    })
+    const todo = boards.filter(needsBatchVideo)
     if (todo.length === 0) {
       ElMessage.info('没有需要生成视频的分镜（分镜缺少图片，或视频已全部生成）')
       return
@@ -6877,25 +6881,21 @@ async function startBatchVideoGeneration() {
       while (videoQueueIdx < todo.length) {
         if (batchVideoStopping.value || episode !== currentEpisodeId.value) break
         const sb = todo[videoQueueIdx++]
-        const universal = isSbUniversalMode(sb.id)
-        const omniRefs = universal ? collectSbOmniReferenceAbsoluteUrls(sb) : []
-        if (!universal && !getSbFirstFrameUrl(sb)) {
-          videoDoneCount++
-          batchVideoProgress.value = { ...batchVideoProgress.value, current: videoDoneCount }
-          continue
-        }
-        if (universal && !omniRefs.length) {
-          videoDoneCount++
-          batchVideoProgress.value = { ...batchVideoProgress.value, current: videoDoneCount }
-          continue
-        }
         try {
+          const planned = batch.find(i => i.storyboard_id === sb.id)
+          if (planned?.status === 'completed') {
+            await loadSingleStoryboardMedia(sb.id)
+            continue
+          }
+          if (!planned?.operation_key) throw new Error('找不到本镜的批次操作，请重新载入')
+          if (planned.status === 'failed') throw new Error(planned.error_msg || '本次生成失败，可在分镜里核查后重拍')
+          const universal = isSbUniversalMode(sb.id)
+          const omniRefs = universal ? collectSbOmniReferenceAbsoluteUrls(sb) : []
+          if (universal ? !omniRefs.length : !getSbFirstFrameUrl(sb)) continue
           generatingSbVideoIds.add(sb.id)
           const firstFrameUrl = await getMainImageUrlForVideo(sb)
           const absoluteUrl = universal ? (omniRefs[0] || '') : toAbsoluteImageUrl(firstFrameUrl)
           // 连贯帧：提取上一条视频末帧作为参考（全能模式不走连贯帧替换）
-          const planned = batch.find(i => i.storyboard_id === sb.id)
-          if (planned.status === 'failed') throw new Error(planned.error_msg || '本次生成失败，可在分镜里核查后重拍')
           let contiguityFirstFrameUrl = absoluteUrl
           if (contiguity && !universal && !planned.video_id) {
             const prevVideoUrl = await previousTakeUrl(boards, sb.id, storyboardsAPI.get)
@@ -6944,9 +6944,9 @@ async function startBatchVideoGeneration() {
           batchVideoProgress.value = { ...batchVideoProgress.value, failed: batchVideoProgress.value.failed + 1 }
         } finally {
           generatingSbVideoIds.delete(sb.id)
+          videoDoneCount++
+          batchVideoProgress.value = { ...batchVideoProgress.value, current: videoDoneCount }
         }
-        videoDoneCount++
-        batchVideoProgress.value = { ...batchVideoProgress.value, current: videoDoneCount }
       }
     }
     await Promise.allSettled(Array.from({ length: Math.min(videoConcurrency, todo.length) }, () => videoWorker()))
@@ -7598,15 +7598,7 @@ async function runOneClickPipeline(textOnly = false) {
     // 步骤 9：生成分镜视频
     {
       await loadStoryboardMedia()
-      const boards2 = (store.storyboards || []).filter((sb) => {
-        const vidList = sbVideos.value[sb.id] || []
-        if (vidList.some((v) => v.status === 'completed' && recordHasPlayableVideoUrl(v))) return false
-        if (isSbUniversalMode(sb.id)) {
-          if (!sbCanSubmitVideo(sb)) return false
-          return collectSbOmniReferenceAbsoluteUrls(sb).length > 0
-        }
-        return !!getSbFirstFrameUrl(sb)
-      })
+      const boards2 = (store.storyboards || []).filter(needsBatchVideo)
       const concurrency = pipelineVideoConcurrency.value
       setPipelineStep(9, `生成分镜视频（${boards2.length} 个，并发 ${concurrency}）...`)
       const { paused } = await runConcurrently(boards2, concurrency, async (sb) => {
@@ -7938,15 +7930,7 @@ async function runRepairPipeline() {
       if (paused) { await waitForResume() }
     }
     await loadStoryboardMedia()
-    const boards2 = (store.storyboards || []).filter((sb) => {
-      const vidList = sbVideos.value[sb.id] || []
-      if (vidList.some((v) => v.status === 'completed' && recordHasPlayableVideoUrl(v))) return false
-      if (isSbUniversalMode(sb.id)) {
-        if (!sbCanSubmitVideo(sb)) return false
-        return collectSbOmniReferenceAbsoluteUrls(sb).length > 0
-      }
-      return !!getSbFirstFrameUrl(sb)
-    })
+    const boards2 = (store.storyboards || []).filter(needsBatchVideo)
     {
       const concurrency = pipelineVideoConcurrency.value
       pipelineCurrentStep.value = `正在生成分镜视频（并发${concurrency}）...`

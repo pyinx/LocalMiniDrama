@@ -1,9 +1,9 @@
 const { randomUUID } = require('node:crypto');
-const { publicMedia } = require('./workbenchTakeService');
+const { publicMedia, resolveTake, localFile } = require('./workbenchTakeService');
 
 // Call inside the transaction that reads or dispatches the batch slot. The batch key
 // and a manual request's key are independently retriable even when they share a take.
-function resolveBatchVideo(db, slot) {
+function resolveBatchVideo(db, slot, storageRoot) {
   const bound = slot.reused_video_id != null
     ? db.prepare('SELECT * FROM video_generations WHERE id=?').get(slot.reused_video_id)
     : db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(slot.operation_key);
@@ -12,12 +12,20 @@ function resolveBatchVideo(db, slot) {
     AND (status IN ('pending','processing','completed') OR dispatch_state='unknown' OR TRIM(provider_task_id)!='')
     ORDER BY id DESC`).all(slot.storyboard_id, slot.drama_id);
   const existing = candidates.find(v => v.status !== 'completed' || publicMedia(v));
-  if (existing) db.prepare('UPDATE video_batch_items SET reused_video_id=? WHERE operation_key=?').run(existing.id, slot.operation_key);
-  return existing;
+  if (existing) {
+    db.prepare('UPDATE video_batch_items SET reused_video_id=? WHERE operation_key=?').run(existing.id, slot.operation_key);
+    return existing;
+  }
+  // A legacy clip can be the current cut without owning a generation ID.
+  const board = db.prepare('SELECT * FROM storyboards WHERE id=? AND deleted_at IS NULL').get(slot.storyboard_id);
+  const media = resolveTake(db, board, []);
+  if (media && (media.local_path ? localFile(storageRoot, media.local_path) : media.video_url)) {
+    return { ...media, drama_id: slot.drama_id };
+  }
 }
 
 // A batch fills missing clips. A deliberate reshoot creates its own operation.
-function openBatch(db, episodeId, storyboardIds) {
+function openBatch(db, episodeId, storyboardIds, storageRoot) {
   const ep = db.prepare('SELECT id, drama_id FROM episodes WHERE id=? AND deleted_at IS NULL').get(episodeId);
   if (!ep) throw new Error('剧集不存在');
   return db.transaction(() => {
@@ -33,13 +41,13 @@ function openBatch(db, episodeId, storyboardIds) {
       WHERE b.episode_id=? ORDER BY s.storyboard_number, s.id`).all(episodeId);
     return slots.map(slot => {
       slot.drama_id = ep.drama_id;
-      let video = resolveBatchVideo(db, slot);
+      let video = resolveBatchVideo(db, slot, storageRoot);
       if (requested.has(slot.storyboard_id) && video?.dispatch_state === 'cancelled_before_dispatch') {
         const key = slot.operation_key === video.operation_key ? randomUUID() : slot.operation_key;
         db.prepare('UPDATE video_batch_items SET operation_key=?,reused_video_id=NULL WHERE operation_key=?').run(key, slot.operation_key);
         slot.operation_key = key;
         slot.reused_video_id = null;
-        video = resolveBatchVideo(db, slot);
+        video = resolveBatchVideo(db, slot, storageRoot);
       }
       return { storyboard_id: slot.storyboard_id, storyboard_number: slot.storyboard_number,
         operation_key: slot.operation_key, video_id: video?.id ?? null, task_id: video?.task_id ?? null,

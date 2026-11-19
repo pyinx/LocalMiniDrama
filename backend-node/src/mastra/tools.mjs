@@ -1,6 +1,7 @@
 import { createRequire } from 'module';
 import { assertOwned, resolveEpisode } from './context.mjs';
 import methods from '../services/workbenchCreativeMethods.js';
+import storyboardRows from '../services/episodeStoryboardRows.js';
 
 function fail(error) {
   return { ok: false, error };
@@ -56,10 +57,11 @@ export function executeGetCurrentProject(db, dramaId, episodeId) {
     const full = episode && episode.script_content ? episode.script_content : '';
     script = clip(full, 12000);
     scriptTruncated = full.length > 12000;
+    const cast = direction.enabled ? methods.projectCast(db, dramaId) : null;
     // 分镜图的两个落点：storyboards.image_url（首尾帧绑定/导入会回写）和已完成的
     // image_generations 记录（四宫格等不写回 storyboards）。不能用 storyboards.local_path，
     // 视频管线会把同一个字段写成视频路径。
-    storyboards = db.prepare(
+    const rows = db.prepare(
       `SELECT s.*,
               EXISTS (
                 SELECT 1 FROM image_generations ig
@@ -71,16 +73,20 @@ export function executeGetCurrentProject(db, dramaId, episodeId) {
        FROM storyboards s
        WHERE s.episode_id = ? AND s.deleted_at IS NULL
        ORDER BY s.storyboard_number ASC, s.id ASC`
-    ).all(resolvedId).map((row) => ({
-      id: row.id,
-      number: row.storyboard_number,
-      summary: clip(row.description || row.image_prompt || '', 200),
-      ...(direction.enabled ? {
-        method: methods.scenarioFor(row, methods.readLock(row.creative_review_lock).method),
-        checks: methods.creativeGuidance(drama, 'video', row).checks,
-      } : {}),
-      hasImage: Boolean(String(row.image_url || '').trim()) || Boolean(row.has_generated_image),
-    }));
+    ).all(resolvedId);
+    storyboards = storyboardRows.dedupeStoryboardRowsByNumber(rows).map(row => {
+      const castSize = cast && methods.effectiveCast(row, cast).length;
+      return {
+        id: row.id,
+        number: row.storyboard_number,
+        summary: clip(row.description || row.image_prompt || '', 200),
+        ...(direction.enabled ? {
+          method: methods.scenarioFor(row, methods.readLock(row.creative_review_lock).method, castSize),
+          checks: methods.creativeGuidance(drama, 'video', row, castSize).checks,
+        } : {}),
+        hasImage: Boolean(String(row.image_url || '').trim()) || Boolean(row.has_generated_image),
+      };
+    });
   }
 
   const characters = db.prepare(

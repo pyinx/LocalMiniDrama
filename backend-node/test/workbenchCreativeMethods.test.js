@@ -5,7 +5,7 @@ const http = require('node:http');
 const { once } = require('node:events');
 const { runMigrationsAndEnsure } = require('../src/db/migrate');
 const { withCreativeGuidance, creativeGuidance, scenarioFor, catalog } = require('../src/services/workbenchCreativeMethods');
-const { updateDirection } = require('../src/services/workbenchContinuity');
+const { readWorkbench, updateDirection } = require('../src/services/workbenchContinuity');
 const aiClient = require('../src/services/aiClient');
 const videoService = require('../src/services/videoService');
 const videoHandlers = require('../src/routes/videos');
@@ -77,4 +77,30 @@ test('uses the same methods across entry points', async t => {
   assert.equal(scenarioFor({ action: '越过门槛' }, 'pause'), 'pause');
   assert.deepEqual(creativeGuidance({}, 'video').advice, []);
   assert.throws(() => withCreativeGuidance(db, '本镜', 1, 'video', 99), /不属于/);
+});
+
+test('uses actual project or library cast for the director, assistant and generation prompts', async t => {
+  const db = new Database(':memory:');
+  t.after(() => db.close());
+  runMigrationsAndEnsure(db);
+  db.exec(`INSERT INTO dramas (id,title) VALUES(1,'试戏'),(2,'其他剧');
+    INSERT INTO episodes (id,drama_id,episode_number) VALUES(10,1,1);
+    INSERT INTO storyboards(id,episode_id,storyboard_number,characters,dialogue) VALUES(20,10,1,NULL,'请进来。');
+    INSERT INTO character_libraries(id,name,drama_id) VALUES(1,'老孙',NULL),(2,'周师傅',1),(3,'阿和',1),(4,'游客',2);
+    INSERT INTO storyboard_characters(storyboard_id,character_id) VALUES(20,1),(20,2),(20,3),(20,4);`);
+  updateDirection(db, 1, { enabled: true, facts: '', revision: 0 });
+  const { executeGetCurrentProject } = await import('../src/mastra/tools.mjs');
+  function inspect(expected) {
+    const panel = readWorkbench(db, 1).episodes[0].shots[0];
+    const assistant = executeGetCurrentProject(db, 1, 10).project.storyboards[0];
+    assert.equal(panel.method, expected);
+    assert.equal(assistant.method, expected);
+    assert.deepEqual(assistant.checks, panel.checks);
+    assert.ok(withCreativeGuidance(db, '镜头', 1, 'video', 20).includes(catalog.scenarios[expected].direction));
+  }
+  inspect('ensemble');
+  db.exec('UPDATE character_libraries SET deleted_at=CURRENT_TIMESTAMP WHERE id=3');
+  inspect('dialogue');
+  db.exec("UPDATE character_libraries SET deleted_at=NULL WHERE id=3; UPDATE storyboards SET characters='[]' WHERE id=20");
+  inspect('dialogue');
 });

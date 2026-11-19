@@ -44,11 +44,25 @@ test('restores episode cast, distinct scenes and approved costume stages in anot
       await src.request('PUT', '/dramas/80/creative-review/' + board, { action, field, review_token: item.review_token });
     }
   }
-  // Keep an outstanding change so an import cannot pass by silently re-approving every lock.
-  src.db.prepare("UPDATE scenes SET prompt='湿木梯' WHERE id=72").run();
+  // Old text-only locks prompt once to confirm a pictured asset. A fresh confirmation
+  // must also survive the IDs and filenames assigned by an archive restore.
+  src.db.exec("UPDATE storyboards SET creative_review_lock=json_remove(creative_review_lock,'$.visual_images') WHERE id=53");
+  const legacyLock = (await review(src, 80)).episodes[0].shots[1];
+  assert.deepEqual(legacyLock.changes, ['visual']);
+  await src.request('PUT', '/dramas/80/creative-review/53', { action:'accept', field:'visual', review_token:legacyLock.review_token });
+  assert.equal((await review(src, 80)).episodes[0].shots[1].images_changed, false);
+  // Replacing the scene picture at its existing path changes only the referencing shot.
+  const signed = (await review(src, 80)).episodes[1].shots[0];
+  fs.copyFileSync(path.join(src.storage, 'pilot.png'), path.join(src.storage, 'ferry-b.png'));
+  require('../src/services/sceneService').updateScene(src.db, console, 72, {
+    local_path: null, image_url: src.cfg.storage.base_url + '/ferry-b.png',
+  });
   const before = (await review(src, 80)).episodes.map(e => e.shots[0]);
   assert.deepEqual(before.map(s => s.approved), [true, false]);
   assert.deepEqual(before.map(s => s.changes), [[], ['visual']]);
+  assert.equal(before[1].images_changed, true);
+  assert.deepEqual(before[1].current.visual, signed.current.visual);
+  assert.notEqual(before[1].review_token, signed.review_token);
   const exported = await fetch(src.url('/dramas/80/export'));
   assert.equal(exported.status, 200);
   const buffer = Buffer.from(await exported.arrayBuffer());

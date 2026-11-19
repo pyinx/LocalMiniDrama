@@ -10,11 +10,21 @@ function fail(message, status = 400) {
 
 function publicMedia(row) {
   if (!row) return null;
-  const local = (typeof row.local_path === 'string' && row.local_path.trim())
-    || (typeof row.video_url === 'string' && row.video_url.startsWith('/static/') ? row.video_url.slice(8) : '');
-  const remote = /^https?:\/\//i.test(row.video_url || '') ? row.video_url : null;
+  const url = typeof row.video_url === 'string' ? row.video_url.trim() : '';
+  const remote = /^https?:\/\//i.test(url) ? url : null;
+  const relativeVideo = /\.(?:mp4|webm|mov|mkv|m4v|avi)$/i.test(url)
+    && !/^(?:[a-z][\w+.-]*:|\/)/i.test(url) && !url.split(/[\\/]/).includes('..');
+  const relative = relativeVideo ? url : '';
+  const stored = typeof row.local_path === 'string' && row.local_path.trim();
+  const local = (stored || (url.startsWith('/static/') ? url : relative)).replace(/^\/static\//, '');
   if (!local && !remote) return null;
   return { id: row.id ?? null, storyboard_id: row.storyboard_id, status: 'completed', local_path: local || null, video_url: remote };
+}
+
+function sameMedia(a, b) {
+  if (!a || !b) return false;
+  if (a.local_path && b.local_path) return a.local_path === b.local_path;
+  return Boolean(a.video_url && a.video_url === b.video_url);
 }
 
 function candidates(db, sbId) {
@@ -22,6 +32,18 @@ function candidates(db, sbId) {
     JOIN episodes e ON e.id=s.episode_id AND e.drama_id=v.drama_id
     WHERE s.id=? AND s.deleted_at IS NULL AND e.deleted_at IS NULL
     AND v.status='completed' AND v.deleted_at IS NULL ORDER BY v.created_at DESC, v.id DESC`).all(sbId);
+}
+
+// A few legacy projects used the main image slot to store a video. Before that slot
+// is rebound to a still, preserve the effective video in its dedicated legacy field.
+function videoUrlBeforeFrameChange(db, sb) {
+  if (!sb || !isVideoPath(sb.local_path)) return sb?.video_url ?? null;
+  const selected = resolveTake(db, sb);
+  return selected?.local_path ? '/static/' + selected.local_path : selected?.video_url || sb.video_url || null;
+}
+
+function isVideoPath(value) {
+  return /\.(mp4|webm|mov|mkv|m4v|avi)$/i.test(value || '');
 }
 
 function resolveTake(db, sb, rows) {
@@ -32,21 +54,19 @@ function resolveTake(db, sb, rows) {
   }
   const latest = rows.find(publicMedia);
   // Legacy entries used local_path for both the video and the storyboard's still image.
-  const videoPath = /\.(mp4|webm|mov|mkv|m4v|avi)$/i.test(sb.local_path || '')
-    ? sb.local_path : null;
+  const videoPath = isVideoPath(sb.local_path) ? sb.local_path : null;
   const legacy = publicMedia({ video_url: sb.video_url, local_path: videoPath, storyboard_id: sb.id });
   if (!legacy || (latest && (latest.completed_at || latest.updated_at || latest.created_at) > sb.updated_at)) {
     return publicMedia(latest);
   }
-  const matches = rows.filter(v => (legacy.local_path && legacy.local_path === v.local_path)
-    || (legacy.video_url && legacy.video_url === v.video_url));
+  const matches = rows.filter(v => sameMedia(legacy, publicMedia(v)));
   // A path shared by multiple candidates remains playable without assigning ownership.
   return matches.length === 1 ? publicMedia(matches[0]) : legacy;
 }
 
-function selectionFields(db, sb) {
+function selectionFields(db, sb, rows) {
   if (sb.take_revision == null) return {}; // A pre-migration reader may only expose the legacy fields.
-  const resolved = resolveTake(db, sb);
+  const resolved = resolveTake(db, sb, rows);
   return {
     adopted_video_generation_id: sb.adopted_video_generation_id,
     take_revision: sb.take_revision,
@@ -102,13 +122,40 @@ function reviews(db, id) {
 
 function details(db, sbId) {
   const sb = storyboard(db, sbId);
+  const rows = candidates(db, sbId);
+  const selection = selectionFields(db, sb, rows);
+  const current = selection.resolved_video;
   return {
-    ...selectionFields(db, sb),
-    candidates: candidates(db, sbId).filter(publicMedia).map(v => ({
+    ...selection,
+    can_register_legacy: Boolean(current && current.id == null && !rows.some(v => sameMedia(current, publicMedia(v)))),
+    candidates: rows.filter(publicMedia).map(v => ({
       ...publicMedia(v), model: v.model, created_at: v.created_at, keep_in_archive: !!v.keep_in_archive,
       reviews: reviews(db, v.id),
     })),
   };
+}
+
+// Register only the media the author opened. A concurrent request reuses its ID.
+function registerLegacy(db, sbId, expected) {
+  return db.transaction(() => {
+    const sb = storyboard(db, sbId);
+    const rows = candidates(db, sb.id);
+    const current = resolveTake(db, sb, rows);
+    if (!current || current.local_path !== expected?.local_path || current.video_url !== expected?.video_url) {
+      fail('当前视频已变化，请刷新后重新审片', 409);
+    }
+    const matches = rows.filter(v => sameMedia(current, publicMedia(v)));
+    if (matches.length > 1) fail('旧片对应多个候选，请手动选择版本', 409);
+    if (!matches.length) {
+      const stamp = sb.updated_at || sb.created_at || '1970-01-01';
+      const result = db.prepare(`INSERT INTO video_generations
+        (drama_id, storyboard_id, provider, prompt, status, local_path, video_url, created_at, updated_at, completed_at)
+        SELECT drama_id, ?, 'imported', '', 'completed', ?, ?, ?, ?, ? FROM episodes WHERE id=? AND deleted_at IS NULL`)
+        .run(sb.id, current.local_path, current.video_url, stamp, stamp, stamp, sb.episode_id);
+      if (!result.changes) fail('分集不存在', 404);
+    }
+    return details(db, sb.id);
+  }).immediate();
 }
 
 function keep(db, sbId, id, value) {
@@ -138,6 +185,6 @@ function reviewStatus(db, sbId, id, reviewId, status) {
 }
 
 module.exports = {
-  fail, publicMedia, localFile, candidates, resolveTake, selectionFields, adopt, take,
-  details, keep, reviews, addReview, reviewStatus, validateReview,
+  fail, publicMedia, localFile, candidates, resolveTake, selectionFields, videoUrlBeforeFrameChange, adopt, take,
+  details, registerLegacy, keep, reviews, addReview, reviewStatus, validateReview,
 };

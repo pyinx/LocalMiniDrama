@@ -20,6 +20,13 @@ const {
   jwtPartLengths,
 } = require('./klingJwt');
 
+// An ambiguous response can follow a successful, billable submission. Only a
+// definite client rejection permits the batch to submit this shot again.
+function httpSubmissionError(status, error) {
+  const rejected = status >= 400 && status < 500 && status !== 408 && status !== 409;
+  return { error, submission: rejected ? 'rejected' : 'unknown' };
+}
+
 /**
  * ?? provider ??????????api_protocol ??????????
  */
@@ -807,7 +814,7 @@ async function callVolcengineOmniVideoApi(config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -855,6 +862,7 @@ async function callKlingOmniVideoApi(config, log, opts) {
   const bearerToken = resolveKlingOmniBearerToken(cfg, log);
   if (!bearerToken) {
     return {
+      submission: 'rejected',
       error:
         '可灵 Omni 未配置鉴权：请填写「API Key」（中转 Bearer），或在高级设置中填写官方 AccessKey + SecretKey（存 settings，自动生成 JWT）',
     };
@@ -899,7 +907,7 @@ async function callKlingOmniVideoApi(config, log, opts) {
 
   const textPrompt = (prompt || '').trim().slice(0, 2500);
   if (!textPrompt) {
-    return { error: '可灵 Omni：multi_shot=false 时 prompt 不能为空' };
+    return { submission: 'rejected', error: '可灵 Omni：multi_shot=false 时 prompt 不能为空' };
   }
 
   const body = {
@@ -960,7 +968,7 @@ async function callKlingOmniVideoApi(config, log, opts) {
           '若用官方 AK/SK：确认未与 Secret 对调；在 AI 配置中尝试勾选「SecretKey 为 Base64」；Base URL 区域（北京/新加坡）须与密钥一致',
       });
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -971,7 +979,7 @@ async function callKlingOmniVideoApi(config, log, opts) {
   }
 
   if (data.code !== undefined && Number(data.code) !== 0) {
-    return { error: `Kling Omni 错误(${data.code}): ${data.message || data.msg || 'unknown'}` };
+    return { submission: 'rejected', error: `Kling Omni 错误(${data.code}): ${data.message || data.msg || 'unknown'}` };
   }
 
   const directUrl = pickProxyVideoUrl(data);
@@ -1597,7 +1605,7 @@ async function callKlingVideoApi(config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -1606,7 +1614,7 @@ async function callKlingVideoApi(config, log, opts) {
   }
 
   if (data.code !== undefined && data.code !== 0) {
-    return { error: `可灵错误(${data.code}): ${data.message || '未知错误'}` };
+    return { submission: 'rejected', error: `可灵错误(${data.code}): ${data.message || '未知错误'}` };
   }
 
   // 同步返回视频 URL（极少见，兜底）
@@ -1638,7 +1646,7 @@ const DASHSCOPE_IMAGE2VIDEO = '/api/v1/services/aigc/image2video/video-synthesis
  * - wanx2.1-vace-plus: video-generation, function image_reference + ref_images_url??? 3 ??
  * - wan2.6-r2v-flash: video-generation, reference_urls??? 5 ??
  */
-async function callDashScopeVideoApi(config, log, opts) {
+async function buildDashScopeVideoRequest(config, log, opts) {
   const {
     prompt,
     model: modelName,
@@ -1765,6 +1773,13 @@ async function callDashScopeVideoApi(config, log, opts) {
     image_urls: imageUrlsInBody,
   });
   log.info('Video API request (DashScope)', { url: url.slice(0, 70), model, video_gen_id });
+  return { url, body };
+}
+
+async function callDashScopeVideoApi(config, log, opts) {
+  const { url, body, error } = await buildDashScopeVideoRequest(config, log, opts);
+  if (error) return { submission: 'rejected', error };
+  const { video_gen_id } = opts;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -1785,7 +1800,7 @@ async function callDashScopeVideoApi(config, log, opts) {
       if (raw && raw.length) errMsg += ' - ' + raw.slice(0, 200);
     }
     log.error('DashScope video create failed', { status: res.status, body: raw.slice(0, 300), video_gen_id });
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
   let data;
   try {
@@ -1794,7 +1809,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     return { error: '??????????' };
   }
   if (data.code) {
-    return { error: data.message || data.code || '????????' };
+    return { submission: 'rejected', error: data.message || data.code || '????????' };
   }
   const taskId = data?.output?.task_id;
   if (taskId) return { task_id: taskId, status: 'PENDING' };
@@ -1899,7 +1914,7 @@ async function callGeminiVideoApi(config, log, opts) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
     log.error('Gemini Video API failed', { status: res.status, body: raw.slice(0, 300), video_gen_id });
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -2289,7 +2304,7 @@ async function callViduVideoApi(config, log, opts) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
     log.error('[Vidu] Video API failed', { status: res.status, body: raw.slice(0, 300), video_gen_id });
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -2472,7 +2487,7 @@ async function callVeo3VideoApi(config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -2766,6 +2781,7 @@ async function callAgnesVideoApi(db, config, log, opts) {
 
   if (rawRefList.length > 0 && resolvedRefs.length === 0) {
     return {
+      submission: 'rejected',
       error: 'Agnes 视频参考图须为公网 URL，本地图上传图床失败（imageproxy.zhongzhuan.chat 可能无法访问）。请检查网络/代理，或将 storage.base_url 配置为 Agnes 可访问的公网地址后重试。',
     };
   }
@@ -2865,7 +2881,7 @@ async function callAgnesVideoApi(db, config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -3048,7 +3064,7 @@ async function callSoraVideoApi(config, log, opts) {
       } catch (_) {
         if (raw) errMsg += ' - ' + raw.slice(0, 200);
       }
-      return { error: errMsg };
+      return httpSubmissionError(res.status, errMsg);
     }
     let data;
     try {
@@ -3235,7 +3251,7 @@ async function callSoraVideoApi(config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -3330,12 +3346,12 @@ async function resolveJimengApiImageBuffer(rawUrl, files_base_url, storage_local
 async function callJimengAiApiVideo(config, log, opts) {
   const base = (config.base_url || '').toString().replace(/\/$/, '').trim();
   if (!base) {
-    return { error: 'Jimeng AI API 未配置 Base URL（请填写自建服务地址，如 http://127.0.0.1:8000）' };
+    return { submission: 'rejected', error: 'Jimeng AI API 未配置 Base URL（请填写自建服务地址，如 http://127.0.0.1:8000）' };
   }
   let apiKey = (config.api_key || '').trim();
   if (/^bearer\s+/i.test(apiKey)) apiKey = apiKey.replace(/^bearer\s+/i, '').trim();
   if (!apiKey) {
-    return { error: 'Jimeng AI API 未配置 Session（填入 API Key 字段，多个用英文逗号分隔）' };
+    return { submission: 'rejected', error: 'Jimeng AI API 未配置 Session（填入 API Key 字段，多个用英文逗号分隔）' };
   }
 
   const model = getModelFromConfig(config, opts.model);
@@ -3389,7 +3405,7 @@ async function callJimengAiApiVideo(config, log, opts) {
   }
 
   if (seedance && fileParts.length === 0) {
-    return { error: 'Jimeng Seedance 需要至少一张参考图（请设置分镜参考图或 image_url）' };
+    return { submission: 'rejected', error: 'Jimeng Seedance 需要至少一张参考图（请设置分镜参考图或 image_url）' };
   }
 
   const prompt = (opts.prompt || '').toString();
@@ -3449,7 +3465,7 @@ async function callJimengAiApiVideo(config, log, opts) {
   try {
     data = JSON.parse(raw);
   } catch (_) {
-    return { error: 'Jimeng AI API 非 JSON 响应 (' + res.status + '): ' + raw.slice(0, 300) };
+    return httpSubmissionError(res.status, 'Jimeng AI API 非 JSON 响应 (' + res.status + '): ' + raw.slice(0, 300));
   }
 
   if (!res.ok) {
@@ -3459,7 +3475,7 @@ async function callJimengAiApiVideo(config, log, opts) {
       data?.errmsg ||
       data?.message ||
       raw.slice(0, 400);
-    return { error: 'Jimeng AI API ' + res.status + ': ' + (typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg)) };
+    return httpSubmissionError(res.status, 'Jimeng AI API ' + res.status + ': ' + (typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg)));
   }
 
   const videoUrl = data?.data?.[0]?.url || data?.data?.[0]?.video_url;
@@ -3645,7 +3661,7 @@ async function callXaiVideoApi(config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
 
   let data;
@@ -4043,7 +4059,7 @@ async function callMinimaxH3VideoApi(config, log, opts) {
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(resHttp.status, errMsg);
   }
   let data;
   try {
@@ -4475,7 +4491,7 @@ async function callVideoApi(db, log, opts) {
     } catch (_) {
       if (raw && raw.length) errMsg += ' - ' + raw.slice(0, 200);
     }
-    return { error: errMsg };
+    return httpSubmissionError(res.status, errMsg);
   }
   let data;
   try {

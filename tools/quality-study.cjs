@@ -295,10 +295,9 @@ function readBallot(dir, i) {
   }
 }
 
-function inspectPair(study, p, entry, ballots, root) {
+function inspectPair(study, p, entry, ballots, root, hashes) {
   const issues = setupIssues(study, p);
   const votes = [];
-  const hashes = [];
   for (const arm of arms) {
     const r = p[arm];
     if (!r.attempts.length || r.final == null) issues.push(arm + ' 尚未完成试拍');
@@ -380,9 +379,37 @@ function report(file, output) {
         return ballot?.round === key.round ? ballot : null;
       })
     : [];
-  const results = study.pairs.map((p) =>
-    inspectPair(study, p, current && Object.hasOwn(key.cases, p.id) && key.cases[p.id], ballots, root),
-  );
+  const clips = new Map();
+  const pairsBySignature = new Map();
+  const results = study.pairs.map((p) => {
+    const hashes = [];
+    const entry = current && Object.hasOwn(key.cases, p.id) && key.cases[p.id];
+    const result = inspectPair(study, p, entry, ballots, root, hashes);
+    for (const digest of new Set(hashes)) {
+      if (!clips.has(digest)) clips.set(digest, []);
+      clips.get(digest).push(result);
+    }
+    if (hashes.length === 2) {
+      const signature = hashes.sort().join('/');
+      if (!pairsBySignature.has(signature)) pairsBySignature.set(signature, []);
+      pairsBySignature.get(signature).push(result);
+    }
+    return result;
+  });
+  function flagReuse(group, reason) {
+    const message = group.map(r => r.id).join('、') + reason;
+    for (const r of group) {
+      if (!r.issues.includes(message)) r.issues.push(message);
+      r.status = '待测';
+    }
+  }
+  for (const group of clips.values()) {
+    const works = group.map(r => r.work).filter(present).map(work => work.trim());
+    if (new Set(works).size > 1) flagReuse(group, ' 跨作品复用同一条样片，独立样本待补');
+  }
+  for (const group of pairsBySignature.values()) {
+    if (group.length > 1) flagReuse(group, ' 使用同一对样片，独立样本待补');
+  }
   const groups = new Map();
   for (const p of study.pairs) {
     const id = JSON.stringify([p.work, p.episode, p.scene]);
@@ -398,14 +425,6 @@ function report(file, output) {
   }));
   const issues = [];
   if (!registered(file, study)) issues.push('缺少与当前清单一致的预登记');
-  const used = new Map();
-  for (const p of study.pairs) {
-    const hashes = current && key.cases[p.id]?.mediaHashes;
-    if (!hashes) continue;
-    const signature = [...hashes].sort().join('/');
-    if (used.has(signature)) issues.push(p.id + ' 与 ' + used.get(signature) + ' 使用同一对样片，独立样本待补');
-    else used.set(signature, p.id);
-  }
   if (results.some((r) => r.issues.length)) issues.push('有配对待测或待复核');
   const wins = results.filter((r) => r.status === '已完成对照' && r.votes.every((v) => v.overall === 'method'));
   if (new Set(wins.map((r) => r.work.trim())).size < 2) issues.push('尚未在至少两部独立作品上重复取得一致优势');

@@ -13,6 +13,57 @@ const { importNovel } = require('../src/services/novelImportService');
 const { openWorkbench } = require('./helpers/workbenchHttp');
 const { setTimeout: delay } = require('node:timers/promises');
 
+test('separates bracket subtitles from prose and maps only explicit episode numbers', async () => {
+  const text = ['【第一章 暗灯】', '灯灭。', '《第九集 迟到》钟响。', '雨停。', '第１０集 她推门。',
+    '第十二集', '灯亮。', '【第三十六章】尾声。'].join('\n');
+  const { chapters } = await importNovel(null, console, { text });
+  assert.deepEqual(chapters.map(c => [c.title, c.episode_number, c.source.text]), [
+    ['第一章 暗灯', undefined, '灯灭。'], ['第九集 迟到', 9, '钟响。\n雨停。'],
+    ['第１０集', 10, '她推门。'], ['第十二集', 12, '灯亮。'], ['第三十六章', undefined, '尾声。'],
+  ]);
+  assert.deepEqual(chapters[1].source.parts, [{ start: 0, end: '钟响。\n雨停。'.length }]);
+});
+
+test('adopts large multipart previews into the chosen episodes and rejects stale mappings', async t => {
+  const ws = await openWorkbench(t);
+  const { novelSelectionForm } = await import('../../frontweb/src/utils/novelSelection.js');
+  const original = '雪'.repeat(1_800_000);
+  const file = new Blob(['【第九集 暗灯】\n', original, '\n第十集\n灯亮。']);
+  const input = new FormData();
+  input.append('file', file, 'novel.txt');
+  input.append('compact', 'true');
+  const { chapters } = await ws.request('POST', '/dramas/import-novel', input);
+  assert.deepEqual(chapters.map(c => c.episode_number), [9, 10]);
+  assert.equal(chapters[0].source.text, original);
+  assert.equal('script' in chapters[0], false);
+  const metadata = { project: { title: '续集' }, operation_id: 'large-novel-project-9' };
+  const first = { chapter: chapters[0], targetNumber: 9, target: null };
+  const makeForm = (rows, creation) => novelSelectionForm(file, '续集', rows, creation);
+  const form = makeForm([first], metadata);
+  assert.ok(form.get('selection').size < 100_000);
+  const { id } = await ws.request('POST', '/dramas/import-novel-project', form);
+  const base = '/dramas/' + id;
+  const read = () => ws.db.prepare('SELECT * FROM episodes WHERE drama_id=? AND deleted_at IS NULL ORDER BY episode_number').all(id);
+  const [episode] = read();
+  assert.equal(episode.episode_number, 9);
+  assert.equal(episode.script_content, original);
+  assert.equal(JSON.parse(episode.novel_source).text, original);
+  const retry = await ws.request('POST', '/dramas/import-novel-project', makeForm([first], metadata));
+  assert.equal(retry.id, id);
+  const apply = rows => ws.request('PUT', base + '/novel-episodes', makeForm(rows));
+  first.target = episode;
+  chapters[0].source.parts[0].adaptation = '灯灭。';
+  const second = { chapter: chapters[1], targetNumber: 13, target: null };
+  const adopted = await apply([first, second]);
+  assert.deepEqual(adopted.episode_numbers, [9, 13]);
+  assert.ok(read()[0].script_content.startsWith('灯灭。\n\n雪'));
+  assert.equal(read()[1].script_content, '灯亮。');
+  chapters[0].source.parts[0].adaptation = '迟到的改编';
+  const stale = await fetch(ws.url(base + '/novel-episodes'), { method: 'PUT', body: makeForm([{ ...second, targetNumber: 10 }, first]) });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(read().map(e => e.episode_number), [9, 13]);
+});
+
 test('generated proposals preserve finalized episodes until individually adopted', async t => {
   const ws = await openWorkbench(t);
   const { id } = await ws.request('POST', '/dramas', { title: '三集定稿' });

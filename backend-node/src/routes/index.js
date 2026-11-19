@@ -42,7 +42,7 @@ function setupRouter(cfg, db, log) {
   const storyboards = storyboardRoutes(db, log);
   const tailFrameLink = tailFrameLinkRoutes(db, cfg, log);
   const images = imageRoutes(db, cfg, log);
-  const videos = videoRoutes(db, log);
+  const videos = videoRoutes(db, log, cfg);
   const videoMerges = videoMergeRoutes(db, log);
   const assets = assetRoutes(db, log);
   const audio = audioRoutes(db, log, cfg);
@@ -60,9 +60,9 @@ function setupRouter(cfg, db, log) {
       next(err);
     }
   };
-  r.get('/dramas/:id/creative-review', reviewRoute(req => workbench.readWorkbench(db, req.params.id, cfg.storage?.local_path)));
+  r.get('/dramas/:id/creative-review', reviewRoute(req => workbench.readWorkbench(db, req.params.id, cfg.storage?.local_path, cfg.storage?.base_url)));
   r.put('/dramas/:id/creative-direction', reviewRoute(req => workbench.updateDirection(db, req.params.id, req.body || {})));
-  r.put('/dramas/:id/creative-review/:shot', reviewRoute(req => workbench.reviewShot(db, req.params.id, req.params.shot, req.body || {})));
+  r.put('/dramas/:id/creative-review/:shot', reviewRoute(req => workbench.reviewShot(db, req.params.id, req.params.shot, req.body || {}, cfg.storage?.local_path, cfg.storage?.base_url)));
   // 导出/导入（放在 :id 路由前，避免被 :id 捕获）
   r.get('/dramas/:id/export', drama.exportDrama);
   const multer = require('multer');
@@ -83,13 +83,24 @@ function setupRouter(cfg, db, log) {
     try { response.success(res, { adaptation: await novel.adaptPart(db, log, req.body || {}) }); }
     catch (err) { novelError(res, err); }
   });
-  r.put('/dramas/:id/novel-episodes', (req, res) => {
-    try { response.success(res, novel.applyNovelEpisodes(db, Number(req.params.id), req.body?.episodes)); }
+  const novelFiles = importUpload.fields([{ name: 'file', maxCount: 1 }, { name: 'selection', maxCount: 1 }]);
+  function novelApplyBody(req) {
+    if (!req.is('multipart/form-data')) return req.body || {};
+    const file = req.files?.file?.[0];
+    const selection = req.files?.selection?.[0];
+    if (!file || !selection) throw Object.assign(new Error('缺少预览原文或已选分集'), { status: 400 });
+    let data;
+    try { data = JSON.parse(selection.buffer.toString('utf8')); }
+    catch { throw Object.assign(new Error('已选分集格式无效'), { status: 400 }); }
+    return { ...data, episodes: novel.episodesFromFile(file.buffer.toString('utf8'), data) };
+  }
+  r.put('/dramas/:id/novel-episodes', novelFiles, (req, res) => {
+    try { response.success(res, novel.applyNovelEpisodes(db, Number(req.params.id), novelApplyBody(req).episodes)); }
     catch (err) { novelError(res, err); }
   });
-  r.post('/dramas/import-novel-project', (req, res) => {
+  r.post('/dramas/import-novel-project', novelFiles, (req, res) => {
     try {
-      const { project, episodes, operation_id: operationId } = req.body || {};
+      const { project, episodes, operation_id: operationId } = novelApplyBody(req);
       if (!project?.title?.trim()) return response.badRequest(res, '请填写项目标题');
       if (typeof operationId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(operationId)) return response.badRequest(res, '缺少建项操作标识');
       const saved = db.transaction(() => {
@@ -122,7 +133,8 @@ function setupRouter(cfg, db, log) {
       const title = req.body?.title || '';
       const maxChapters = Number(req.body?.max_chapters ?? 20);
       const aiSummarize = req.body?.ai_summarize === 'true' || req.body?.ai_summarize === true;
-      const result = await novel.importNovel(db, log, { text, title, maxChapters, startChapter: Number(req.body?.start_chapter ?? 1), aiSummarize });
+      const result = await novel.importNovel(db, log, { text, title, maxChapters, startChapter: Number(req.body?.start_chapter ?? 1),
+        aiSummarize, compact: req.body?.compact === 'true' || req.body?.compact === true });
       response.success(res, result);
     } catch (err) {
       novelError(res, err);

@@ -68,6 +68,9 @@ function postUniversalSegmentNdjsonStream(url, body, onDelta) {
 
 export const storyboardsAPI = {
   takes(id) { return request.get(`/storyboards/${id}/takes`) },
+  registerLegacyTake(id, media) {
+    return request.post(`/storyboards/${id}/takes/legacy`, { local_path: media.local_path, video_url: media.video_url })
+  },
   adopt(id, video_generation_id, expected_revision) {
     return request.put(`/storyboards/${id}/takes/adoption`, { video_generation_id, expected_revision })
   },
@@ -131,8 +134,8 @@ export const storyboardsAPI = {
   insertBefore(id) {
     return request.post(`/storyboards/${id}/insert-before`, {})
   },
-  batchInferParams(episodeId, overwrite = false) {
-    return request.post('/storyboards/batch-infer-params', { episode_id: episodeId, overwrite })
+  batchInferParams(episodeId, overwrite = false, preservedIds = []) {
+    return request.post('/storyboards/batch-infer-params', { episode_id: episodeId, overwrite, preserved_ids: preservedIds })
   },
   upscale(id) {
     return request.post(`/storyboards/${id}/upscale`, {})

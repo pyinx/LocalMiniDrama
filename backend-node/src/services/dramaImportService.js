@@ -206,11 +206,11 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
     const localPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.image_file, 'char_imp');
     const extraImagesJson = saveExtraImages(storagePath, projectDir, 'characters', files, c.extra_image_files, 'char_extra_imp');
     const info = db.prepare(
-      `INSERT INTO characters (drama_id, name, role, description, personality, appearance, stages, voice_style, polished_prompt, local_path, extra_images, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO characters (drama_id, name, role, description, personality, appearance, stages, voice_style, polished_prompt, local_path, image_url, extra_images, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(dramaId, c.name ?? '', c.role || null, c.description || null, c.personality || null, c.appearance || null,
       typeof c.stages === 'string' ? c.stages : (c.stages == null ? null : JSON.stringify(c.stages)),
-      c.voice_style || null, c.polished_prompt || null, localPath, extraImagesJson, i, now, now);
+      c.voice_style || null, c.polished_prompt || null, localPath, c.image_url ?? null, extraImagesJson, i, now, now);
     charNewIds.push(info.lastInsertRowid);
   }
 
@@ -260,9 +260,9 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
     const localPath = saveMediaFile(storagePath, projectDir, 'scenes', files, s.image_file, 'scene_imp');
     const extraImagesJson = saveExtraImages(storagePath, projectDir, 'scenes', files, s.extra_image_files, 'scene_extra_imp');
     const info = db.prepare(
-      `INSERT INTO scenes (drama_id, episode_id, location, time, prompt, polished_prompt, local_path, extra_images, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(dramaId, epId, s.location || '', s.time || '', s.prompt || '', s.polished_prompt || null, localPath, extraImagesJson, now, now);
+      `INSERT INTO scenes (drama_id, episode_id, location, time, prompt, polished_prompt, local_path, image_url, extra_images, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(dramaId, epId, s.location || '', s.time || '', s.prompt || '', s.polished_prompt || null, localPath, s.image_url ?? null, extraImagesJson, now, now);
     sceneNewIds.push(info.lastInsertRowid);
     if (!indexedAssets) sceneDedupeMap.set(dedupeKey, info.lastInsertRowid);
   }
@@ -278,9 +278,9 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
     const localPath = saveMediaFile(storagePath, projectDir, 'props', files, p.image_file, 'prop_imp');
     const extraImagesJson = saveExtraImages(storagePath, projectDir, 'props', files, p.extra_image_files, 'prop_extra_imp');
     const pInfo = db.prepare(
-      `INSERT INTO props (drama_id, episode_id, name, type, description, prompt, local_path, extra_images, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(dramaId, epId, p.name, p.type || null, p.description || null, p.prompt || null, localPath, extraImagesJson, now, now);
+      `INSERT INTO props (drama_id, episode_id, name, type, description, prompt, local_path, image_url, extra_images, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(dramaId, epId, p.name, p.type || null, p.description || null, p.prompt || null, localPath, p.image_url ?? null, extraImagesJson, now, now);
     propNewIds.push(pInfo.lastInsertRowid);
   }
 

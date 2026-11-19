@@ -152,6 +152,26 @@ test('synthetic clips exercise blinded ballots, scope, disagreements and regress
   assert.equal(full.status, '已具备人工决策记录');
   assert.equal(full.summary.length, 2);
   assert.equal(full.pairs[0].votes[1].overall, 'method');
+  // A different baseline does not make a reused method clip an independent win.
+  const methodFile = path.join(f.root, f.study.pairs[1].method.attempts[0].file);
+  const original = fs.readFileSync(methodFile);
+  fs.copyFileSync(path.join(f.root, f.study.pairs[0].method.attempts[0].file), methodFile);
+  assert.equal(f.run('blind', 'study.json', 'reused').paired, 2);
+  const reusedKey = f.read('reused/private-key.json');
+  for (const i of [0, 1]) {
+    const name = 'reused/reviewer-' + (i + 1) + '/ballot.json';
+    const sheet = f.read(name);
+    for (const [index, row] of sheet.cases.entries()) {
+      row.overall = String(reusedKey.cases[f.study.pairs[index].id].orders[i].indexOf(1) + 1);
+      for (const obs of Object.values(row.observations))
+        Object.assign(obs, { vote: row.overall, timeMs: 500, note: '验证独立样片' });
+    }
+    f.write(name, sheet);
+  }
+  const reused = f.run('report', 'study.json', 'reused');
+  assert.equal(reused.status, '待测');
+  assert.ok(reused.pairs.every(pair => pair.status === '待测' && pair.issues.some(issue => issue.includes('跨作品复用'))));
+  fs.writeFileSync(methodFile, original);
   const rel = 'packet/reviewer-2/ballot.json',
     ballot = f.read(rel);
   f.write(rel, { ...ballot, round: 'another-fixture' });

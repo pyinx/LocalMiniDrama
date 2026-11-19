@@ -1,6 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { randomUUID } = require('node:crypto');
+const { episodeStoryboardRows } = require('./episodeStoryboardRows');
+const { bindStoryboardFrameImage } = require('./storyboardFrameBinding');
 const { getFfmpegPath, hasLocalFfmpeg } = require('../utils/ffmpegPath');
 
 /**
@@ -9,6 +12,7 @@ const { getFfmpegPath, hasLocalFfmpeg } = require('../utils/ffmpegPath');
 function routes(db, cfg, log) {
   return {
     linkTailFrame: async (req, res) => {
+      let unboundFile;
       try {
         const storyboardId = parseInt(req.params.id, 10);
         const body = req.body || {};
@@ -25,14 +29,18 @@ function routes(db, cfg, log) {
         const video = takes.resolveTake(db, currentSb);
         if (!video?.local_path) return res.status(400).json({ error: '当前采用片没有可用的本地视频文件' });
 
-        const nextSb = db.prepare(`
-          SELECT id, storyboard_number FROM storyboards
-          WHERE episode_id = ? AND storyboard_number > ? AND deleted_at IS NULL
-          ORDER BY storyboard_number ASC LIMIT 1
-        `).get(currentSb.episode_id, currentSb.storyboard_number || 0);
+        const nextBoard = () => {
+          const rows = episodeStoryboardRows(db, currentSb.episode_id);
+          const index = rows.findIndex(row => row.id === storyboardId);
+          return index < 0 ? null : rows[index + 1];
+        };
+        const nextSb = nextBoard();
 
         if (!nextSb) {
           return res.status(400).json({ error: '没有下一个分镜可供衔接' });
+        }
+        if (body.next_storyboard_id != null && Number(body.next_storyboard_id) !== nextSb.id) {
+          return res.status(409).json({ error: '下一镜已变化，请刷新后重新衔接' });
         }
 
         // 3. 检查 ffmpeg 是否可用
@@ -54,13 +62,13 @@ function routes(db, cfg, log) {
         }
 
         // 5. 准备输出图片路径
-        const timestamp = Date.now();
-        const outputFileName = `tailframe_${storyboardId}_to_${nextSb.id}_${timestamp}.jpg`;
+        const outputFileName = `tailframe_${storyboardId}_to_${nextSb.id}_${randomUUID()}.jpg`;
         const imagesDir = path.join(storageBase, 'media', 'images');
         if (!fs.existsSync(imagesDir)) {
           fs.mkdirSync(imagesDir, { recursive: true });
         }
         const outputAbsPath = path.join(imagesDir, outputFileName);
+        unboundFile = outputAbsPath;
         const outputRelPath = `media/images/${outputFileName}`;
 
         // 6. 使用 ffmpeg 提取最后一帧
@@ -81,7 +89,7 @@ function routes(db, cfg, log) {
           return res.status(500).json({ error: 'ffmpeg 提取帧失败: ' + (result.stderr || result.error?.message || '未知错误') });
         }
 
-        if (!fs.existsSync(outputAbsPath)) {
+        if (!takes.localFile(storageBase, outputRelPath)) {
           return res.status(500).json({ error: '提取帧后文件未生成' });
         }
 
@@ -116,40 +124,27 @@ function routes(db, cfg, log) {
         const filesBase = cfg?.files?.base_url || '';
         const imageUrl = filesBase ? `${filesBase.replace(/\/$/, '')}/${outputRelPath}` : null;
 
-        const info = insert.run(
-          dramaId,
-          currentSb.episode_id,
-          nextSb.id,  // 关联到下一个分镜
-          prompt,
-          'tail-frame',           // provider 不能为 NULL
-          'tail-frame-extract',
-          'completed',
-          imageUrl,
-          outputRelPath,
-          width,
-          height,
-          now,
-          now,
-          now
-        );
-
-        const newImageId = info.lastInsertRowid;
-
-        // 9. 更新下一个分镜的 first_frame_image_id
-        // 先获取当前首帧（用于历史记录，如果需要）
-        const nextSbCurrent = db.prepare('SELECT first_frame_image_id, image_url, local_path FROM storyboards WHERE id = ?').get(nextSb.id);
-
-        db.prepare(`
-          UPDATE storyboards
-          SET first_frame_image_id = ?, image_url = ?, local_path = ?, updated_at = ?
-          WHERE id = ?
-        `).run(newImageId, imageUrl, outputRelPath, now, nextSb.id);
+        const newImageId = db.transaction(() => {
+          if (nextBoard()?.id !== nextSb.id) throw Object.assign(new Error('镜序已变化，请刷新后重新衔接'), { status: 409 });
+          const source = db.prepare('SELECT * FROM storyboards WHERE id=? AND deleted_at IS NULL').get(storyboardId);
+          const effective = takes.resolveTake(db, source);
+          if (effective?.id !== video.id || effective?.local_path !== video.local_path) {
+            throw Object.assign(new Error('源镜头视频已变化，请刷新后重新衔接'), { status: 409 });
+          }
+          const info = insert.run(dramaId, currentSb.episode_id, nextSb.id, prompt, 'tail-frame',
+            'tail-frame-extract', 'completed', imageUrl, outputRelPath, width, height, now, now, now);
+          if (!bindStoryboardFrameImage(db, nextSb.id, 'first', info.lastInsertRowid, imageUrl, outputRelPath)) {
+            throw new Error('目标分镜首帧未写入');
+          }
+          return info.lastInsertRowid;
+        }).immediate();
+        unboundFile = null;
 
         log.info('[尾帧衔接] 完成', {
           from_storyboard: storyboardId,
           to_storyboard: nextSb.id,
           new_image_id: newImageId,
-          prev_first_frame_id: nextSbCurrent?.first_frame_image_id
+          prev_first_frame_id: nextSb.first_frame_image_id
         });
 
         res.json({
@@ -163,7 +158,12 @@ function routes(db, cfg, log) {
 
       } catch (err) {
         log.error('storyboards link-tail-frame', { error: err.message, stack: err.stack });
-        res.status(500).json({ error: err.message || '尾帧衔接失败' });
+        res.status(err.status || 500).json({ error: err.message || '尾帧衔接失败' });
+      } finally {
+        if (unboundFile) {
+          try { fs.rmSync(unboundFile, { force: true }); }
+          catch (err) { log.warn('尾帧临时文件清理失败', { file: unboundFile, error: err.message }); }
+        }
       }
     }
   };

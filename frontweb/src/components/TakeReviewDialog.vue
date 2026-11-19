@@ -1,7 +1,8 @@
 <template>
   <el-dialog :model-value="true" :title="`第 ${episodeNumber} 集 · 第 ${board.storyboard_number} 镜审片`" width="min(680px, 94vw)" @close="$emit('close')">
     <div v-loading="busy">
-      <el-alert v-if="state.resolved_video && state.resolved_video.id == null" title="旧片路径无法确定候选身份。可预览候选并手动采用。" type="info" :closable="false" />
+      <el-button v-if="state.can_register_legacy" :disabled="busy" @click="registerLegacy">审阅当前旧片</el-button>
+      <el-alert v-else-if="state.resolved_video && state.resolved_video.id == null" title="多个候选使用同一旧片路径，请预览并手动选择版本。" type="info" :closable="false" />
       <el-select v-model="selected" placeholder="选择候选视频" aria-label="候选版本">
         <el-option v-for="v in state.candidates" :key="v.id" :value="v.id"
           :label="`候选 #${v.id}${v.id === state.adopted_video_generation_id ? ' · 已采用' : ''}${v.reviews.length ? ' · ' + v.reviews.length + ' 条审片' : ''}`" />
@@ -31,7 +32,7 @@
           <el-button link :disabled="busy" @click="status(r)">{{ r.status === 'open' ? '标为已处理' : '重新打开' }}</el-button>
         </div>
       </template>
-      <el-empty v-else-if="!busy" description="本镜还没有可审阅的候选" />
+      <el-empty v-else-if="!busy && !state.can_register_legacy" description="本镜还没有可审阅的候选" />
     </div>
   </el-dialog>
 </template>
@@ -62,6 +63,12 @@ async function edit(fn) {
 onMounted(() => edit(async () => {}))
 function adopt() {
   return edit(() => storyboardsAPI.adopt(props.board.id, selected.value, state.value.take_revision))
+}
+function registerLegacy() {
+  return edit(async () => {
+    const result = await storyboardsAPI.registerLegacyTake(props.board.id, state.value.resolved_video)
+    selected.value = result.resolved_video.id
+  })
 }
 function keep(value) {
   return edit(() => storyboardsAPI.retain(props.board.id, selected.value, value))

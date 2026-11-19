@@ -25,11 +25,10 @@ export const dramaAPI = {
   adaptNovelPart(data) {
     return request.post('/dramas/adapt-novel-part', data)
   },
-  applyNovelEpisodes(id, episodes) {
-    return request.put(`/dramas/${id}/novel-episodes`, { episodes })
-  },
-  createFromNovel(project, episodes, operationId) {
-    return request.post('/dramas/import-novel-project', { project, episodes, operation_id: operationId })
+  applyNovelSelection(id, form) {
+    const config = { headers: { 'Content-Type': 'multipart/form-data' } }
+    return id ? request.put(`/dramas/${id}/novel-episodes`, form, config)
+      : request.post('/dramas/import-novel-project', form, config)
   },
   novelSource(id, episodeId) {
     return request.get(`/dramas/${id}/episodes/${episodeId}/novel-source`)

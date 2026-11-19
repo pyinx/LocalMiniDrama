@@ -214,16 +214,28 @@ async function processVideoMerge(db, log, mergeId, baseUrl) {
 async function inspectDeliveryClip(file, label, requireAudio = false) {
   try {
     const { stdout } = await execFile(getFfprobePath(), ['-v', 'error', '-show_entries',
-      'stream=codec_type,width,height,avg_frame_rate,duration:format=duration', '-of', 'json', file]);
+      'stream=codec_type,width,height,sample_aspect_ratio,avg_frame_rate,duration:stream_side_data=rotation:stream_tags=rotate:format=duration', '-of', 'json', file]);
     const info = JSON.parse(stdout);
     const video = info.streams.find(s => s.codec_type === 'video');
     const seconds = Number(video?.duration) || Number(info.format?.duration);
-    if (!video?.height || !(seconds > 0)) throw new Error('缺少有效视频流');
+    if (!video?.width || !video.height || !(seconds > 0)) throw new Error('缺少有效视频流');
     const hasAudio = info.streams.some(s => s.codec_type === 'audio');
     if (requireAudio && !hasAudio) throw new Error('缺少必需音轨');
     await execFile(getFfmpegPath(), ['-v', 'error', '-xerror', '-i', file, '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-']);
     const [n, d] = (video.avg_frame_rate || '').split('/').map(Number);
-    return { seconds, ratio: video.width / video.height, frame: n && d ? d / n : 0.04, hasAudio };
+    const [pixelW, pixelH] = (video.sample_aspect_ratio || '').split(':').map(Number);
+    const sar = pixelW > 0 && pixelH > 0 ? pixelW / pixelH : 1;
+    const angle = Number(video.side_data_list?.find(entry => entry.rotation != null)?.rotation ?? video.tags?.rotate) || 0;
+    const rotation = ((angle % 360) + 360) % 360;
+    const sin = Math.abs(Math.sin(rotation * Math.PI / 180));
+    const cos = Math.abs(Math.cos(rotation * Math.PI / 180));
+    const displayWidth = video.width * sar;
+    const ratio = (displayWidth * cos + video.height * sin) / (displayWidth * sin + video.height * cos);
+    return {
+      seconds, ratio, frame: n && d ? d / n : 0.04, hasAudio,
+      width: sin > cos ? video.height : video.width, height: sin > cos ? video.width : video.height,
+      layout: [video.width, video.height, sar, rotation].join('/'),
+    };
   } catch (err) {
     throw new Error(`${label}无法读取或解码：${err.stderr?.trim().slice(-220) || err.message.split('\n')[0]}`);
   }
@@ -269,6 +281,7 @@ async function renderMerge(db, log, r, baseUrl, work) {
   const [ratioW, ratioH] = String(mergeOpts.aspect_ratio || '').replace('：', ':').split(':').map(Number);
   const expectedRatio = ratioW > 0 && ratioH > 0 ? ratioW / ratioH : null;
   let firstInfo;
+  let mixedLayout = false;
   for (let i = 0; i < scenes.length; i++) {
     const p = await resolveVideoToLocalPath(
       scenes[i].video_url,
@@ -292,6 +305,7 @@ async function renderMerge(db, log, r, baseUrl, work) {
       }
       if (firstInfo && Math.abs(info.ratio - firstInfo.ratio) > 0.01) throw new Error(label + '画幅与首镜不一致');
       if (complete && expectedRatio && Math.abs(info.ratio - expectedRatio) > 0.01) throw new Error(label + '画幅与项目设置不一致');
+      if (firstInfo && firstInfo.layout !== info.layout) mixedLayout = true;
       firstInfo ||= info;
       sc.duration = info.seconds;
       if (mergeOpts.burn_dialogue_audio && (sc.sound.dialogue?.trim() || sc.sound.audio_local_path)) {
@@ -332,6 +346,22 @@ async function renderMerge(db, log, r, baseUrl, work) {
     const outputFileName = `merged_${mergeId}_${Date.now()}.mp4`;
     if (mode) work.outputDir = fs.mkdtempSync(path.join(mergedDir, 'cut-'));
     const outputPath = path.join(work.outputDir || mergedDir, outputFileName);
+    // A concatenated stream can carry only one rotation matrix and sample aspect ratio.
+    // FFmpeg autorotates each input while encoding these mixed clips to one layout.
+    if (mixedLayout) {
+      const width = Math.ceil(firstInfo.width / 2) * 2;
+      const height = Math.ceil(firstInfo.height / 2) * 2;
+      const filter = `scale=${width}:${height},setsar=${firstInfo.ratio * height / width}:max=10000`;
+      for (let i = 0; i < localPaths.length; i++) {
+        const normalized = path.join(tempDir, `upright-${i}.mp4`);
+        await execFile(getFfmpegPath(), ['-v', 'error', '-i', localPaths[i], '-map', '0:v:0', '-map', '0:a?',
+          '-vf', filter, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac', '-ar', '44100', '-ac', '2', normalized]).catch(err => {
+          throw new Error(`第 ${usableScenes[i].storyboard_number ?? usableScenes[i].scene_id} 镜画幅转换失败：${err.stderr || err.message}`);
+        });
+        localPaths[i] = normalized;
+      }
+    }
     const ok = runFfmpegConcat(localPaths, outputPath, log);
     if (ok && fs.existsSync(outputPath)) {
       mergedRelativePath = path.relative(storageRoot, outputPath).replace(/\\/g, '/');

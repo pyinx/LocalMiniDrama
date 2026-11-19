@@ -26,10 +26,15 @@ function bindStoryboardFrameImage(db, storyboardId, frameType, imageGenId, image
     return;
   }
   // 首帧或普通分镜图：写入主图/首帧字段
-  db.prepare(
-    `UPDATE storyboards SET image_url = ?, local_path = ?, first_frame_image_id = ?, updated_at = ?
-     WHERE id = ? AND deleted_at IS NULL`
-  ).run(url, lp, igId, now, sid);
+  return db.transaction(() => {
+    const board = db.prepare('SELECT * FROM storyboards WHERE id=? AND deleted_at IS NULL').get(sid);
+    if (!board) return false;
+    const videoUrl = require('./workbenchTakeService').videoUrlBeforeFrameChange(db, board);
+    return db.prepare(
+      `UPDATE storyboards SET image_url=?, local_path=?, first_frame_image_id=?, video_url=?, updated_at=?
+       WHERE id=? AND deleted_at IS NULL`
+    ).run(url, lp, igId, videoUrl, now, sid).changes === 1;
+  }).immediate();
 }
 
 module.exports = { bindStoryboardFrameImage };
