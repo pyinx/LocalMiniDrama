@@ -833,12 +833,22 @@
             <span class="sb-config-hint">四/九宫格自动按视角拆分</span>
           </label>
         </div>
+        <div v-if="hasStructuredStoryboards && currentEpisodeId" class="sb-config-row" style="margin-top:10px">
+          <EpisodeSegmentTools
+            :episode-id="currentEpisodeId"
+            :scenes="scenes"
+            @changed="() => refreshStoryboardsForEpisode(currentEpisodeId)"
+          />
+        </div>
         <div class="sb-config-row sb-narration-export-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:12px">
           <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
             首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
           </el-checkbox>
           <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings()">
             全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
+          </el-checkbox>
+          <el-checkbox v-model="storyboardStructured" @change="() => saveProjectSettings()">
+            结构化分镜（新链路：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图）
           </el-checkbox>
           <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
             生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
@@ -1182,8 +1192,11 @@
               </template>
             </div>
             <!-- 中：经典模式=分镜参考图；全能模式=片段描述（独立字段，与参考图并存） -->
-            <div class="sb-panel sb-image" :class="{ 'sb-image--universal': isSbUniversalMode(sb.id) }">
-              <template v-if="isSbUniversalMode(sb.id)">
+            <div class="sb-panel sb-image" :class="{ 'sb-image--universal': isSbUniversalMode(sb.id) || !!sb.segment_ir }">
+              <template v-if="sb.segment_ir">
+                <SegmentIrPanel :storyboard="sb" @saved="() => refreshStoryboardsForEpisode(currentEpisodeId)" />
+              </template>
+              <template v-else-if="isSbUniversalMode(sb.id)">
                 <div class="sb-prompt-label sb-universal-label-row">
                   <div class="sb-universal-label-left">
                     <span class="sb-dot"></span>
@@ -1807,20 +1820,17 @@
             <div v-else style="font-size:12px;color:#c0c4cc;padding:4px 0">暂无锚点，点击「提炼视觉锚点」自动提炼</div>
           </div>
         </el-form-item>
-        <!-- P1-3: 多阶段造型（stages） -->
-        <el-form-item v-if="editCharacterForm.id" label="多阶段造型">
-          <div style="width:100%">
-            <div style="font-size:12px;color:#909399;margin-bottom:6px">
-              不同集次的角色造型变化，格式：JSON 数组 [{"episode_range":[1,3],"appearance":"..."}]
-            </div>
-            <el-input
-              v-model="editCharacterForm.stages"
-              type="textarea"
-              :rows="4"
-              placeholder='例：[{"episode_range":[1,5],"appearance":"白衣少年"},{"episode_range":[6,10],"appearance":"黑衣武者"}]'
-              style="font-size:12px;font-family:monospace"
-            />
-          </div>
+        <el-form-item v-if="editCharacterForm.id" label="群像">
+          <el-checkbox v-model="editCharacterForm.is_group">这是一群人（出图为 2–4 个不同个体的群像参照）</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="音色描述">
+          <el-input v-model="editCharacterForm.voice_style" placeholder="一句话，如：男声，三十岁上下，音调偏低，略带沙哑（每段首次开口时原样写入视频提示词）" />
+        </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="配音音色 ID">
+          <el-input v-model="editCharacterForm.tts_voice" placeholder="不原生出人声的视频模型用逐句配音时使用；留空用配音配置的默认音色" />
+        </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="造型">
+          <VariantEditor kind="wardrobe" :parent-id="editCharacterForm.id" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1912,6 +1922,9 @@
             />
           </div>
         </el-form-item>
+        <el-form-item v-if="editPropForm.id" label="道具状态">
+          <VariantEditor kind="prop_state" :parent-id="editPropForm.id" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showEditProp = false">取消</el-button>
@@ -1992,6 +2005,9 @@
               style="font-size:12px"
             />
           </div>
+        </el-form-item>
+        <el-form-item v-if="editSceneForm.id" label="场景版本">
+          <VariantEditor kind="scene_state" :parent-id="editSceneForm.id" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2642,6 +2658,10 @@ import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
 import StylePickerButton from '@/components/StylePickerButton.vue'
 import AIConfigContent from '@/components/AIConfigContent.vue'
 import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEditor.vue'
+import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
+import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
+import VariantEditor from '@/components/VariantEditor.vue'
+import { groupFindings, findingWhere } from '@/utils/segmentUi'
 import {
   generationStyleOptions,
   getStylePromptEn,
@@ -3259,6 +3279,9 @@ const storyboardCount = ref(null) // 分镜数量
 const videoDuration = ref(null) // 视频总长度
 /** 分镜生成时是否要求 AI 输出 narration（解说旁白） */
 const storyboardIncludeNarration = ref(false)
+/** 结构化分镜（新链路）：生成分镜时输出 SegmentIR，视频请求由后端按模型编译 */
+const storyboardStructured = ref(false)
+const hasStructuredStoryboards = computed(() => (store.storyboards || []).some((sb) => sb && sb.segment_ir))
 /** 分镜生成是否使用全能模式（universal_segment_text，对接 Seedance / 可灵 Omni） */
 const storyboardUniversalOmni = ref(false)
 const storyboardUseFirstLastFrame = ref(false)
@@ -4573,6 +4596,7 @@ async function loadDrama() {
     videoClipDuration.value = (d.metadata && d.metadata.video_clip_duration) ? Number(d.metadata.video_clip_duration) : 5
     storyboardIncludeNarration.value = !!(d.metadata && d.metadata.storyboard_include_narration)
     storyboardUniversalOmni.value = !!(d.metadata && d.metadata.storyboard_universal_omni)
+    storyboardStructured.value = !!(d.metadata && d.metadata.storyboard_structured)
     storyboardUseFirstLastFrame.value = !!(d.metadata && d.metadata.storyboard_use_first_last_frame)
     lastFrameUseFirstLayoutLock.value = d.metadata?.last_frame_use_first_layout_lock !== false
     if (storyboardUseFirstLastFrame.value && gridMode.value !== 'single') {
@@ -4966,6 +4990,7 @@ async function saveProjectSettings() {
     aspect_ratio: projectAspectRatio.value || '16:9',
     video_clip_duration: videoClipDuration.value || 5,
     storyboard_include_narration: !!storyboardIncludeNarration.value,
+    storyboard_structured: !!storyboardStructured.value,
     storyboard_universal_omni: !!storyboardUniversalOmni.value,
     storyboard_use_first_last_frame: !!storyboardUseFirstLastFrame.value,
     last_frame_use_first_layout_lock: !!lastFrameUseFirstLayoutLock.value,
@@ -5911,7 +5936,7 @@ async function polishUniversalSegmentsAfterGeneration(opts = {}) {
 
   const rawList = store.currentEpisode?.storyboards || []
   const list = rawList.slice().sort((a, b) => (Number(a.storyboard_number) || 0) - (Number(b.storyboard_number) || 0))
-  const targets = list.filter((sb) => sb?.id && !opts.preservedIds?.includes(sb.id) && isSbUniversalMode(sb.id) && sbUniversalSegmentTrimmed(sb))
+  const targets = list.filter((sb) => sb?.id && !sb.segment_ir && !opts.preservedIds?.includes(sb.id) && isSbUniversalMode(sb.id) && sbUniversalSegmentTrimmed(sb))
 
   if (!targets.length) return { polished: 0, skipped: true }
 
@@ -5996,6 +6021,7 @@ function sbUniversalSegmentTrimmed(sb) {
 
 function sbCanSubmitVideo(sb) {
   if (!sb) return false
+  if (sb.segment_ir) return true
   const vp = (sb.video_prompt || '').toString().trim()
   if (vp) return true
   if (isSbUniversalMode(sb.id)) return !!sbUniversalSegmentTrimmed(sb)
@@ -6488,6 +6514,15 @@ async function onGenerateSbVideo(sb) {
   } catch (e) {
     sbVideoErrors.value[sb.id] = e.message || '提交失败'
     ElMessage.error(e.message || '提交失败')
+    const blockedFindings = e?.response?.data?.error?.code === 'segment_compile_blocked' ? e.response.data.error.details?.findings : null
+    if (blockedFindings) {
+      const g = groupFindings(blockedFindings)
+      ElMessageBox.alert(
+        g.block.map((f) => `· ${f.msg}${findingWhere(f) ? `（${findingWhere(f)}）` : ''}`).join('\n'),
+        '结构化分镜未通过编译检查',
+        { type: 'error' }
+      ).catch(() => {})
+    }
   } finally {
     generatingSbVideoIds.delete(sb.id)
     genStore.markDone(meta)
@@ -6662,6 +6697,7 @@ async function onGenerateStoryboard() {
       aspect_ratio: projectAspectRatio.value || '16:9',
       include_narration: !!storyboardIncludeNarration.value,
       universal_omni_storyboard: !!storyboardUniversalOmni.value,
+      structured: !!storyboardStructured.value,
     })
     const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
     let preservedIds = []
@@ -7341,6 +7377,7 @@ async function runOneClickPipeline(textOnly = false) {
           video_duration: getVideoDurationForApi(),
           include_narration: !!storyboardIncludeNarration.value,
           universal_omni_storyboard: !!storyboardUniversalOmni.value,
+      structured: !!storyboardStructured.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {
@@ -7844,6 +7881,7 @@ async function runRepairPipeline() {
           video_duration: getVideoDurationForApi(),
           include_narration: !!storyboardIncludeNarration.value,
           universal_omni_storyboard: !!storyboardUniversalOmni.value,
+      structured: !!storyboardStructured.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {

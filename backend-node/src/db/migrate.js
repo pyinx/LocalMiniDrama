@@ -117,6 +117,7 @@ function ensureAllColumns(database) {
   // --- episodes ---
   ensureColumns(database, 'episodes', [
     { name: 'drama_id',       type: 'INTEGER DEFAULT 0' },
+    { name: 'continuity_json', type: 'TEXT' },  // 剧集级连续性表 { [scene_id]: { props, position_lock, axis_lock, ambience } }
     { name: 'episode_number', type: 'INTEGER DEFAULT 0' },
     { name: 'title',          type: 'TEXT DEFAULT \'\'' },
     { name: 'script_content', type: 'TEXT' },
@@ -179,6 +180,8 @@ function ensureAllColumns(database) {
     { name: 'last_frame_image_id',  type: 'INTEGER' },
     { name: 'last_frame_image_url', type: 'TEXT' },
     { name: 'last_frame_local_path', type: 'TEXT' },
+    { name: 'segment_ir',        type: 'TEXT' },               // 结构化分镜段 JSON（有值即以它为唯一来源）
+    { name: 'segment_ir_version', type: 'INTEGER' },
     { name: 'status',            type: 'TEXT DEFAULT \'draft\'' },
     { name: 'created_at',        type: 'TEXT' },
     { name: 'updated_at',        type: 'TEXT' },
@@ -205,7 +208,9 @@ function ensureAllColumns(database) {
     { name: 'four_view_image_url', type: 'TEXT' }, // 四视图参考图 URL
     { name: 'polished_prompt',   type: 'TEXT' },   // 文字AI润色后的完整图片生成提示词（可编辑，生图时直接使用）
     { name: 'ref_image',         type: 'TEXT' },   // 用户上传的参考图（本地相对路径或 URL），独立于 AI 生成的主图
-    { name: 'stages',            type: 'TEXT' },   // JSON: 多阶段造型 [{episode_range:[1,3], appearance:"..."}]
+    { name: 'stages',            type: 'TEXT' },   // JSON: 多阶段造型 [{episode_range:[1,3], appearance:"..."}]（已迁移为 character_wardrobes，保留只读）
+    { name: 'is_group',          type: 'INTEGER DEFAULT 0' },  // 群像资产：一张图 2–4 个不同个体
+    { name: 'tts_voice',         type: 'TEXT' },   // 逐句 TTS 的供应商音色 id（voice_style 是音色文字描述）
     { name: 'seedance2_asset', type: 'TEXT' },   // JSON: 即梦/Seedance2 素材库认证 hub_asset_id / asset_url 等
     { name: 'seedance2_voice_asset', type: 'TEXT' }, // JSON: Seedance 2.0 音色参考音频（仅 SD2 模型有效）
     { name: 'negative_prompt', type: 'TEXT' },
@@ -343,6 +348,8 @@ function ensureAllColumns(database) {
   // --- video_generations ---
   ensureColumns(database, 'video_generations', [
     { name: 'drama_id',             type: 'INTEGER' },
+    { name: 'compiled_json',        type: 'TEXT' },     // 结构化分镜编译结果（refs/请求开关/findings），异步生成直接使用
+    { name: 'run_key',              type: 'TEXT' },     // 即梦渲染：本次提交的运行标识
     { name: 'storyboard_id',        type: 'INTEGER' },
     { name: 'provider',             type: 'TEXT' },
     { name: 'prompt',               type: 'TEXT' },
@@ -513,6 +520,59 @@ function ensureAllColumns(database) {
     )`);
   } catch (_) {}
 
+  // --- 角色造型（结构化分镜按造型绑定参考图；基础造型 = 角色主图，不单独建行） ---
+  try {
+    database.exec(`CREATE TABLE IF NOT EXISTS character_wardrobes (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id  INTEGER NOT NULL,
+      name          TEXT NOT NULL DEFAULT '',
+      change_phrase TEXT,
+      prompt        TEXT,
+      image_url     TEXT,
+      local_path    TEXT,
+      episode_range TEXT,
+      sort_order    INTEGER DEFAULT 0,
+      created_at    TEXT,
+      updated_at    TEXT,
+      deleted_at    TEXT
+    )`);
+    migrateCharacterStagesToWardrobes(database);
+  } catch (e) {
+    console.warn('character_wardrobes init failed:', e.message);
+  }
+  // --- 场景状态（状态版本 / 竖屏主机位 / 反打；母版 = 场景主图）与道具状态（初始状态 = 道具主图） ---
+  try {
+    database.exec(`CREATE TABLE IF NOT EXISTS scene_states (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      scene_id     INTEGER NOT NULL,
+      name         TEXT NOT NULL DEFAULT '',
+      kind         TEXT NOT NULL DEFAULT 'state',
+      state_phrase TEXT,
+      prompt       TEXT,
+      image_url    TEXT,
+      local_path   TEXT,
+      sort_order   INTEGER DEFAULT 0,
+      created_at   TEXT,
+      updated_at   TEXT,
+      deleted_at   TEXT
+    )`);
+    database.exec(`CREATE TABLE IF NOT EXISTS prop_states (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      prop_id      INTEGER NOT NULL,
+      name         TEXT NOT NULL DEFAULT '',
+      state_phrase TEXT,
+      prompt       TEXT,
+      image_url    TEXT,
+      local_path   TEXT,
+      sort_order   INTEGER DEFAULT 0,
+      created_at   TEXT,
+      updated_at   TEXT,
+      deleted_at   TEXT
+    )`);
+  } catch (e) {
+    console.warn('scene_states / prop_states init failed:', e.message);
+  }
+
   // --- global_settings（全局键值设置表） ---
   try {
     database.exec(`CREATE TABLE IF NOT EXISTS global_settings (
@@ -521,6 +581,34 @@ function ensureAllColumns(database) {
       updated_at TEXT NOT NULL DEFAULT ''
     )`);
   } catch (_) {}
+}
+
+/** characters.stages（[{episode_range, appearance}]）→ 造型行；只处理从未有过造型行的角色，可重复执行 */
+function migrateCharacterStagesToWardrobes(database) {
+  const rows = database
+    .prepare(
+      `SELECT c.id, c.stages FROM characters c
+       WHERE c.stages IS NOT NULL AND TRIM(c.stages) NOT IN ('', '[]', 'null')
+         AND NOT EXISTS (SELECT 1 FROM character_wardrobes w WHERE w.character_id = c.id)`
+    )
+    .all();
+  const ins = database.prepare(
+    `INSERT INTO character_wardrobes (character_id, name, change_phrase, episode_range, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  const now = new Date().toISOString();
+  for (const r of rows) {
+    let stages = [];
+    try { stages = JSON.parse(r.stages); } catch (_) { continue; }
+    if (!Array.isArray(stages)) continue;
+    stages.forEach((st, i) => {
+      const appearance = st && String(st.appearance || '').trim();
+      if (!appearance) return;
+      const range = Array.isArray(st.episode_range) ? st.episode_range.map(Number).filter(Number.isFinite) : [];
+      const name = range.length ? `第${range[0]}${range[1] && range[1] !== range[0] ? '–' + range[1] : ''}集造型` : `造型${i + 1}`;
+      ins.run(r.id, name, appearance, range.length ? JSON.stringify(range) : null, i, now, now);
+    });
+  }
 }
 
 /** 对已打开的 database 执行迁移与兜底补列（供 app 启动时调用） */

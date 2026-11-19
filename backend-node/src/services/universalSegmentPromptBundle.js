@@ -1,3 +1,5 @@
+const { buildUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
+
 /**
  * 全能片段（Omni / Seedance 多图参考）用户消息构建：供「生成」与「润色」共用。
  * @param {import('better-sqlite3').Database} db
@@ -311,6 +313,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     chunk('DRAMA_GENRE', genreHint),
     chunk('STYLE_ZH', styleZh),
     chunk('STYLE_EN', styleEn),
+    chunk('STYLE_LINE_REQUIRED', buildUniversalStyleLine(styleZh)),
   ]
     .filter(Boolean)
     .join('\n');
@@ -472,6 +475,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
   return {
     ok: true,
     userPrompt,
+    styleZh,
     durationLabel,
     durationSec,
     sbId,

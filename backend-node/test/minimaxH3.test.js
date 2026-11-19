@@ -51,3 +51,62 @@ describe('MiniMax H3 helpers', () => {
     assert.equal(normalizeMinimaxH3Resolution('2K'), '2K');
   });
 });
+
+describe('MiniMax H3 request ratio (AC1)', () => {
+  const videoClient = require('../src/services/videoClient');
+  const aiConfigService = require('../src/services/aiConfigService');
+  const originalListConfigs = aiConfigService.listConfigs;
+  const originalFetch = global.fetch;
+  const noopLog = { info() {}, warn() {}, error() {}, debug() {} };
+  let sentBody = null;
+
+  function setup() {
+    aiConfigService.listConfigs = () => [{
+      id: 1, service_type: 'video', is_active: true, is_default: true,
+      provider: 'minimax', api_protocol: 'minimax_h3',
+      base_url: 'https://api.minimaxi.com/v1', api_key: 'k',
+      model: ['MiniMax-H3'], default_model: 'MiniMax-H3',
+    }];
+    sentBody = null;
+    global.fetch = async (url, options) => {
+      sentBody = JSON.parse(options.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ task: { id: 't1', status: 'queued' } }) };
+    };
+  }
+  function teardown() {
+    aiConfigService.listConfigs = originalListConfigs;
+    global.fetch = originalFetch;
+  }
+
+  it('sends ratio with reference images', async () => {
+    setup();
+    try {
+      await videoClient.callVideoApi(null, noopLog, {
+        prompt: 'p', model: 'MiniMax-H3', duration: 8, aspect_ratio: '9:16',
+        reference_urls: ['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg'],
+      });
+      assert.ok(sentBody, 'request sent');
+      assert.equal(sentBody.content.filter((c) => c.role === 'reference_image').length, 2);
+      assert.equal(sentBody.ratio, '9:16');
+    } finally { teardown(); }
+  });
+
+  it('keeps adaptive ratio for first/last frame mode', async () => {
+    setup();
+    try {
+      await videoClient.callVideoApi(null, noopLog, {
+        prompt: 'p', model: 'MiniMax-H3', duration: 8, aspect_ratio: '9:16',
+        first_frame_url: 'https://cdn.example.com/f.jpg',
+      });
+      assert.equal(sentBody.ratio, 'adaptive');
+    } finally { teardown(); }
+  });
+
+  it('keeps explicit ratio for text-only requests', async () => {
+    setup();
+    try {
+      await videoClient.callVideoApi(null, noopLog, { prompt: 'p', model: 'MiniMax-H3', duration: 8, aspect_ratio: '9:16' });
+      assert.equal(sentBody.ratio, '9:16');
+    } finally { teardown(); }
+  });
+});

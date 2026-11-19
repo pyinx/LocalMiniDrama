@@ -1,6 +1,7 @@
 const takes = require('./workbenchTakeService');
 const { episodeStoryboardRows } = require('./episodeStoryboardRows');
 // 对应 Go application/services/drama_service.go
+const { readStoredIr } = require('./segmentIr/schema');
 
 const storageLayout = require('./storageLayout');
 const { resolveStylePreset } = require('../constants/generationStylePresets');
@@ -382,6 +383,7 @@ function rowToStoryboard(r, db) {
       segment_title: r.segment_title ?? null,
       creation_mode: r.creation_mode === 'universal' ? 'universal' : 'classic',
       universal_segment_text: r.universal_segment_text ?? null,
+      segment_ir: readStoredIr(r.segment_ir),
       first_frame_image_id: r.first_frame_image_id ?? null,
       last_frame_image_id: r.last_frame_image_id ?? null,
       last_frame_image_url: sanitizeImageUrl(r.last_frame_image_url),
@@ -413,6 +415,8 @@ function rowToCharacter(r) {
     stages: r.stages ?? null,
     personality: r.personality,
     voice_style: r.voice_style,
+    is_group: !!r.is_group,
+    tts_voice: r.tts_voice ?? null,
     image_url: sanitizeImageUrl(r.image_url),
     local_path: r.local_path,
     extra_images: r.extra_images || null,

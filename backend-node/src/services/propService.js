@@ -1,4 +1,5 @@
 const aiClient = require('./aiClient');
+const { cascadeDeletedParents } = require('./assetCascade');
 const promptI18n = require('./promptI18n');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 
@@ -89,7 +90,11 @@ function update(db, log, id, updates) {
 
 function deleteById(db, log, id) {
   const now = new Date().toISOString();
-  const result = db.prepare('UPDATE props SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, id);
+  const result = db.transaction(() => {
+    const r = db.prepare('UPDATE props SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, id);
+    if (r.changes) cascadeDeletedParents(db, 'props', now);
+    return r;
+  })();
   if (result.changes === 0) return false;
   log.info('Prop deleted', { prop_id: id });
   return true;
@@ -102,6 +107,7 @@ function softDeletePropsByEpisodeId(db, log, episodeId) {
     const result = db.prepare(
       'UPDATE props SET deleted_at = ? WHERE episode_id = ? AND deleted_at IS NULL'
     ).run(now, Number(episodeId));
+    if (result.changes) cascadeDeletedParents(db, 'props', now);
     log.info('Props soft-deleted by episode', { episode_id: episodeId, count: result.changes });
     return result.changes;
   } catch (e) {

@@ -4,6 +4,7 @@ const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
 const { safeParseAIJSON, extractFirstArray } = require('../utils/safeJson');
 const characterLibraryService = require('./characterLibraryService');
+const { cascadeDeletedParents } = require('./assetCascade');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 
 /**
@@ -119,6 +120,7 @@ async function processCharacterGeneration(db, cfg, log, taskID, req) {
       }
     }
     db.prepare('DELETE FROM episode_characters WHERE episode_id = ?').run(episodeId);
+    cascadeDeletedParents(db, 'characters', now);
   }
 
   const characters = [];

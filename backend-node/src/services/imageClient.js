@@ -1732,6 +1732,9 @@ function createAndGenerateImage(db, log, opts) {
     quality,
     provider,
     user_negative_prompt,
+    reference_image_urls,  // 可选：参考图（造型/状态变体以基础图为参考）
+    storage_category,      // 可选：落盘目录（不传则按 character/scene 推断）
+    on_completed,          // 可选：({ image_url, local_path, image_gen_id }) => void，结果写回调用方自己的表
   } = opts;
   const negRow = (user_negative_prompt && String(user_negative_prompt).trim()) || null;
   const queuedStyle = opts.project_style ?? readProjectStyle(db, drama_id);
@@ -1782,6 +1785,15 @@ function createAndGenerateImage(db, log, opts) {
   setImmediate(async () => {
     try {
       db.prepare('UPDATE image_generations SET status = ? WHERE id = ?').run('processing', imageGenId);
+      const refOpts = {};
+      if (Array.isArray(reference_image_urls) && reference_image_urls.length) {
+        const cfgForRefs = require('../config').loadConfig();
+        refOpts.reference_image_urls = reference_image_urls;
+        refOpts.files_base_url = String(cfgForRefs.storage?.base_url || '').replace(/\/$/, '');
+        refOpts.storage_local_path = path.isAbsolute(cfgForRefs.storage?.local_path)
+          ? cfgForRefs.storage.local_path
+          : path.join(process.cwd(), cfgForRefs.storage?.local_path || './data/storage');
+      }
       const result = await callImageApi(db, log, {
         prompt,
         model,
@@ -1794,6 +1806,7 @@ function createAndGenerateImage(db, log, opts) {
         image_gen_id: imageGenId,
         user_negative_prompt: user_negative_prompt || undefined,
         project_style: queuedStyle,
+        ...refOpts,
       });
       const now2 = new Date().toISOString();
       if (result.error) {
@@ -1821,7 +1834,7 @@ function createAndGenerateImage(db, log, opts) {
         const storagePath = path.isAbsolute(cfg.storage?.local_path)
           ? cfg.storage.local_path
           : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
-        const category = sceneIdNum != null ? 'scenes' : (charIdNum != null ? 'characters' : 'images');
+        const category = storage_category || (sceneIdNum != null ? 'scenes' : (charIdNum != null ? 'characters' : 'images'));
         const projectSubdir = storageLayout.getProjectStorageSubdir(db, dramaIdNum);
         localPath = await uploadService.downloadImageToLocal(
           storagePath,
@@ -1845,6 +1858,9 @@ function createAndGenerateImage(db, log, opts) {
         } else {
           throw e;
         }
+      }
+      if (typeof on_completed === 'function') {
+        on_completed({ image_url: result.image_url, local_path: localPath, image_gen_id: imageGenId });
       }
       taskService.updateTaskResult(db, taskId, { image_generation_id: imageGenId, image_url: result.image_url, local_path: localPath, status: 'completed' });
       if (charIdNum != null) {

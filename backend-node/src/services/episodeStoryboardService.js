@@ -2,6 +2,9 @@
 const taskService = require('./taskService');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
+const { enforceUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
+const { SegmentIrOwnedError } = require('./segmentIr/project');
+const { readStoredIr } = require('./segmentIr/schema');
 const { syncStoryboardCharacters } = require('./imageService');
 const safeJson = require('../utils/safeJson');
 const { safeParseAIJSON, extractJsonCandidate, repairTruncatedJsonArray, extractFirstArray } = safeJson;
@@ -185,6 +188,7 @@ function getStoryboardsForEpisode(db, episodeId) {
       atmosphere: r.atmosphere,
       image_prompt: r.image_prompt,
       video_prompt: r.video_prompt,
+      segment_ir: readStoredIr(r.segment_ir),
       shot_type: r.shot_type,
       angle: r.angle,
       angle_h: r.angle_h ?? null,
@@ -412,6 +416,7 @@ function deriveStoryboardFieldsFromAi(sb, style, videoRatio, opts = {}) {
   let universalSegmentText = '';
   if (sb.universal_segment_text != null && String(sb.universal_segment_text).trim()) {
     universalSegmentText = String(sb.universal_segment_text).trim().replace(/\r?\n/g, ' ');
+    universalSegmentText = enforceUniversalStyleLine(universalSegmentText, opts.universalStyleZh || style);
   }
   if (universalOmni && !universalSegmentText) {
     universalSegmentText = buildFallbackUniversalSeedanceLine(
@@ -847,6 +852,7 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
     : {};
   const deriveOpts = {
     universalOmni: !!universalOmni,
+    universalStyleZh: (cfg?.style?.default_style_zh || '').trim() || streamStyle,
     targetClipDuration: targetClipDurationSec != null && Number(targetClipDurationSec) > 0 ? Number(targetClipDurationSec) : null,
     characterAppearances,
   };
@@ -1640,6 +1646,7 @@ function splitStoryboardByAudio(db, log, storyboardId) {
     .prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL')
     .get(sbId);
   if (!row) throw new Error('分镜不存在');
+  if (row.segment_ir) throw new SegmentIrOwnedError([], '该分镜由结构化分镜（IR）管理，不能按音频拆分；请改用重新规划');
 
   const plans = buildSplitPlansFromStoryboard(row);
   const extraCount = plans.length - 1;

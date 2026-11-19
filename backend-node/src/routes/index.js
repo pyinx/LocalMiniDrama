@@ -13,6 +13,7 @@ const characterRoutes = require('./characters');
 const uploadModule = require('./upload');
 const sceneRoutes = require('./scenes');
 const storyboardRoutes = require('./storyboards');
+const assetVariantRoutes = require('./assetVariants');
 const tailFrameLinkRoutes = require('./storyboards_tail_link');
 const imageRoutes = require('./images');
 const videoRoutes = require('./videos');
@@ -281,6 +282,11 @@ function setupRouter(cfg, db, log) {
   r.post('/episodes/:episode_id/characters/extract', stub.episodeCharactersExtract);
   r.get('/episodes/:episode_id/storyboards', storyboards.episodeStoryboardsGet);
   r.post('/episodes/:episode_id/finalize', drama.finalizeEpisode);
+  r.post('/episodes/:episode_id/replan', storyboards.replanEpisode);
+  r.get('/episodes/:episode_id/continuity', storyboards.getEpisodeContinuity);
+  r.get('/episodes/:episode_id/segment-check', storyboards.episodeSegmentCheck);
+  r.put('/episodes/:episode_id/continuity', storyboards.putEpisodeContinuity);
+  r.post('/storyboards/:id/compile-preview', storyboards.compilePreview);
   r.get('/episodes/:episode_id/download', drama.downloadEpisodeVideo);
 
   // ---------- tasks ----------
@@ -343,6 +349,22 @@ function setupRouter(cfg, db, log) {
   r.post('/storyboards/:id/insert-before', storyboards.insertBefore);
   r.get('/storyboards/:id', storyboards.getOne);
   r.put('/storyboards/:id', storyboards.update);
+  r.put('/storyboards/:id/segment-ir', storyboards.updateSegmentIr);
+  const variants = assetVariantRoutes(db, log);
+  const wardrobes = variants('wardrobe');
+  r.get('/characters/:id/wardrobes', wardrobes.list);
+  r.post('/characters/:id/wardrobes', wardrobes.create);
+  r.put('/wardrobes/:id', wardrobes.update);
+  r.delete('/wardrobes/:id', wardrobes.remove);
+  r.post('/wardrobes/:id/generate-image', wardrobes.generateImage);
+  for (const [kind, parentPath, itemPath] of [['scene_state', '/scenes/:id/states', '/scene-states'], ['prop_state', '/props/:id/states', '/prop-states']]) {
+    const v = variants(kind);
+    r.get(parentPath, v.list);
+    r.post(parentPath, v.create);
+    r.put(`${itemPath}/:id`, v.update);
+    r.delete(`${itemPath}/:id`, v.remove);
+    r.post(`${itemPath}/:id/generate-image`, v.generateImage);
+  }
   r.delete('/storyboards/:id', storyboards.delete);
   r.post('/storyboards/:id/props', prop.associateProps);
   r.post('/storyboards/:id/frame-prompt', storyboards.framePrompt);

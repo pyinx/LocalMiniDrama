@@ -9,6 +9,28 @@ function trim(s) {
   return s != null && String(s).trim() ? String(s).trim() : '';
 }
 
+const STYLE_LINE_PREFIX = '画面风格和类型: ';
+
+/** 第 1 行（风格行）：剧集画风是唯一来源，不再强制追加写实标签 */
+function buildUniversalStyleLine(styleZh) {
+  return STYLE_LINE_PREFIX + (trim(styleZh) || '电影风格, 高清画质');
+}
+
+/**
+ * 用剧集画风覆盖文本的风格行（LLM 可能写错或照旧写「真人写实」）。
+ * 兼容多行文本与被压成一行的文本（风格行止于换行或「生成一个由以下」）。
+ */
+function enforceUniversalStyleLine(text, styleZh) {
+  if (!text || !String(text).trim()) return text;
+  const src = String(text);
+  const line = buildUniversalStyleLine(styleZh);
+  const m = src.match(/^\s*画面风格和类型\s*[:：][^\n]*?(?=\n|\s*生成一个由以下|$)/);
+  if (!m) return line + (src.includes('\n') ? '\n' : ' ') + src.replace(/^\s+/, '');
+  const rest = src.slice(m[0].length).replace(/^[ \t]+/, '');
+  if (!rest) return line;
+  return line + (rest.startsWith('\n') ? '' : ' ') + rest;
+}
+
 /** 保留多行，仅规范换行 */
 function normalizeUniversalSegmentTextNewlines(text) {
   if (!text) return '';
@@ -45,7 +67,7 @@ function buildFallbackUniversalMultiBeatText(sb, d, styleHint) {
   const narr = trim(d.narration);
   const atm = trim(sb?.atmosphere);
   const styleTail = trim(styleHint) || '电影感叙事';
-  const styleLine = `画面风格和类型: 真人写实, 电影风格, 高清画质, ${styleTail}`;
+  const styleLine = buildUniversalStyleLine(styleTail);
 
   const lines = [styleLine, `生成一个由以下${M}个分镜组成的视频。`, DEFAULT_LINE3];
 
@@ -78,6 +100,8 @@ function buildFallbackUniversalMultiBeatText(sb, d, styleHint) {
 
 module.exports = {
   DEFAULT_LINE3,
+  buildUniversalStyleLine,
+  enforceUniversalStyleLine,
   normalizeUniversalSegmentTextNewlines,
   chooseBeatCount,
   splitDurationSeconds,
