@@ -124,5 +124,11 @@ describe('legacy and structured pipelines coexist (AC10)', () => {
     assert.equal(prev.statusCode, 200, JSON.stringify(prev.body));
     assert.ok(prev.body.data.prompt.includes(P.ambience('空调低鸣')));
     assert.ok(Array.isArray(prev.body.data.findings));
+
+    const check = mockRes();
+    routes.episodeSegmentCheck({ params: { episode_id: String(ids.episodeId) } }, check);
+    assert.equal(check.statusCode, 200);
+    assert.equal(check.body.data.segments, 1);
+    assert.ok(check.body.data.findings.some((f) => f.code === 'line_not_in_script'), 'script is empty in fixture, so lines are flagged');
   });
 });

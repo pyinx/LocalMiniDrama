@@ -70,6 +70,28 @@ export const storyboardsAPI = {
   get(id) {
     return request.get(`/storyboards/${id}`)
   },
+  /** 结构化分镜：整段 IR 校验后保存并投影旧字段；返回分镜（可能带 plan_findings） */
+  updateSegmentIr(id, ir) {
+    return request.put(`/storyboards/${id}/segment-ir`, { ir })
+  },
+  /** 结构化分镜：按当前（或指定）视频模型即时编译，返回 prompt / refs / findings，不落库 */
+  compilePreview(id, body = {}) {
+    return request.post(`/storyboards/${id}/compile-preview`, body)
+  },
+  /** 按当前视频模型重新规划本集结构化分镜（拆段、重编号） */
+  replanEpisode(episodeId) {
+    return request.post(`/episodes/${episodeId}/replan`, {})
+  },
+  /** 整集检查（只读） */
+  episodeSegmentCheck(episodeId) {
+    return request.get(`/episodes/${episodeId}/segment-check`)
+  },
+  getEpisodeContinuity(episodeId) {
+    return request.get(`/episodes/${episodeId}/continuity`)
+  },
+  putEpisodeContinuity(episodeId, continuity) {
+    return request.put(`/episodes/${episodeId}/continuity`, { continuity })
+  },
   create(data) {
     return request.post('/storyboards', data)
   },

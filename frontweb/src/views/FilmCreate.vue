@@ -829,12 +829,22 @@
             <span class="sb-config-hint">四/九宫格自动按视角拆分</span>
           </label>
         </div>
+        <div v-if="hasStructuredStoryboards && currentEpisodeId" class="sb-config-row" style="margin-top:10px">
+          <EpisodeSegmentTools
+            :episode-id="currentEpisodeId"
+            :scenes="scenes"
+            @changed="() => refreshStoryboardsForEpisode(currentEpisodeId)"
+          />
+        </div>
         <div class="sb-config-row sb-narration-export-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:12px">
           <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
             首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
           </el-checkbox>
           <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings(false)">
             全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
+          </el-checkbox>
+          <el-checkbox v-model="storyboardStructured" @change="() => saveProjectSettings(false)">
+            结构化分镜（新链路：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图）
           </el-checkbox>
           <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings(false)">
             生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
@@ -1184,8 +1194,11 @@
               </template>
             </div>
             <!-- 中：经典模式=分镜参考图；全能模式=片段描述（独立字段，与参考图并存） -->
-            <div class="sb-panel sb-image" :class="{ 'sb-image--universal': isSbUniversalMode(sb.id) }">
-              <template v-if="isSbUniversalMode(sb.id)">
+            <div class="sb-panel sb-image" :class="{ 'sb-image--universal': isSbUniversalMode(sb.id) || !!sb.segment_ir }">
+              <template v-if="sb.segment_ir">
+                <SegmentIrPanel :storyboard="sb" @saved="() => refreshStoryboardsForEpisode(currentEpisodeId)" />
+              </template>
+              <template v-else-if="isSbUniversalMode(sb.id)">
                 <div class="sb-prompt-label sb-universal-label-row">
                   <div class="sb-universal-label-left">
                     <span class="sb-dot"></span>
@@ -2660,6 +2673,9 @@ import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
 import StylePickerButton from '@/components/StylePickerButton.vue'
 import AIConfigContent from '@/components/AIConfigContent.vue'
 import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEditor.vue'
+import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
+import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
+import { groupFindings, findingWhere } from '@/utils/segmentUi'
 import {
   generationStyleOptions,
   getStylePromptEn,
@@ -3287,6 +3303,9 @@ const storyboardCount = ref(null) // 分镜数量
 const videoDuration = ref(null) // 视频总长度
 /** 分镜生成时是否要求 AI 输出 narration（解说旁白） */
 const storyboardIncludeNarration = ref(false)
+/** 结构化分镜（新链路）：生成分镜时输出 SegmentIR，视频请求由后端按模型编译 */
+const storyboardStructured = ref(false)
+const hasStructuredStoryboards = computed(() => (store.storyboards || []).some((sb) => sb && sb.segment_ir))
 /** 分镜生成是否使用全能模式（universal_segment_text，对接 Seedance / 可灵 Omni） */
 const storyboardUniversalOmni = ref(false)
 const storyboardUseFirstLastFrame = ref(false)
@@ -4595,6 +4614,7 @@ async function loadDrama() {
     videoClipDuration.value = (d.metadata && d.metadata.video_clip_duration) ? Number(d.metadata.video_clip_duration) : 5
     storyboardIncludeNarration.value = !!(d.metadata && d.metadata.storyboard_include_narration)
     storyboardUniversalOmni.value = !!(d.metadata && d.metadata.storyboard_universal_omni)
+    storyboardStructured.value = !!(d.metadata && d.metadata.storyboard_structured)
     storyboardUseFirstLastFrame.value = !!(d.metadata && d.metadata.storyboard_use_first_last_frame)
     lastFrameUseFirstLayoutLock.value = d.metadata?.last_frame_use_first_layout_lock !== false
     if (storyboardUseFirstLastFrame.value && gridMode.value !== 'single') {
@@ -4992,6 +5012,7 @@ async function saveProjectSettings(includeGenerationStyle = false) {
     aspect_ratio: projectAspectRatio.value || '16:9',
     video_clip_duration: videoClipDuration.value || 5,
     storyboard_include_narration: !!storyboardIncludeNarration.value,
+    storyboard_structured: !!storyboardStructured.value,
     storyboard_universal_omni: !!storyboardUniversalOmni.value,
     storyboard_use_first_last_frame: !!storyboardUseFirstLastFrame.value,
     last_frame_use_first_layout_lock: !!lastFrameUseFirstLayoutLock.value,
@@ -6006,7 +6027,7 @@ async function polishUniversalSegmentsAfterGeneration(opts = {}) {
 
   const rawList = store.currentEpisode?.storyboards || []
   const list = rawList.slice().sort((a, b) => (Number(a.storyboard_number) || 0) - (Number(b.storyboard_number) || 0))
-  const targets = list.filter((sb) => sb?.id && isSbUniversalMode(sb.id) && sbUniversalSegmentTrimmed(sb))
+  const targets = list.filter((sb) => sb?.id && !sb.segment_ir && isSbUniversalMode(sb.id) && sbUniversalSegmentTrimmed(sb))
 
   if (!targets.length) return { polished: 0, skipped: true }
 
@@ -6091,6 +6112,7 @@ function sbUniversalSegmentTrimmed(sb) {
 
 function sbCanSubmitVideo(sb) {
   if (!sb) return false
+  if (sb.segment_ir) return true
   const vp = (sb.video_prompt || '').toString().trim()
   if (vp) return true
   if (isSbUniversalMode(sb.id)) return !!sbUniversalSegmentTrimmed(sb)
@@ -6590,6 +6612,15 @@ async function onGenerateSbVideo(sb) {
   } catch (e) {
     sbVideoErrors.value[sb.id] = e.message || '提交失败'
     ElMessage.error(e.message || '提交失败')
+    const blockedFindings = e?.response?.data?.error?.code === 'segment_compile_blocked' ? e.response.data.error.details?.findings : null
+    if (blockedFindings) {
+      const g = groupFindings(blockedFindings)
+      ElMessageBox.alert(
+        g.block.map((f) => `· ${f.msg}${findingWhere(f) ? `（${findingWhere(f)}）` : ''}`).join('\n'),
+        '结构化分镜未通过编译检查',
+        { type: 'error' }
+      ).catch(() => {})
+    }
   } finally {
     generatingSbVideoIds.delete(sb.id)
     genStore.markDone(meta)
@@ -6758,6 +6789,7 @@ async function onGenerateStoryboard() {
       aspect_ratio: projectAspectRatio.value || '16:9',
       include_narration: !!storyboardIncludeNarration.value,
       universal_omni_storyboard: !!storyboardUniversalOmni.value,
+      structured: !!storyboardStructured.value,
     })
     const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
     if (taskId) {
@@ -7441,6 +7473,7 @@ async function runOneClickPipeline(textOnly = false) {
           video_duration: getVideoDurationForApi(),
           include_narration: !!storyboardIncludeNarration.value,
           universal_omni_storyboard: !!storyboardUniversalOmni.value,
+      structured: !!storyboardStructured.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {
@@ -7952,6 +7985,7 @@ async function runRepairPipeline() {
           video_duration: getVideoDurationForApi(),
           include_narration: !!storyboardIncludeNarration.value,
           universal_omni_storyboard: !!storyboardUniversalOmni.value,
+      structured: !!storyboardStructured.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {

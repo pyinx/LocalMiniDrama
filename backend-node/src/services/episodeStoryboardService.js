@@ -4,6 +4,7 @@ const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
 const { enforceUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
 const { SegmentIrOwnedError } = require('./segmentIr/project');
+const { readStoredIr } = require('./segmentIr/schema');
 const { syncStoryboardCharacters } = require('./imageService');
 const safeJson = require('../utils/safeJson');
 const { safeParseAIJSON, extractJsonCandidate, repairTruncatedJsonArray, extractFirstArray } = safeJson;
@@ -219,6 +220,7 @@ function getStoryboardsForEpisode(db, episodeId) {
       atmosphere: r.atmosphere,
       image_prompt: r.image_prompt,
       video_prompt: r.video_prompt,
+      segment_ir: readStoredIr(r.segment_ir),
       shot_type: r.shot_type,
       angle: r.angle,
       angle_h: r.angle_h ?? null,

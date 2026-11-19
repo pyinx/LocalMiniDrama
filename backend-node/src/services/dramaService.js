@@ -1,4 +1,5 @@
 // 对应 Go application/services/drama_service.go
+const { readStoredIr } = require('./segmentIr/schema');
 
 const storageLayout = require('./storageLayout');
 const { resolveStylePreset } = require('../constants/generationStylePresets');
@@ -377,6 +378,7 @@ function rowToStoryboard(r) {
       segment_title: r.segment_title ?? null,
       creation_mode: r.creation_mode === 'universal' ? 'universal' : 'classic',
       universal_segment_text: r.universal_segment_text ?? null,
+      segment_ir: readStoredIr(r.segment_ir),
       first_frame_image_id: r.first_frame_image_id ?? null,
       last_frame_image_id: r.last_frame_image_id ?? null,
       last_frame_image_url: sanitizeImageUrl(r.last_frame_image_url),

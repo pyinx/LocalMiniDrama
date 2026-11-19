@@ -8,6 +8,9 @@ const videoClient = require('../services/videoClient');
 const segmentReplanService = require('../services/segmentReplanService');
 const segmentCompileService = require('../services/segmentCompileService');
 const episodeContinuityService = require('../services/episodeContinuityService');
+const { lintEpisode } = require('../services/segmentCompile/episodeLint');
+const { lintDialogueFidelity } = require('../services/segmentCompile/lint');
+const { parseSegmentIr } = require('../services/segmentIr/schema');
 
 /** 结构化分镜（IR）相关错误：所有权冲突 409，IR 不合法 422；其他错误返回 false 交给调用方 */
 function sendSegmentIrError(res, err) {
@@ -311,6 +314,27 @@ function routes(db, log) {
         response.success(res, { prompt, refs, duration_s, request, family, findings: r.findings, blocked: r.blocked, protocol: r.target.protocol, model: r.target.model });
       } catch (err) {
         log.error('storyboards compilePreview', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 整集检查（只读）：开场钩子、主运镜、环境声、尾帧轮数、台词保真 */
+    episodeSegmentCheck: (req, res) => {
+      try {
+        const ep = db.prepare('SELECT id, script_content, description FROM episodes WHERE id = ? AND deleted_at IS NULL').get(Number(req.params.episode_id));
+        if (!ep) return response.notFound(res, '剧集不存在');
+        const segments = db
+          .prepare('SELECT id, segment_ir FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL AND segment_ir IS NOT NULL ORDER BY storyboard_number, id')
+          .all(ep.id)
+          .map((r) => ({ storyboard_id: r.id, parsed: parseSegmentIr(r.segment_ir) }))
+          .filter((x) => x.parsed.ok)
+          .map((x) => ({ storyboard_id: x.storyboard_id, ir: x.parsed.ir }));
+        const continuity = episodeContinuityService.getContinuity(db, ep.id) || {};
+        const findings = segments.length
+          ? [...lintEpisode(segments, { continuity }), ...lintDialogueFidelity(segments, ep.script_content || ep.description || '')]
+          : [];
+        response.success(res, { segments: segments.length, findings });
+      } catch (err) {
+        log.error('storyboards episodeSegmentCheck', { error: err.message });
         response.internalError(res, err.message);
       }
     },

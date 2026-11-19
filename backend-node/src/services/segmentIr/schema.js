@@ -128,4 +128,10 @@ function parseSegmentIr(input) {
   return { ok: false, errors: r.error.issues.map((iss) => ({ path: iss.path.join('.'), message: iss.message })) };
 }
 
-module.exports = { parseSegmentIr, SEGMENT_IR_VERSION: 1 };
+/** 列表/详情序列化用：库里存的 IR JSON → 对象（损坏或为空返回 null） */
+function readStoredIr(raw) {
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
+module.exports = { parseSegmentIr, readStoredIr, SEGMENT_IR_VERSION: 1 };

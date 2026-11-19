@@ -1,5 +1,5 @@
 // 分镜：create, update, delete；帧提示词 get/save
-const { parseSegmentIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
+const { parseSegmentIr, readStoredIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
 const { planSegments } = require('./segmentIr/planner');
 const {
   projectLegacyFields,
@@ -245,7 +245,7 @@ function getStoryboardById(db, id) {
     last_frame_image_url: r.last_frame_image_url ?? null,
     last_frame_local_path: r.last_frame_local_path ?? null,
     characters,
-    segment_ir: parseStoredIr(r.segment_ir),
+    segment_ir: readStoredIr(r.segment_ir),
     prop_ids: propIds,
     composed_image: r.composed_image,
     image_url: r.image_url ?? null,
@@ -316,11 +316,6 @@ function insertBeforeStoryboard(db, log, targetId) {
 
   log.info('Storyboard inserted before', { new_id: info.lastInsertRowid, before_id: targetId });
   return getStoryboardById(db, info.lastInsertRowid);
-}
-
-function parseStoredIr(raw) {
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch (_) { return null; }
 }
 
 module.exports = {
