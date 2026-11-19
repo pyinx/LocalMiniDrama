@@ -3,6 +3,7 @@ const path = require('path');
 const response = require('../response');
 const storyboardService = require('../services/storyboardService');
 const episodeStoryboardService = require('../services/episodeStoryboardService');
+const { enforceUniversalStyleLine } = require('../services/universalOmniMultiBeatFormat');
 const framePromptService = require('../services/framePromptService');
 const aiClient = require('../services/aiClient');
 const promptI18n = require('../services/promptI18n');
@@ -574,6 +575,7 @@ function routes(db, log) {
         let text = String(out).trim();
         text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
         text = normalizeUniversalSegmentAtImageSpacing(text);
+        text = enforceUniversalStyleLine(text, built.styleZh);
         const nowIso = new Date().toISOString();
         db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
           text,
@@ -637,6 +639,7 @@ function routes(db, log) {
       let text = String(finalRaw).trim();
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
+      text = enforceUniversalStyleLine(text, built.styleZh);
       const nowIso = new Date().toISOString();
       db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
         text,
@@ -759,6 +762,7 @@ function routes(db, log) {
       let text = String(finalRaw).trim();
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
+      text = enforceUniversalStyleLine(text, built.styleZh);
       const nowIso = new Date().toISOString();
       db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
         text,

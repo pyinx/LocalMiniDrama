@@ -287,7 +287,7 @@ function getUniversalOmniMultiBeatFormatSpec(cfg) {
 FORBIDDEN: SoulLens/SEEDANCE single-line rows (主体:/叙事动态:/空间:/[禁BGM]); FORBIDDEN @人物N — use @图片1, @图片2, … only.
 
 Field "universal_segment_text" is a **multi-line string** (use \\n in JSON). Structure:
-Line 1: 画面风格和类型: 真人写实, 电影风格, 高清画质, <short style from project>
+Line 1: 画面风格和类型: <project art style only — copy STYLE_LINE_REQUIRED verbatim when the USER message gives it; do not add medium tags such as 真人写实 that conflict with it>
 Line 2: 生成一个由以下M个分镜组成的视频. (M integer 1–8)
 Line 3 (copy verbatim): ${DEFAULT_LINE3}
 Lines 4..(3+M): 分镜k： Tk秒: <cinematic Chinese prose for that slice; camera motion chain; light; emotion>
@@ -303,7 +303,7 @@ Each beat: rich motion picture prose (push in, pull back, rack focus), not a sta
 **禁止**使用已废弃的灵境/SoulLens **单行**格式（含「主体：」「叙事动态：」「空间：」「镜头：」段标、行末 [禁BGM][禁字幕]、@人物N 指代参考图）。
 
 本字段为 **多行字符串**（JSON 中用 \\n 换行），结构固定：
-第1行：画面风格和类型: 真人写实, 电影风格, 高清画质, <可再加项目风格短语>
+第1行：画面风格和类型: <仅写项目画风；USER 消息给出 STYLE_LINE_REQUIRED 时逐字照抄；不得追加与项目画风冲突的媒介标签（如非写实项目写「真人写实」）>
 第2行：生成一个由以下M个分镜组成的视频。（M 为 1–8 的整数，与下文分镜条数一致）
 第3行（必须逐字一致）：${DEFAULT_LINE3}
 第4行起：分镜1： T1秒: …、分镜2： T2秒: … … 分镜M： TM秒: …
@@ -317,7 +317,7 @@ Each beat: rich motion picture prose (push in, pull back, rack focus), not a sta
 - **禁止**：概括式台词（如「他说了一句重要的话」）、@人物N、markdown、SoulLens 段标签
 
 范例结构（勿照抄剧情，仅学排版）：
-画面风格和类型: 真人写实, 电影风格, 高清画质, 日本动漫画风
+画面风格和类型: 日本动漫画风
 生成一个由以下3个分镜组成的视频。
 ${DEFAULT_LINE3}
 分镜1： 5秒: 镜头从 @图片1 … 无对白。
@@ -1360,8 +1360,7 @@ This is **one** API clip whose wall-clock length is TOTAL_CLIP_SECONDS. Split in
 
 Output structure (no lines before or after this block):
 
-Line 1 — exactly:
-画面风格和类型: <comma-separated tags; MUST include 真人写实, 电影风格, 高清画质; MAY add STYLE_HINT / DRAMA_GENRE phrase>
+Line 1 — copy STYLE_LINE_REQUIRED from the USER message verbatim. The project art style is the only style source; do not add 真人写实 or any other medium tag.
 
 Line 2 — exactly (M must match count of 分镜k lines):
 生成一个由以下M个分镜组成的视频。

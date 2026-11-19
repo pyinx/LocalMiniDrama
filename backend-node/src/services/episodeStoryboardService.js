@@ -2,6 +2,7 @@
 const taskService = require('./taskService');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
+const { enforceUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
 const { syncStoryboardCharacters } = require('./imageService');
 const safeJson = require('../utils/safeJson');
 const { safeParseAIJSON, extractJsonCandidate, repairTruncatedJsonArray, extractFirstArray } = safeJson;
@@ -443,6 +444,7 @@ function deriveStoryboardFieldsFromAi(sb, style, videoRatio, opts = {}) {
   let universalSegmentText = '';
   if (sb.universal_segment_text != null && String(sb.universal_segment_text).trim()) {
     universalSegmentText = String(sb.universal_segment_text).trim().replace(/\r?\n/g, ' ');
+    universalSegmentText = enforceUniversalStyleLine(universalSegmentText, opts.universalStyleZh || style);
   }
   if (universalOmni && !universalSegmentText) {
     universalSegmentText = buildFallbackUniversalSeedanceLine(
@@ -874,6 +876,7 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
     : {};
   const deriveOpts = {
     universalOmni: !!universalOmni,
+    universalStyleZh: (cfg?.style?.default_style_zh || '').trim() || streamStyle,
     targetClipDuration: targetClipDurationSec != null && Number(targetClipDurationSec) > 0 ? Number(targetClipDurationSec) : null,
     characterAppearances,
   };
