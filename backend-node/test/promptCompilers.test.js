@@ -188,6 +188,30 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
     assert.ok(out.prompt.includes('林远在画面右侧'), 'aliases become plain names');
   });
 
+  for (const [label, images] of [['missing image', {}], ['image without URL', { 51: null }]]) {
+    it(`blocks an explicitly selected last frame: ${label}`, () => {
+      const ir = irOf({ continuity: { mode: 'first_last', first_frame_image_id: 50, last_frame_image_id: 51 } });
+      const ctx = ctxFor(TARGETS.seedance);
+      ctx.bindings.images = { 50: 'http://h/first.png', ...images };
+      const out = compileSegment(ir, ctx);
+      assert.ok(out.findings.some((f) => f.level === 'block' && f.code === 'asset_missing' && f.msg.includes('尾帧')));
+    });
+  }
+
+  it('blocks a lost explicit last frame on a split part in reference mode', () => {
+    const ir = irOf({ continuity: { mode: 'refs', last_frame_image_id: 999 } });
+    const out = compileSegment(ir, ctxFor(TARGETS.seedance));
+    assert.ok(out.findings.some((f) => f.level === 'block' && f.code === 'asset_missing'));
+  });
+
+  it('accepts first frame alone when no last frame was selected', () => {
+    const ir = irOf({ continuity: { mode: 'first_last', first_frame_image_id: 50 } });
+    const out = compileSegment(ir, ctxFor(TARGETS.seedance));
+    assert.ok(!out.findings.some((f) => f.level === 'block'));
+    assert.equal(out.request.first_frame_url, 'http://h/first.png');
+    assert.equal(Object.hasOwn(out.request, 'last_frame_url'), false);
+  });
+
   it('first last frame unsupported blocks', () => {
     const ir = irOf({ continuity: { mode: 'first_last', first_frame_image_id: 50 } });
     const out = compileSegment(ir, ctxFor({ protocol: 'jimeng_novel', model: 'Seedance_2.0_mini' }));

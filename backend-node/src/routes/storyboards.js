@@ -32,6 +32,17 @@ const angleService = require('../services/angleService');
 const { buildUniversalSegmentUserPromptBundle } = require('../services/universalSegmentPromptBundle');
 const { normalizeUniversalSegmentShotDurations } = require('../services/universalSegmentDurationNormalize');
 
+/** 流已开始，写回失败只能通过末尾 error 事件报告。 */
+function saveStreamedUniversalPrompt(db, id, text, writeNd) {
+  try {
+    if (storyboardService.saveLegacyUniversalPrompt(db, id, text)) return true;
+    writeNd({ type: 'error', code: 'NOT_FOUND', message: '分镜不存在' });
+  } catch (err) {
+    writeNd({ type: 'error', code: err.code || 'INTERNAL_ERROR', message: err.message });
+  }
+  return false;
+}
+
 /** 润色接口：邻镜结构化摘要（含全能片段与其它提示词字段） */
 function formatNeighborShotPolishContext(row) {
   if (!row) return '(none)';
@@ -396,6 +407,7 @@ function routes(db, log) {
         const result = segmentReplanService.replanEpisode(db, log, req.params.episode_id, req.body || {});
         response.success(res, result);
       } catch (err) {
+        if (err && err.code === 'segment_replan_blocked') return response.error(res, 422, err.code, err.message, { findings: err.findings });
         if (err && err.code === 'no_segment_ir') return response.error(res, 409, 'no_segment_ir', err.message);
         if (err && err.code === 'not_found') return response.notFound(res, err.message);
         log.error('storyboards replanEpisode', { error: err.message });
@@ -716,12 +728,7 @@ function routes(db, log) {
         text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
         text = normalizeUniversalSegmentAtImageSpacing(text);
         text = enforceUniversalStyleLine(text, built.styleZh);
-        const nowIso = new Date().toISOString();
-        db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-          text,
-          nowIso,
-          sbId
-        );
+        if (!storyboardService.saveLegacyUniversalPrompt(db, sbId, text)) return response.notFound(res, '分镜不存在');
         log.info('[分镜] generateUniversalSegmentPrompt 完成', { id: sbId, len: text.length, duration_sec: durationSec });
         response.success(res, { universal_segment_text: text });
       } catch (err) {
@@ -787,12 +794,7 @@ function routes(db, log) {
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
       text = enforceUniversalStyleLine(text, built.styleZh);
-      const nowIso = new Date().toISOString();
-      db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-        text,
-        nowIso,
-        sbId
-      );
+      if (!saveStreamedUniversalPrompt(db, sbId, text, writeNd)) return res.end();
       log.info('[分镜] generateUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
       res.end();
@@ -916,12 +918,7 @@ function routes(db, log) {
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
       text = enforceUniversalStyleLine(text, built.styleZh);
-      const nowIso = new Date().toISOString();
-      db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-        text,
-        nowIso,
-        sbId
-      );
+      if (!saveStreamedUniversalPrompt(db, sbId, text, writeNd)) return res.end();
       log.info('[分镜] polishUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
       res.end();
@@ -1256,6 +1253,11 @@ function routes(db, log) {
           'UPDATE storyboards SET movement = ?, lighting_style = ?, depth_of_field = ?, updated_at = ? WHERE id = ?'
         );
 
+        const updateIrLighting = db.prepare(
+          overwrite
+            ? 'UPDATE storyboards SET lighting_style = ?, depth_of_field = ?, updated_at = ? WHERE id = ?'
+            : 'UPDATE storyboards SET lighting_style = COALESCE(?, lighting_style), depth_of_field = COALESCE(?, depth_of_field), updated_at = ? WHERE id = ?'
+        );
         for (const row of rows) {
           const inferred = angleService.inferPhotographyParams(row);
           // 只更新缺少的字段（除非 overwrite=true）
@@ -1263,7 +1265,12 @@ function routes(db, log) {
           const newLighting   = overwrite ? inferred.lighting_style : (row.lighting_style ? null : inferred.lighting_style);
           const newDof        = overwrite ? inferred.depth_of_field : (row.depth_of_field  ? null : inferred.depth_of_field);
 
-          if (overwrite) {
+          if (row.segment_ir) {
+            if (newLighting || newDof || (overwrite && newMovement)) {
+              updateIrLighting.run(newLighting, newDof, now, row.id);
+              updated++;
+            }
+          } else if (overwrite) {
             if (inferred.movement || inferred.lighting_style || inferred.depth_of_field) {
               stmtOverwrite.run(inferred.movement, inferred.lighting_style, inferred.depth_of_field, now, row.id);
               updated++;

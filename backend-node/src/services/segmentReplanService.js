@@ -62,6 +62,12 @@ function replanEpisode(db, log, episodeId, opts = {}) {
     openingHook: !!rows[0].segment_ir,
     closingHook: !!rows[rows.length - 1].segment_ir,
   });
+  const blockers = plan.findings.filter((f) => f.level === 'block');
+  if (blockers.length) {
+    const err = codedError('segment_replan_blocked', blockers[0].msg);
+    err.findings = blockers;
+    throw err;
+  }
   const partsBySource = irRows.map(() => []);
   plan.segments.forEach((s) => partsBySource[s.source].push(s.ir));
 

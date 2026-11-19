@@ -67,7 +67,12 @@ describe('segment IR ownership (AC23 / AC33 / AC40)', () => {
   it('unchanged projected fields accepted', () => {
     saveIr();
     const dto = storyboardService.getStoryboardById(db, ids.sbIr);
-    const res = callUpdate(ids.sbIr, { ...dto, duration: String(dto.duration), title: '新标题' });
+    // UPDATE OF also fires for assignments of the same value: observe which columns SQL touches.
+    db.exec(`CREATE TEMP TRIGGER protect_ir_projection BEFORE UPDATE OF
+      dialogue, action, duration, shot_type, movement, characters, scene_id, universal_segment_text ON storyboards
+      BEGIN SELECT RAISE(ABORT, 'generic update touched an IR-owned column'); END`);
+    const character_ids = dto.characters.map((id) => ({ id }));
+    const res = callUpdate(ids.sbIr, { ...dto, character_ids, duration: String(dto.duration), title: '新标题' });
     assert.equal(res.statusCode, 200, JSON.stringify(res.body));
     assert.equal(row(ids.sbIr).title, '新标题');
   });
@@ -177,6 +182,8 @@ describe('segment IR ownership (AC23 / AC33 / AC40)', () => {
     assert.deepEqual(row(ids.sbIr), before);
     assert.deepEqual(row(ids.sbLegacy), legacyBefore, 'whole batch is rejected, nothing written');
 
+    db.exec(`CREATE TEMP TRIGGER protect_ir_movement BEFORE UPDATE OF movement ON storyboards
+      WHEN OLD.segment_ir IS NOT NULL BEGIN SELECT RAISE(ABORT, 'batch wrote projected movement'); END`);
     const keep = mockRes();
     routes.batchInferParams({ body: { episode_id: ids.episodeId, overwrite: false } }, keep);
     assert.equal(keep.statusCode, 200, 'fill-missing mode leaves projected movement alone');

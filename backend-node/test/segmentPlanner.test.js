@@ -85,6 +85,14 @@ describe('segment planner (AC3 / AC6)', () => {
     assert.equal(out.segments[0].ir.duration_s, 7);
   });
 
+  it('includes the closing pause in the single-shot duration limit', () => {
+    const plan = (count) => planSegments([ir([shot(15, { lines: [say('字'.repeat(count))] })])], CAPS_15);
+    assert.equal(plan(50).findings.some((f) => f.level === 'block'), false);
+    const out = plan(52);
+    assert.equal(out.segments[0].ir.duration_s, 16);
+    assert.ok(out.findings.some((f) => f.level === 'block' && f.code === 'shot_exceeds_max'));
+  });
+
   it('dialogue capacity', () => {
     assert.equal(dialogueCapacity(8), 2);
     assert.equal(dialogueCapacity(15), 4);
@@ -157,6 +165,50 @@ describe('segment planner (AC3 / AC6)', () => {
 describe('replan endpoint (AC36)', () => {
   const storyboardService = require('../src/services/storyboardService');
   const storyboardRoutes = require('../src/routes/storyboards');
+
+  it('saves 1+1+13 seconds within a 15-second cap and replans a 45-character closing line', (t) => {
+    const { db, ids } = createIrTestDb();
+    t.after(() => db.close());
+    db.prepare(`INSERT INTO ai_service_configs (service_type, provider, api_protocol, model, is_default, is_active)
+      VALUES ('video', 'minimax', 'minimax_h3', '["MiniMax-H3"]', 1, 1)`).run();
+    const text = '字'.repeat(45);
+    const input = ir([shot(1), shot(1), shot(13, { lines: [say(text)] })]);
+    input.scene.scene_id = ids.sceneId;
+    const rows = db.prepare(`SELECT duration, segment_ir FROM storyboards
+      WHERE episode_id = ? AND segment_ir IS NOT NULL AND deleted_at IS NULL ORDER BY storyboard_number`);
+    const saved = storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, input, { caps: CAPS_15 });
+    const before = rows.all(ids.episodeId);
+    assert.deepEqual(before.map((r) => r.duration), [15]);
+    assert.deepEqual(JSON.parse(before[0].segment_ir), input);
+    assert.ok(saved.plan_findings.some((f) => f.code === 'needs_replan'));
+
+    const res = mockRes();
+    storyboardRoutes(db, noopLog).replanEpisode({ params: { episode_id: ids.episodeId } }, res);
+    assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+    const after = rows.all(ids.episodeId);
+    const segments = after.map((r) => JSON.parse(r.segment_ir));
+    assert.deepEqual(after.map((r) => r.duration), [4, 14]);
+    assert.deepEqual(segments.map((s) => s.duration_s), [4, 14]);
+    assert.deepEqual(segments.map((s) => s.shots.length), [2, 1]);
+    assert.deepEqual(segments[1].shots[0].lines, input.shots[2].lines);
+  });
+
+  it('rejects a 16-second closing shot before writing any episode changes', () => {
+    const { db, ids } = createIrTestDb();
+    db.prepare(`INSERT INTO ai_service_configs (service_type, provider, api_protocol, model, is_default, is_active)
+      VALUES ('video', 'minimax', 'minimax_h3', '["MiniMax-H3"]', 1, 1)`).run();
+    const input = ir([shot(6), shot(15, { lines: [say('字'.repeat(52))] })]);
+    input.scene.scene_id = ids.sceneId;
+    storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, input);
+    const rows = db.prepare('SELECT * FROM storyboards WHERE episode_id = ? ORDER BY id');
+    const before = rows.all(ids.episodeId);
+    const res = mockRes();
+    storyboardRoutes(db, noopLog).replanEpisode({ params: { episode_id: ids.episodeId } }, res);
+    assert.deepEqual(rows.all(ids.episodeId), before);
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.body.error.code, 'segment_replan_blocked');
+    assert.ok(res.body.error.details.findings.some((f) => f.code === 'shot_exceeds_max' && /16 秒.*15 秒/.test(f.msg)));
+  });
 
   it('replan renumbers and keeps bindings', () => {
     const { db, ids } = createIrTestDb();

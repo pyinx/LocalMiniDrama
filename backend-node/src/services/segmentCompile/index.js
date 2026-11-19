@@ -97,10 +97,12 @@ function compileSegment(ir, ctx) {
   // ---- 参考图：按截断优先级挑选，按输出顺序（角色 > 场景 > 道具 > 其他）排列并编号
   let refs = [];
   const frames = {};
+  const lastFrameId = ir.continuity.last_frame_image_id;
+  if (lastFrameId != null && !b.images[lastFrameId]) add('block', 'asset_missing', '指定的尾帧图片不可用，请重新选择');
   if (firstLast) {
     frames.first_frame_url = b.images[ir.continuity.first_frame_image_id] || null;
     if (!frames.first_frame_url) add('block', 'asset_missing', '首帧图片已不存在');
-    if (ir.continuity.last_frame_image_id != null) frames.last_frame_url = b.images[ir.continuity.last_frame_image_id] || null;
+    if (lastFrameId != null) frames.last_frame_url = b.images[lastFrameId] || null;
   } else {
     const byPriority = [...candidates].sort((x, y) => x.priority - y.priority || x.order - y.order);
     const kept = byPriority.slice(0, caps.refImages);
