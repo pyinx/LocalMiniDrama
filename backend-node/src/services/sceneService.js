@@ -1,5 +1,6 @@
 // 场景：与 Go scene_handler + storyboard_composition 对齐
 const imageClient = require('./imageClient');
+const { cascadeDeletedParents } = require('./assetCascade');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
@@ -49,7 +50,11 @@ function updateScenePrompt(db, log, sceneId, req) {
 
 function deleteScene(db, log, sceneId) {
   const now = new Date().toISOString();
-  const result = db.prepare('UPDATE scenes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, Number(sceneId));
+  const result = db.transaction(() => {
+    const r = db.prepare('UPDATE scenes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, Number(sceneId));
+    if (r.changes) cascadeDeletedParents(db, 'scenes', now);
+    return r;
+  })();
   if (result.changes === 0) return { ok: false, error: 'scene not found' };
   log.info('Scene deleted', { scene_id: sceneId });
   return { ok: true };
@@ -96,6 +101,7 @@ function deleteScenesByEpisodeId(db, log, episodeId) {
   const now = new Date().toISOString();
   try {
     const result = db.prepare('UPDATE scenes SET deleted_at = ? WHERE episode_id = ? AND deleted_at IS NULL').run(now, Number(episodeId));
+    if (result.changes) cascadeDeletedParents(db, 'scenes', now);
     log.info('Scenes deleted by episode', { episode_id: episodeId, count: result.changes });
     return result.changes;
   } catch (e) {

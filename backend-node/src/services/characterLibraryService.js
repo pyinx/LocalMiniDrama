@@ -10,6 +10,7 @@ const jimengMaterialHubService = require('./jimengMaterialHubService');
 const modelArkAssetConfigService = require('./modelArkAssetConfigService');
 const uploadService = require('./uploadService');
 const seedance2AssetGuards = require('../utils/seedance2AssetGuards');
+const { cascadeDeletedParents } = require('./assetCascade');
 const assetPhrases = require('./segmentCompile/rules/assetPhrases');
 const {
   appendSourceIdFilters,
@@ -347,7 +348,10 @@ function deleteCharacter(db, log, characterId) {
   const drama = db.prepare('SELECT id FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
   if (!drama) return { ok: false, error: 'unauthorized' };
   const now = new Date().toISOString();
-  db.prepare('UPDATE characters SET deleted_at = ? WHERE id = ?').run(now, Number(characterId));
+  db.transaction(() => {
+    db.prepare('UPDATE characters SET deleted_at = ? WHERE id = ?').run(now, Number(characterId));
+    cascadeDeletedParents(db, 'characters', now);
+  })();
   log.info('Character deleted', { id: characterId });
   return { ok: true };
 }
