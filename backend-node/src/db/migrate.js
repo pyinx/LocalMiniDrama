@@ -572,6 +572,20 @@ function ensureAllColumns(database) {
     console.warn('scene_states / prop_states init failed:', e.message);
   }
 
+  // --- 即梦渲染报价确认：一次报价一个 token，覆盖若干节点；每个节点只能消费一次 ---
+  try {
+    database.exec(`CREATE TABLE IF NOT EXISTS jimeng_confirmations (
+      token      TEXT PRIMARY KEY,
+      episode_id INTEGER,
+      items      TEXT NOT NULL,
+      total      REAL,
+      balance    REAL,
+      created_at TEXT NOT NULL
+    )`);
+  } catch (e) {
+    console.warn('jimeng_confirmations init failed:', e.message);
+  }
+
   // --- global_settings（全局键值设置表） ---
   try {
     database.exec(`CREATE TABLE IF NOT EXISTS global_settings (

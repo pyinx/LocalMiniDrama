@@ -1,7 +1,29 @@
 const response = require('../response');
 const videoService = require('../services/videoService');
 const taskService = require('../services/taskService');
-const { normalizeAspectRatioForApi } = require('../services/videoClient');
+const { normalizeAspectRatioForApi, resolveVideoTarget } = require('../services/videoClient');
+const jimengRenderer = require('../services/jimeng/renderer');
+
+const JIMENG_CONFLICT = new Set(['confirmation_required', 'confirmation_consumed', 'confirmation_stale', 'generation_in_progress']);
+
+/** 即梦：先确认可用，再做同步校验（token/配置哈希/是否进行中）并落库，最后后台提交与轮询 */
+async function submitJimeng(db, log, res, storyboardId, body) {
+  const st = await jimengRenderer.status(db);
+  if (!st.available) return response.error(res, 503, 'jimeng_unavailable', st.message, { reason: st.reason });
+  let genId;
+  try {
+    genId = jimengRenderer.prepareSubmit(db, log, storyboardId, body.jimeng_confirmation, { model: body.model || undefined });
+  } catch (err) {
+    if (JIMENG_CONFLICT.has(err.code)) return response.error(res, 409, err.code, err.message, err.video_generation_id ? { video_generation_id: err.video_generation_id } : undefined);
+    if (err.code === 'segment_compile_blocked') return response.error(res, 422, err.code, err.message, { findings: err.findings });
+    if (err.code) return response.error(res, 422, err.code, err.message);
+    throw err;
+  }
+  setImmediate(() => {
+    jimengRenderer.runSubmitted(db, log, genId).catch((e) => log.error('jimeng runSubmitted', { id: genId, error: e.message }));
+  });
+  return response.created(res, videoService.getById(db, genId));
+}
 const segmentCompileService = require('../services/segmentCompileService');
 
 /**
@@ -35,12 +57,16 @@ function routes(db, log) {
         response.internalError(res, err.message);
       }
     },
-    create: (req, res) => {
+    create: async (req, res) => {
       try {
         const body = req.body || {};
         const storyboardId = body.storyboard_id != null ? Number(body.storyboard_id) : null;
         const compiledIr = compileForRequest(db, res, storyboardId, body.model);
         if (compiledIr === false) return;
+        if (compiledIr && compiledIr.target.protocol === jimengRenderer.PROTOCOL) return await submitJimeng(db, log, res, storyboardId, body);
+        if (!compiledIr && resolveVideoTarget(db, body.model || undefined).protocol === jimengRenderer.PROTOCOL) {
+          return response.error(res, 422, 'jimeng_requires_structured', '即梦渲染只支持结构化分镜，请先用「结构化分镜」重新生成本集分镜');
+        }
         const task = taskService.createTask(db, log, 'video_generation', String(body.drama_id || ''));
         const now = new Date().toISOString();
         const dramaId = Number(body.drama_id) || 0;

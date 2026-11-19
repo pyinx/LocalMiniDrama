@@ -337,6 +337,18 @@ async function resumePollForVideoGeneration(db, log, videoGenId) {
   if (!row || row.status !== 'processing') return;
   const providerTaskId = row.provider_task_id && String(row.provider_task_id).trim();
   if (!providerTaskId) return;
+  if (row.provider === 'jimeng_novel') {
+    // 即梦：只查不重提（provider_task_id 是节点 key，提交前已写入）
+    activeVideoPolls.add(videoGenId);
+    try {
+      await require('./jimeng/renderer').poll(db, log, videoGenId);
+    } catch (err) {
+      log.error('jimeng resume poll error', { id: videoGenId, error: err.message });
+    } finally {
+      activeVideoPolls.delete(videoGenId);
+    }
+    return;
+  }
 
   const config = videoClient.getDefaultVideoConfig(db, row.model);
   if (!config) {

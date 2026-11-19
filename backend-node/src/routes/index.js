@@ -223,6 +223,8 @@ function setupRouter(cfg, db, log) {
   r.get('/episodes/:episode_id/segment-check', storyboards.episodeSegmentCheck);
   r.put('/episodes/:episode_id/continuity', storyboards.putEpisodeContinuity);
   r.post('/storyboards/:id/compile-preview', storyboards.compilePreview);
+  r.get('/integrations/jimeng/status', storyboards.jimengStatus);
+  r.post('/episodes/:episode_id/jimeng/estimate', storyboards.jimengEstimate);
   r.get('/episodes/:episode_id/download', drama.downloadEpisodeVideo);
 
   // ---------- tasks ----------

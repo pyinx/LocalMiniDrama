@@ -4,6 +4,7 @@
     <el-button size="small" :loading="checking" @click="onCheck">整集检查</el-button>
     <el-button size="small" :loading="replanning" @click="onReplan">按当前视频模型重新规划</el-button>
     <el-button size="small" @click="openContinuity">连续性表</el-button>
+    <el-button v-if="jimengActive" size="small" type="warning" plain @click="emit('jimeng-episode')">即梦整集报价并生成</el-button>
 
     <el-dialog v-model="checkVisible" title="整集检查" width="640px" append-to-body>
       <FindingList :findings="checkFindings" show-empty />
@@ -40,8 +41,9 @@ import FindingList from '@/components/FindingList.vue'
 const props = defineProps({
   episodeId: { type: [Number, String], required: true },
   scenes: { type: Array, default: () => [] },
+  jimengActive: { type: Boolean, default: false },
 })
-const emit = defineEmits(['changed'])
+const emit = defineEmits(['changed', 'jimeng-episode'])
 
 const checking = ref(false)
 const checkVisible = ref(false)

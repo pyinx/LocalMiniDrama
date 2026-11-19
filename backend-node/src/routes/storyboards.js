@@ -8,6 +8,7 @@ const videoClient = require('../services/videoClient');
 const segmentReplanService = require('../services/segmentReplanService');
 const segmentCompileService = require('../services/segmentCompileService');
 const episodeContinuityService = require('../services/episodeContinuityService');
+const jimengRenderer = require('../services/jimeng/renderer');
 const { lintEpisode } = require('../services/segmentCompile/episodeLint');
 const { lintDialogueFidelity } = require('../services/segmentCompile/lint');
 const { parseSegmentIr } = require('../services/segmentIr/schema');
@@ -335,6 +336,29 @@ function routes(db, log) {
         response.success(res, { segments: segments.length, findings });
       } catch (err) {
         log.error('storyboards episodeSegmentCheck', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    jimengStatus: async (req, res) => {
+      try {
+        response.success(res, await jimengRenderer.status(db));
+      } catch (err) {
+        log.error('jimeng status', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 即梦整集（或所选分镜）报价：免费，返回一次性确认 token */
+    jimengEstimate: async (req, res) => {
+      try {
+        const body = req.body || {};
+        const r = await jimengRenderer.estimate(db, log, req.params.episode_id, body.storyboard_ids, { model: body.model || undefined });
+        response.success(res, { confirmation: r });
+      } catch (err) {
+        if (err.code === 'jimeng_unavailable') return response.error(res, 503, err.code, err.message, { reason: err.reason });
+        if (err.code === 'segment_compile_blocked') return response.error(res, 422, err.code, err.message, { findings: err.findings });
+        if (err.code === 'jimeng_cli_error') return response.error(res, 502, err.code, err.message, { cli_code: err.cli_code });
+        if (err.code) return response.error(res, 422, err.code, err.message);
+        log.error('jimeng estimate', { error: err.message });
         response.internalError(res, err.message);
       }
     },

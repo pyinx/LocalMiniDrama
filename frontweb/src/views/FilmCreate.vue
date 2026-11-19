@@ -833,7 +833,17 @@
           <EpisodeSegmentTools
             :episode-id="currentEpisodeId"
             :scenes="scenes"
+            :jimeng-active="jimengActive"
             @changed="() => refreshStoryboardsForEpisode(currentEpisodeId)"
+            @jimeng-episode="() => openJimengDialog(storyboards.filter((x) => x.segment_ir).map((x) => x.id))"
+          />
+          <JimengConfirmDialog
+            v-if="dramaId && currentEpisodeId"
+            v-model="jimengDialogVisible"
+            :drama-id="dramaId"
+            :episode-id="currentEpisodeId"
+            :storyboard-ids="jimengDialogSbIds"
+            @submitted="() => refreshStoryboardsForEpisode(currentEpisodeId)"
           />
         </div>
         <div class="sb-config-row sb-narration-export-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:12px">
@@ -2719,6 +2729,8 @@ import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEdi
 import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
 import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
 import VariantEditor from '@/components/VariantEditor.vue'
+import JimengConfirmDialog from '@/components/JimengConfirmDialog.vue'
+import { jimengOptionState } from '@/utils/segmentUi'
 import FindingList from '@/components/FindingList.vue'
 import { videoMergesAPI } from '@/api/videoMerges'
 import { groupFindings, findingWhere } from '@/utils/segmentUi'
@@ -2894,6 +2906,7 @@ async function loadLatestMergePostInfo(epId) {
   } catch (_) {}
 }
 watch(() => [currentEpisodeId.value, currentEpisode.value?.video_url], ([epId]) => loadLatestMergePostInfo(epId), { immediate: true })
+watch(() => currentEpisodeId.value, () => { refreshJimengActive().catch(() => {}) })
 
 const currentEpisodeVideoUrl = computed(() => {
   const url = currentEpisode.value?.video_url
@@ -3369,6 +3382,23 @@ const videoDuration = ref(null) // 视频总长度
 const storyboardIncludeNarration = ref(false)
 /** 结构化分镜（新链路）：生成分镜时输出 SegmentIR，视频请求由后端按模型编译 */
 const storyboardStructured = ref(false)
+/** 当前默认视频配置是否为即梦 CLI（可选后端：先报价确认再提交） */
+const jimengActive = ref(false)
+const jimengDialogVisible = ref(false)
+const jimengDialogSbIds = ref([])
+async function refreshJimengActive() {
+  const cfg = await getActiveVideoAiConfig()
+  jimengActive.value = !!cfg && String(cfg.api_protocol || '').trim().toLowerCase() === 'jimeng_novel'
+}
+async function openJimengDialog(ids) {
+  if (!ids || !ids.length) return ElMessage.warning('本集没有结构化分镜')
+  let st = null
+  try { st = await storyboardsAPI.jimengStatus() } catch (_) { return }
+  const opt = jimengOptionState(st)
+  if (opt.disabled) return ElMessage.warning(opt.label + (opt.detail ? `：${opt.detail}` : ''))
+  jimengDialogSbIds.value = ids
+  jimengDialogVisible.value = true
+}
 const hasStructuredStoryboards = computed(() => (store.storyboards || []).some((sb) => sb && sb.segment_ir))
 /** 分镜生成是否使用全能模式（universal_segment_text，对接 Seedance / 可灵 Omni） */
 const storyboardUniversalOmni = ref(false)
@@ -6567,6 +6597,10 @@ async function onRegenerateLayoutDescription(sb) {
 
 async function onGenerateSbVideo(sb) {
   if (!dramaId.value || !sb?.id || !sbCanSubmitVideo(sb)) return
+  if (sb.segment_ir) {
+    await refreshJimengActive()
+    if (jimengActive.value) return openJimengDialog([sb.id])
+  }
   const universal = isSbUniversalMode(sb.id)
   let universalOmniApi = universal
   if (universal) {
