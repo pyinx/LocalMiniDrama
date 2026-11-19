@@ -833,7 +833,7 @@
           <EpisodeSegmentTools
             :episode-id="currentEpisodeId"
             :scenes="scenes"
-            :jimeng-active="jimengActive"
+            :jimeng-option="jimengOption"
             @changed="() => refreshStoryboardsForEpisode(currentEpisodeId)"
             @jimeng-episode="() => openJimengDialog(storyboards.filter((x) => x.segment_ir).map((x) => x.id))"
           />
@@ -1210,7 +1210,7 @@
             <!-- 中：经典模式=分镜参考图；全能模式=片段描述（独立字段，与参考图并存） -->
             <div class="sb-panel sb-image" :class="{ 'sb-image--universal': isSbUniversalMode(sb.id) || !!sb.segment_ir }">
               <template v-if="sb.segment_ir">
-                <SegmentIrPanel :storyboard="sb" @saved="() => refreshStoryboardsForEpisode(currentEpisodeId)" />
+                <SegmentIrPanel :storyboard="sb" @preview-blocked="(blocked) => { previewBlocked[sb.id] = blocked }" @saved="() => refreshStoryboardsForEpisode(currentEpisodeId)" />
               </template>
               <template v-else-if="isSbUniversalMode(sb.id)">
                 <div class="sb-prompt-label sb-universal-label-row">
@@ -3389,12 +3389,22 @@ const storyboardIncludeNarration = ref(false)
 const storyboardStructured = ref(false)
 /** 当前默认视频配置是否为即梦 CLI（可选后端：先报价确认再提交） */
 const jimengActive = ref(false)
+const jimengOption = ref(jimengOptionState(null))
 const scriptReviewVisible = ref(false)
 const jimengDialogVisible = ref(false)
 const jimengDialogSbIds = ref([])
 async function refreshJimengActive() {
   const cfg = await getActiveVideoAiConfig()
   jimengActive.value = !!cfg && String(cfg.api_protocol || '').trim().toLowerCase() === 'jimeng_novel'
+  if (!jimengActive.value) {
+    jimengOption.value = jimengOptionState({ available: false, reason: 'not_configured' })
+    return
+  }
+  try {
+    jimengOption.value = jimengOptionState(await storyboardsAPI.jimengStatus())
+  } catch (_) {
+    jimengOption.value = jimengOptionState({ available: false, reason: 'cli_error' })
+  }
 }
 async function openJimengDialog(ids) {
   if (!ids || !ids.length) return ElMessage.warning('本集没有结构化分镜')
@@ -6210,9 +6220,10 @@ function sbUniversalSegmentTrimmed(sb) {
   return (sbUniversalSegmentText.value[sb.id] ?? sb.universal_segment_text ?? '').toString().trim()
 }
 
+const previewBlocked = ref({})
 function sbCanSubmitVideo(sb) {
   if (!sb) return false
-  if (sb.segment_ir) return true
+  if (sb.segment_ir) return !previewBlocked.value[sb.id]
   const vp = (sb.video_prompt || '').toString().trim()
   if (vp) return true
   if (isSbUniversalMode(sb.id)) return !!sbUniversalSegmentTrimmed(sb)

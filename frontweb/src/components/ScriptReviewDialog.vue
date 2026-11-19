@@ -1,6 +1,7 @@
 <template>
   <el-dialog :model-value="modelValue" title="剧本体检（只诊断，不改写剧本）" width="680px" append-to-body @update:model-value="(v) => emit('update:modelValue', v)" @open="run">
     <div v-if="loading" class="sr-hint">正在体检…</div>
+    <el-alert v-else-if="error" type="error" :title="error" :closable="false" show-icon />
     <template v-else-if="result">
       <div class="sr-head">
         <span class="sr-total">{{ result.report.weighted_total ?? '—' }}</span>
@@ -42,14 +43,17 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 const loading = ref(false)
 const result = ref(null)
+const error = ref('')
 const gradeType = computed(() => ({ 强: 'success', 可上线: 'success', 需打磨: 'warning' })[result.value?.report.grade] || 'danger')
 
 async function run() {
   loading.value = true
+  result.value = null
+  error.value = ''
   try {
     result.value = await storyboardsAPI.scriptReview(props.episodeId)
-  } catch (_) {
-    // 错误提示由请求拦截器展示
+  } catch (e) {
+    error.value = e.message || '剧本体检失败'
   } finally {
     loading.value = false
   }
