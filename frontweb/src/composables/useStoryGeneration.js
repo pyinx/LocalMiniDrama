@@ -17,6 +17,8 @@ export async function runGenerateStoryFromPremise({
   scriptTitle,
   generationStyle,
   customStylePrompt,
+  customStyleSnapshot,
+  projectStyleMetadata,
   projectAspectRatio,
   store,
   router,
@@ -49,7 +51,7 @@ export async function runGenerateStoryFromPremise({
         genre: storyType || undefined,
         style: generationStyle || undefined,
         metadata: {
-          ...stylePromptMetadataForSave(generationStyle, customStylePrompt),
+          ...(projectStyleMetadata || stylePromptMetadataForSave(generationStyle, customStylePrompt, customStyleSnapshot, store.drama)),
           story_style: storyStyle || undefined,
           aspect_ratio: projectAspectRatio || '16:9',
         },
@@ -85,7 +87,7 @@ export async function runGenerateStoryFromPremise({
         genre: storyType || undefined,
         drama_style: generationStyle || undefined,
         metadata: {
-          ...stylePromptMetadataForSave(generationStyle, customStylePrompt),
+          ...(projectStyleMetadata || stylePromptMetadataForSave(generationStyle, customStylePrompt, customStyleSnapshot, store.drama)),
           story_style: storyStyle || undefined,
           aspect_ratio: projectAspectRatio || '16:9',
         },

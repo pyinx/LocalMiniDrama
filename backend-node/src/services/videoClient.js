@@ -1646,6 +1646,17 @@ const DASHSCOPE_IMAGE2VIDEO = '/api/v1/services/aigc/image2video/video-synthesis
  * - wanx2.1-vace-plus: video-generation, function image_reference + ref_images_url??? 3 ??
  * - wan2.6-r2v-flash: video-generation, reference_urls??? 5 ??
  */
+function styleVideoCapabilities(db, preferredModel) {
+  const config = getDefaultVideoConfig(db, preferredModel);
+  if (!config) return { model: '', negative: false };
+  const model = getModelFromConfig(config, preferredModel);
+  return { model, negative: resolveVideoProtocol(config, preferredModel) === 'dashscope' && supportsVideoStyleNegative(model) };
+}
+
+function supportsVideoStyleNegative(model) {
+  return ['wan2.6-t2v', 'wan2.6-i2v-flash'].includes(model);
+}
+
 async function buildDashScopeVideoRequest(config, log, opts) {
   const {
     prompt,
@@ -1756,6 +1767,7 @@ async function buildDashScopeVideoRequest(config, log, opts) {
     return { error: '????????????: ' + model };
   }
 
+  if (opts.style_negative && supportsVideoStyleNegative(model)) body.input.negative_prompt = opts.style_negative;
   const shorten = (v) => (v && v.startsWith('data:') ? '(base64 ???)' : v);
   const imageUrlsInBody = body.input
     ? {
@@ -4199,6 +4211,7 @@ async function callVideoApi(db, log, opts) {
 
   if (protocol === 'dashscope') {
     return callDashScopeVideoApi(config, log, {
+      style_negative: opts.style_negative,
       prompt,
       model,
       image_url: opts.image_url,
@@ -4953,6 +4966,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
 
 module.exports = {
   getDefaultVideoConfig,
+  styleVideoCapabilities,
   callVideoApi,
   pollVideoTask,
   buildVideoUrl,

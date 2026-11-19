@@ -1,3 +1,4 @@
+import { checkStyleModel } from './stylePreflight'
 import request from '@/utils/request'
 
 export const propAPI = {
@@ -16,7 +17,8 @@ export const propAPI = {
   generatePrompt(id, model, style) {
     return request.post(`/props/${id}/generate-prompt`, { model, style })
   },
-  generateImage(id, model, style) {
+  async generateImage(id, model, style) {
+    await checkStyleModel('prop', id, model)
     const body = { model, style }
     if (body.model == null && body.style == null) return request.post(`/props/${id}/generate`)
     return request.post(`/props/${id}/generate`, body)

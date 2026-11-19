@@ -202,13 +202,13 @@
                   class="story-textarea"
                 />
                 <div class="row gap" style="margin-top: 10px; flex-wrap: wrap;">
-                  <el-select v-model="storyStyle" placeholder="故事风格" clearable style="width: 120px" @change="() => saveProjectSettings(false)">
+                  <el-select v-model="storyStyle" placeholder="故事风格" clearable style="width: 120px" @change="() => saveProjectSettings()">
                     <el-option label="现代" value="modern" />
                     <el-option label="古风" value="ancient" />
                     <el-option label="奇幻" value="fantasy" />
                     <el-option label="日常" value="daily" />
                   </el-select>
-                  <el-select v-model="storyType" placeholder="剧本类型" clearable style="width: 120px" @change="() => saveProjectSettings(false)">
+                  <el-select v-model="storyType" placeholder="剧本类型" clearable style="width: 120px" @change="() => saveProjectSettings()">
                     <el-option label="剧情" value="drama" />
                     <el-option label="喜剧" value="comedy" />
                     <el-option label="冒险" value="adventure" />
@@ -360,7 +360,7 @@
       <section class="section card pipeline-section">
         <div class="one-click-actions">
           <span class="one-click-label">🚀 一键全流程</span>
-          <el-select v-model="projectAspectRatio" style="width: 130px" @change="() => saveProjectSettings(false)">
+          <el-select v-model="projectAspectRatio" style="width: 130px" @change="() => saveProjectSettings()">
             <el-option label="16:9 横屏" value="16:9" />
             <el-option label="9:16 竖屏" value="9:16" />
             <el-option label="3:4 竖版" value="3:4" />
@@ -368,7 +368,7 @@
             <el-option label="4:3" value="4:3" />
             <el-option label="21:9 宽银幕" value="21:9" />
           </el-select>
-          <el-select v-model="videoClipDuration" style="width: 105px" @change="() => saveProjectSettings(false)">
+          <el-select v-model="videoClipDuration" style="width: 105px" @change="() => saveProjectSettings()">
             <el-option label="4秒/段" :value="4" />
             <el-option label="5秒/段" :value="5" />
             <el-option label="8秒/段" :value="8" />
@@ -383,8 +383,9 @@
           <StylePickerButton
             v-model="generationStyle"
             v-model:custom-prompt="customStylePrompt"
+            v-model:custom-snapshot="customStyleSnapshot"
             :options="generationStyleOptions"
-            @change="() => saveProjectSettings(true)"
+            :adopt="adoptProjectStyle"
           />
           <el-button
             type="primary"
@@ -836,10 +837,10 @@
           <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
             首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
           </el-checkbox>
-          <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings(false)">
+          <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings()">
             全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
           </el-checkbox>
-          <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings(false)">
+          <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
             生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
           </el-checkbox>
           <el-button
@@ -2718,48 +2719,32 @@ const isStoryGenRunning = computed(() => {
 })
 const generationStyle = ref('')
 const customStylePrompt = ref('')
+const customStyleSnapshot = ref(null)
 const projectAspectRatio = ref('16:9')
 const videoClipDuration = ref(5)
 
-/** 根据 value 查找样式选项对象 */
-function _findStyleOption(val) {
-  for (const group of generationStyleOptions) {
-    const found = group.options.find(o => o.value === val)
-    if (found) return found
-  }
-  return null
-}
-
-/** 传给图像/视频 AI 用的英文 prompt（效果最好）；
- *  找不到 promptEn 时降级到 prompt，再降级到原始值；
- *  custom 时返回用户填写的自定义描述，避免把字面量 "custom" 写入提示词 */
 function getSelectedStylePrompt() {
-  const val = (generationStyle.value || '').toString().trim()
-  if (!val) return undefined
-  if (val === CUSTOM_STYLE_VALUE) {
-    const text = (customStylePrompt.value || '').toString().trim()
-    return text || undefined
-  }
-  const opt = _findStyleOption(val)
-  if (opt) return opt.promptEn || opt.prompt || val
-  return val
+  const meta = projectStylePromptMetadata()
+  return meta.style_prompt_en || meta.style_prompt_zh || undefined
 }
 
-/** 中文风格描述（用于界面展示或中文场景提示词拼接） */
 function getSelectedStylePromptZh() {
-  const val = (generationStyle.value || '').toString().trim()
-  if (!val) return undefined
-  if (val === CUSTOM_STYLE_VALUE) {
-    const text = (customStylePrompt.value || '').toString().trim()
-    return text || undefined
+  const meta = projectStylePromptMetadata()
+  return meta.style_prompt_zh || meta.style_prompt_en || undefined
+}
+
+async function adoptProjectStyle(value, positive, snapshot) {
+  if (!store.dramaId) return
+  const metadata = stylePromptMetadataForSave(value, positive, snapshot)
+  await dramaAPI.saveOutline(store.dramaId, { style: value, metadata })
+  if (store.drama) {
+    store.drama.style = value
+    store.drama.metadata = { ...store.drama.metadata, ...metadata, custom_style: snapshot }
   }
-  const opt = _findStyleOption(val)
-  if (opt) return opt.prompt || opt.promptEn || val
-  return val
 }
 
 function projectStylePromptMetadata() {
-  return stylePromptMetadataForSave(generationStyle.value, customStylePrompt.value)
+  return stylePromptMetadataForSave(generationStyle.value, customStylePrompt.value, customStyleSnapshot.value, store.drama)
 }
 
 const scriptContent = computed({
@@ -3605,7 +3590,7 @@ function onStoryboardUseFirstLastFrameChange() {
     gridMode.value = 'single'
     ElMessage.info('首尾帧模式已开启，序列图已切换为单张')
   }
-  saveProjectSettings(false)
+  saveProjectSettings()
 }
 
 function uploadingSbImageSlot(sbId) {
@@ -4578,6 +4563,7 @@ async function loadDrama() {
     storyStyle.value = (d.metadata && d.metadata.story_style) ? d.metadata.story_style : ''
     storyType.value = d.genre || ''
     generationStyle.value = d.style || ''
+    customStyleSnapshot.value = d.metadata?.custom_style || null
     if ((d.style || '') === CUSTOM_STYLE_VALUE) {
       customStylePrompt.value = (d.metadata?.style_prompt_zh || d.metadata?.style_prompt_en || '').toString()
     } else {
@@ -4973,11 +4959,7 @@ async function saveScriptToBackend(content) {
   return { created: false }
 }
 
-/**
- * @param {boolean} includeGenerationStyle - 仅在选择「画面风格」为 true：写入 dramas.style 与 style_prompt_*。
- * 其它项目设置改为 false，避免界面未刷新时仍用旧的 generationStyle 覆盖外部已更新的画风（如直接调 API PUT outline）。
- */
-async function saveProjectSettings(includeGenerationStyle = false) {
+async function saveProjectSettings() {
   if (!store.dramaId) return
   const metadata = {
     story_style: storyStyle.value || undefined,
@@ -4988,15 +4970,9 @@ async function saveProjectSettings(includeGenerationStyle = false) {
     storyboard_use_first_last_frame: !!storyboardUseFirstLastFrame.value,
     last_frame_use_first_layout_lock: !!lastFrameUseFirstLayoutLock.value,
   }
-  if (includeGenerationStyle) {
-    Object.assign(metadata, projectStylePromptMetadata())
-  }
   const payload = {
     genre: storyType.value || undefined,
     metadata,
-  }
-  if (includeGenerationStyle) {
-    payload.style = generationStyle.value || undefined
   }
   dramaAPI.saveOutline(store.dramaId, payload).catch(e => console.error('Settings auto-save failed', e))
 }
@@ -5011,6 +4987,8 @@ async function onGenerateStory() {
     scriptTitle: scriptTitle.value,
     generationStyle: generationStyle.value,
     customStylePrompt: customStylePrompt.value,
+    customStyleSnapshot: customStyleSnapshot.value,
+    projectStyleMetadata: projectStylePromptMetadata(),
     projectAspectRatio: projectAspectRatio.value,
     store,
     router,
@@ -8039,6 +8017,7 @@ function applyRouteToStore() {
     scriptStoryboardStyle.value = ''
     generationStyle.value = ''
     customStylePrompt.value = ''
+    customStyleSnapshot.value = null
   }
 }
 

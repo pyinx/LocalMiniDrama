@@ -26,6 +26,17 @@ function parseJsonColumn(value) {
   }
 }
 
+function validateProjectStyle(db, style, metadata) {
+  if (style !== 'custom') {
+    delete metadata.custom_style;
+  } else if (metadata.custom_style) {
+    const library = require('./customStyleLibrary');
+    library.validateSnapshot(metadata.custom_style);
+    library.imageBytes(db, metadata.custom_style.image);
+    if (!(metadata.style_prompt_zh || metadata.style_prompt_en || '').trim()) throw library.inputError('画风快照缺少正向提示词');
+  }
+}
+
 function createDrama(db, log, req) {
   const now = new Date().toISOString();
   let meta = {};
@@ -39,6 +50,7 @@ function createDrama(db, log, req) {
       meta = {};
     }
   }
+  validateProjectStyle(db, req.style, meta);
   if (!meta.storage_folder_label) {
     meta.storage_folder_label = storageLayout.sanitizeFolderLabel(req.title || '');
   }
@@ -504,6 +516,7 @@ function saveOutline(db, log, dramaId, req) {
     }
   }
 
+  validateProjectStyle(db, req.style === undefined ? drama.style : req.style, mergedMetadata);
   const metadataStr = JSON.stringify(mergedMetadata);
   
   db.prepare(

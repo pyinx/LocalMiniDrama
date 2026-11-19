@@ -24,3 +24,12 @@ for (const value of EXTRA) {
 test('custom is not a preset', () => {
   assert.equal(resolveStylePreset('custom'), null);
 });
+
+test('catalog entries resolve consistently across both clients', async () => {
+  const ui = await import('../../frontweb/src/constants/styleOptions.js');
+  for (const option of ui.generationStyleOptions.flatMap(g => g.options)) {
+    const result = resolveStylePreset(option.value);
+    assert.deepEqual(result, { zh: ui.getStylePromptZh(option.value), en: ui.getStylePromptEn(option.value) });
+    assert.ok(result.zh && result.en);
+  }
+});

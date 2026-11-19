@@ -84,6 +84,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
   let metadata = {};
   try { metadata = drama.metadata ? (typeof drama.metadata === 'string' ? JSON.parse(drama.metadata) : drama.metadata) : {}; } catch (_) {}
   delete metadata.novel_creation_id;
+  if (drama.style === 'custom') require('./customStyleLibrary').pack(db, zip, metadata.custom_style);
 
   // ---- 2. 读取所有剧集 ----
   const episodes = db.prepare(

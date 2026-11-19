@@ -43,9 +43,10 @@
                 <StylePickerButton
                   v-model="infoForm.style"
                   v-model:custom-prompt="infoForm.customStylePrompt"
+                  v-model:custom-snapshot="infoForm.customSnapshot"
                   :options="generationStyleOptions"
                   placeholder="选择全剧统一风格"
-                  @change="saveInfo"
+                  :adopt="adoptStyle"
                 />
               </el-form-item>
             </el-col>
@@ -881,6 +882,7 @@ async function loadDrama() {
     infoForm.description = d.description || ''
     infoForm.genre = d.genre || ''
     infoForm.style = d.style || ''
+    infoForm.customSnapshot = d.metadata?.custom_style || null
     if (infoForm.style === CUSTOM_STYLE_VALUE) {
       infoForm.customStylePrompt = (d.metadata?.style_prompt_zh || d.metadata?.style_prompt_en || '').toString()
     } else {
@@ -894,21 +896,21 @@ async function loadDrama() {
   }
 }
 
+async function adoptStyle(value, positive, snapshot) {
+  const metadata = stylePromptMetadataForSave(value, positive, snapshot)
+  await dramaAPI.saveOutline(dramaId, { style: value, metadata })
+}
+
 let infoSaveTimer = null
 function saveInfo() {
-  if (infoForm.style === CUSTOM_STYLE_VALUE && !(infoForm.customStylePrompt || '').trim()) {
-    ElMessage.warning('请填写画风描述')
-    return
-  }
+  // 标题、画幅等独立设置只提交自己的字段。
   if (infoSaveTimer) clearTimeout(infoSaveTimer)
   infoSaveTimer = setTimeout(async () => {
     try {
       await dramaAPI.update(dramaId, { title: infoForm.title, description: infoForm.description })
       await dramaAPI.saveOutline(dramaId, {
         genre: infoForm.genre || undefined,
-        style: infoForm.style || undefined,
         metadata: {
-          ...stylePromptMetadataForSave(infoForm.style, infoForm.customStylePrompt),
           aspect_ratio: infoForm.aspect_ratio || '16:9',
         },
       })

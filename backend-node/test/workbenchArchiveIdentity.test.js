@@ -118,3 +118,53 @@ test('restores episode cast, distinct scenes and approved costume stages in anot
   assert.equal(dst.db.prepare('SELECT COUNT(*) n FROM scenes WHERE drama_id=?').get(legacy).n, 1);
   assert.equal(dst.db.prepare('SELECT COUNT(*) n FROM episode_characters ec JOIN episodes e ON e.id=ec.episode_id WHERE e.drama_id=?').get(legacy).n, 8);
 });
+
+async function archiveStyleFixture(ws) {
+  const library = require('../src/services/customStyleLibrary');
+  const bytes = await require('sharp')(require.resolve('../../frontweb/public/style-thumbs/shadow-puppetry.webp')).png().toBuffer();
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: 'image/png' }), '皮影.png');
+  const { image } = await ws.request('POST', '/style-library/images', form);
+  assert.equal(image, require('node:crypto').createHash('sha256').update(bytes).digest('hex'));
+  const version = library.save(ws.db,{id:require('node:crypto').randomUUID(),name:'皮影',positive:'透光雕花',negative:'厚涂',image});
+  const {positive,...snapshot} = version;
+  const {id} = await ws.request('POST','/dramas',{title:'皮影剧',style:'custom',metadata:{style_prompt_zh:positive,style_prompt_en:positive,custom_style:snapshot}});
+  const {buffer} = require('../src/services/dramaExportService').exportDrama(ws.db,ws.cfg,console,id);
+  return {buffer,bytes,snapshot};
+}
+
+test('project style survives archive round trip', async t => {
+  const src=await openWorkbench(t), dest=await openWorkbench(t);
+  const project=await src.request('POST','/dramas',{title:'古装剧',style:'historical'});
+  const {buffer}=require('../src/services/dramaExportService').exportDrama(src.db,src.cfg,console,project.id);
+  const restored=await dest.request('GET','/dramas/'+await restore(dest,buffer));
+  assert.equal(restored.style,'historical');
+});
+
+test('portable archive restores the adopted custom style image', async t => {
+  const src=await openWorkbench(t), dest=await openWorkbench(t);
+  const item=await archiveStyleFixture(src);
+  const id=await restore(dest,item.buffer);
+  const drama=await dest.request('GET','/dramas/'+id);
+  assert.deepEqual(drama.metadata.custom_style,item.snapshot);
+  const image=await fetch(dest.url('/style-library/images/'+item.snapshot.image));
+  assert.match(image.headers.get('content-type'), /image\/png/);
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()),item.bytes);
+  const zip=new AdmZip(item.buffer);
+  zip.deleteFile('media/style/'+item.snapshot.image);
+  assert.throws(()=>require('../src/services/dramaImportService').importDrama(dest.db,dest.cfg,console,zip.toBuffer()),/示例图/);
+  assert.equal(dest.db.prepare('SELECT COUNT(*) n FROM dramas').get().n,1);
+});
+
+test('import keeps the adopted style prompts and image despite library name collisions', async t => {
+  const src=await openWorkbench(t), dest=await openWorkbench(t);
+  const item=await archiveStyleFixture(src);
+  const library=require('../src/services/customStyleLibrary');
+  const image=library.storeImage(dest.db,fs.readFileSync(require.resolve('../../frontweb/public/style-thumbs/vintage-cel.webp')));
+  const local=library.save(dest.db,{...item.snapshot,positive:'手绘赛璐璐',negative:'粒子',image});
+  const id=await restore(dest,item.buffer);
+  const project=await dest.request('GET','/dramas/'+id);
+  assert.equal(project.metadata.style_prompt_zh,'透光雕花');
+  assert.deepEqual(project.metadata.custom_style,item.snapshot);
+  assert.deepEqual(library.list(dest.db),[local]);
+});

@@ -1,3 +1,4 @@
+import { checkStyleModel } from './stylePreflight'
 import request from '@/utils/request'
 import { dispatchBatchVideo } from '@/utils/batchVideo'
 
@@ -7,6 +8,7 @@ export const videosAPI = {
   },
   /** 创建单条分镜视频生成任务，body: { drama_id, storyboard_id, prompt, image_url?, model?, ... } */
   async create(body) {
+    if (body.storyboard_id) await checkStyleModel('video', body.drama_id, body.model)
     if (body.operation_key) return request.post('/videos', body)
     if (!body.storyboard_id) return request.post('/videos', body)
     const slot = 'video-submit:' + body.drama_id + ':' + body.storyboard_id

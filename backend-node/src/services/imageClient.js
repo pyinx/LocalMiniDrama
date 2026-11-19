@@ -17,18 +17,32 @@ const IMAGE_HTTP_TIMEOUT_MS = 600000;
 // 多参考图时注入到所有支持 negative_prompt 的模型，防止生成分割/拼贴布局；同时加入安全词以减少敏感拦截
 const ANTI_SPLIT_NEGATIVE_PROMPT = 'nsfw, nudity, naked, violence, blood, gore, sensitive content, split panels, side-by-side layout, collage, diptych, triptych, grid layout, multiple panels, comparison view, composite image, two images in one frame';
 
-function mergeNegativePromptFragments(auto, user) {
-  const a = (auto || '').trim();
-  const u = (user || '').trim();
-  if (a && u) return `${a}, ${u}`;
-  return a || u || '';
+function mergeNegativePromptFragments(...fragments) {
+  return [...new Set(fragments.flatMap(text => String(text || '').split(/[,，;；]/)).map(text => text.trim()).filter(Boolean))].join(', ');
 }
 
-/** 角色/场景/道具资产生图：请求里显式传入 model 且资产上存有负面词时，与自动负面片段合并后传给图生 API */
-function resolveAssetUserNegativeForApi(explicitModelName, storedNegative) {
-  const hasModel = explicitModelName != null && String(explicitModelName).trim().length > 0;
-  const neg = storedNegative != null ? String(storedNegative).trim() : '';
-  return hasModel && neg ? neg : '';
+function supportsStyleNegative(protocol, model) {
+  return protocol === 'dashscope' && /^(qwen-image(?:$|-(?:max|plus|3\.0)(?:-|$))|wan2\.[56]-(?:image|t2i)(?:-|$))/i.test(model || '');
+}
+
+function readProjectStyle(db, id) {
+  if (!Number(id)) return null;
+  const row = db.prepare('SELECT style,metadata FROM dramas WHERE id=?').get(id);
+  if (!row) return null;
+  const metadata = require('../utils/dramaStyleMerge').parseDramaMetadata(row);
+  return { style: row.style, metadata: { style_prompt_zh: metadata.style_prompt_zh, style_prompt_en: metadata.style_prompt_en, custom_style: metadata.custom_style } };
+}
+
+function styleImageCapabilities(db, preferredModel, preferredProvider, type) {
+  const config = getDefaultImageConfig(db, preferredModel, preferredProvider, type);
+  if (!config) return { model: '', negative: false };
+  const model = getModelFromConfig(config, preferredModel);
+  const protocol = String(config.api_protocol || inferProtocol(config.provider, model)).toLowerCase();
+  return { model, provider: config.provider, negative: supportsStyleNegative(protocol, model) };
+}
+
+function resolveAssetUserNegativeForApi(_model, storedNegative) {
+  return String(storedNegative || '').trim();
 }
 
 // sharp 惰性加载（参考图压缩用，sharp 已在 package.json 中声明）
@@ -918,7 +932,14 @@ async function callDashScopeImageApi(config, log, opts) {
 
   if (isQwenImage) {
     // 千问文生图：仅支持单条 text，长度不超过 800 字符；同步接口，无 stream/enable_interleave
-    const text = (prompt || '').toString().trim().slice(0, 800);
+    const full = String(prompt || '').trim();
+    const style = opts.style_text || '';
+    let text = full.slice(0, 800);
+    if (full.length > 800 && style && !text.includes(style)) {
+      const reserved = '画风：' + style.slice(0, 360);
+      const scene = full.replace(style, '').trim();
+      text = reserved + '\n' + scene.slice(0, 799 - reserved.length);
+    }
     const body = {
       model: resolveDashScopeImageModel(config, model) || 'qwen-image-3.0',
       input: {
@@ -1472,7 +1493,19 @@ async function callImageApi(db, log, opts) {
     user_negative_prompt,
   } = opts;
   const assetTask = opts.storyboard_id ? 'frame' : opts.character_id ? 'character' : opts.scene_id ? 'scene' : opts.prop_id ? 'prop' : null;
-  const prompt = require('./workbenchCreativeMethods').withCreativeGuidance(db, sourcePrompt, drama_id, assetTask, opts.storyboard_id);
+  const project = opts.project_style !== undefined ? opts.project_style : readProjectStyle(db, drama_id);
+  const { parseDramaMetadata, styleFieldsFromDramaRow } = require('../utils/dramaStyleMerge');
+  const snapshot = parseDramaMetadata(project)?.custom_style;
+  const preset = require('../constants/generationStylePresets');
+  let inputPrompt = sourcePrompt || '';
+  let selectedStyle = '';
+  if (assetTask && project) {
+    const { zh, en } = styleFieldsFromDramaRow(project);
+    const selected = zh || en || preset.resolveStylePreset(project.style)?.zh || (project.style === 'custom' ? '' : project.style);
+    selectedStyle = [zh, en, selected].find(text => text && inputPrompt.includes(text)) || selected;
+    if (selectedStyle && !inputPrompt.includes(selectedStyle)) inputPrompt += '\n画风：' + selectedStyle;
+  }
+  const prompt = require('./workbenchCreativeMethods').withCreativeGuidance(db, inputPrompt, drama_id, assetTask, opts.storyboard_id, project);
   const preferredProvider = preferred_provider ?? opts.preferredProvider;
   const config = getDefaultImageConfig(db, preferredModel, preferredProvider, imageServiceType);
   if (!config) {
@@ -1520,12 +1553,14 @@ async function callImageApi(db, log, opts) {
   // Seedream/Volcengine 模型强制启用安全词负面提示，其他模型仅在多参考图时启用
   const isVolcOrSeedream = (protocol === 'volcengine' || /seedream|doubao/i.test(model));
   const autoNegativePrompt = (refCountForNeg > 1 || isVolcOrSeedream) ? ANTI_SPLIT_NEGATIVE_PROMPT : '';
-  const userNegFragment = (user_negative_prompt && String(user_negative_prompt).trim()) || '';
+  const styleNegative = project?.style === 'custom' && supportsStyleNegative(protocol, model) ? snapshot?.negative : '';
+  const userNegFragment = mergeNegativePromptFragments(styleNegative, user_negative_prompt);
   const mergedNegativePrompt = mergeNegativePromptFragments(autoNegativePrompt, userNegFragment);
 
   if (protocol === 'dashscope') {
     return callDashScopeImageApi(config, log, {
       prompt: effectivePrompt, model, size, image_gen_id,
+      style_text: selectedStyle,
       reference_image_urls: opts.reference_image_urls,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
@@ -1699,6 +1734,7 @@ function createAndGenerateImage(db, log, opts) {
     user_negative_prompt,
   } = opts;
   const negRow = (user_negative_prompt && String(user_negative_prompt).trim()) || null;
+  const queuedStyle = opts.project_style ?? readProjectStyle(db, drama_id);
   const now = new Date().toISOString();
   const dramaIdNum = Number(drama_id) || 0;
   const charIdNum = character_id != null ? Number(character_id) : null;
@@ -1757,6 +1793,7 @@ function createAndGenerateImage(db, log, opts) {
         image_type,
         image_gen_id: imageGenId,
         user_negative_prompt: user_negative_prompt || undefined,
+        project_style: queuedStyle,
       });
       const now2 = new Date().toISOString();
       if (result.error) {
@@ -1981,6 +2018,8 @@ function refListHasCanonical(list, ref) {
 }
 
 module.exports = {
+  readProjectStyle,
+  styleImageCapabilities,
   getDefaultImageConfig,
   callImageApi,
   createAndGenerateImage,

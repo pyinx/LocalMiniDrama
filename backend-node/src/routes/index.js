@@ -24,6 +24,7 @@ const sceneModelMapRoutes = require('./sceneModelMap');
 
 function setupRouter(cfg, db, log) {
   const r = express.Router();
+  r.use('/style-library', require('./customStyles')(db, log));
   const drama = dramaRoutes(db, cfg, log);
   const task = taskRoutes(db, log);
   const settings = settingsRoutes(db, cfg, log);

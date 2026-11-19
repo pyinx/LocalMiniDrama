@@ -312,7 +312,7 @@ async function generateSceneSinglePromptOnly(db, log, cfg, sceneId, modelName, s
  */
 async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, style) {
   const sceneRow = db.prepare(
-    'SELECT id, drama_id, location, time, prompt, polished_prompt FROM scenes WHERE id = ? AND deleted_at IS NULL'
+    'SELECT id, drama_id, location, time, prompt, polished_prompt, negative_prompt FROM scenes WHERE id = ? AND deleted_at IS NULL'
   ).get(Number(sceneId));
   if (!sceneRow) return { ok: false, error: 'scene not found' };
   const dramaFull = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(sceneRow.drama_id);
@@ -367,8 +367,10 @@ async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, styl
   }
 
   const imageGen = imageClient.createAndGenerateImage(db, log, {
+    project_style: dramaFull,
     drama_id: sceneRow.drama_id,
     scene_id: sceneId,
+    user_negative_prompt: sceneRow.negative_prompt || undefined,
     prompt: imagePrompt,
     model: modelName || undefined,
     size: '1792x1024',
@@ -388,7 +390,7 @@ async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, styl
  */
 async function generateSceneSingleImage(db, log, cfg, sceneId, modelName, style) {
   const sceneRow = db.prepare(
-    'SELECT id, drama_id, location, time, prompt, polished_prompt, polished_prompt_single FROM scenes WHERE id = ? AND deleted_at IS NULL'
+    'SELECT id, drama_id, location, time, prompt, polished_prompt, polished_prompt_single, negative_prompt FROM scenes WHERE id = ? AND deleted_at IS NULL'
   ).get(Number(sceneId));
   if (!sceneRow) return { ok: false, error: 'scene not found' };
   const dramaFull = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(sceneRow.drama_id);
@@ -444,8 +446,10 @@ async function generateSceneSingleImage(db, log, cfg, sceneId, modelName, style)
   }
 
   const imageGen = imageClient.createAndGenerateImage(db, log, {
+    project_style: dramaFull,
     drama_id: sceneRow.drama_id,
     scene_id: sceneId,
+    user_negative_prompt: sceneRow.negative_prompt || undefined,
     prompt: imagePrompt,
     model: modelName || undefined,
     size: '1792x1024',

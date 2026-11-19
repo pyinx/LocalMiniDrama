@@ -168,6 +168,7 @@ function importDrama(db, cfg, log, zipBuffer) {
   // 用事务包裹全部写入：任何步骤失败时整体回滚，避免部分导入
   let result;
   const runImport = db.transaction(() => {
+    if (d.style === 'custom') require('./customStyleLibrary').unpack(db, files, metadata.custom_style);
     result = _doImport(db, storagePath, files, data, d, title, metaStr, now, log, indexedAssets);
   });
   runImport();
