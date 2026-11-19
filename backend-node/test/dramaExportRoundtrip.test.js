@@ -105,6 +105,35 @@ describe('drama export / import roundtrip (AC24)', () => {
     assert.notEqual(b.continuity.first_frame_image_id, src.tailImg);
   });
 
+  it('keeps distinct scenes, states and continuity at the same location and time', () => {
+    const src = buildSource();
+    const { db, ids } = src;
+    const otherScene = Number(db.prepare(`INSERT INTO scenes (drama_id, location, time, created_at, updated_at)
+      SELECT drama_id, location, time, created_at, updated_at FROM scenes WHERE id = ?`).run(ids.sceneId).lastInsertRowid);
+    const otherState = Number(db.prepare(`INSERT INTO scene_states (scene_id, name, kind, created_at, updated_at)
+      SELECT ?, '停电', kind, created_at, updated_at FROM scene_states WHERE id = ?`).run(otherScene, src.sid).lastInsertRowid);
+    const ir = sampleIr(ids);
+    ir.scene.scene_id = otherScene;
+    ir.scene.state_id = otherState;
+    storyboardService.saveSegmentIr(db, noopLog, ids.sbLegacy, ir);
+    const firstRule = { ambience: '空调低鸣', props: [] };
+    const secondRule = { axis_lock: '面向窗户', props: [] };
+    episodeContinuityService.setContinuity(db, ids.episodeId, { [ids.sceneId]: firstRule, [otherScene]: secondRule });
+
+    const dramaId = roundtrip(src);
+    const { ep, sbs } = newDrama(db, dramaId);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scenes WHERE drama_id = ?').get(dramaId).n, 2);
+    const [first, second] = sbs.map(sb => sb.scene_id);
+    assert.notEqual(first, second);
+    assert.deepEqual(episodeContinuityService.getContinuity(db, ep.id), { [first]: firstRule, [second]: secondRule });
+    for (const [i, sb] of sbs.entries()) {
+      const scene = JSON.parse(sb.segment_ir).scene;
+      assert.equal(scene.scene_id, sb.scene_id);
+      const state = db.prepare('SELECT scene_id, name FROM scene_states WHERE id = ?').get(scene.state_id);
+      assert.deepEqual(state, { scene_id: sb.scene_id, name: ['夜', '停电'][i] });
+    }
+  });
+
   it('legacy package imports', () => {
     const { db } = createIrTestDb();
     const storage = tmpStorage();
@@ -112,13 +141,15 @@ describe('drama export / import roundtrip (AC24)', () => {
     zip.addFile('project.json', Buffer.from(JSON.stringify({
       version: '1.4',
       drama: { title: '旧包' },
-      episodes: [{ episode_number: 1, title: '第1集', storyboards: [{ storyboard_number: 1, dialogue: '台词', duration: 5, character_indices: [0], scene_index: 0 }] }],
+      episodes: [{ episode_number: 1, title: '第1集', storyboards: [{ storyboard_number: 1, dialogue: '台词', duration: 5, character_indices: [0], scene_index: 1 }] }],
       characters: [{ name: '甲' }],
-      scenes: [{ location: '客厅', time: '日' }],
+      scenes: [{ location: '客厅', time: '日' }, { location: '客厅', time: '日' }],
       props: [],
     })));
     const r = importDrama(db, { storage: { local_path: storage } }, noopLog, zip.toBuffer());
     const n = newDrama(db, r.drama_id);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scenes WHERE drama_id = ?').get(r.drama_id).n, 1);
+    assert.equal(n.sbs[0].scene_id, n.scene.id);
     assert.equal(n.sbs.length, 1);
     assert.equal(n.sbs[0].segment_ir, null);
     assert.equal(n.sbs[0].dialogue, '台词');

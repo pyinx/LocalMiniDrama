@@ -268,13 +268,14 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     }
   }
 
-  // ---- 导入场景（带 episode_id，按 location+time 去重：同名场景只创建一条记录）----
+  // ---- 导入场景（带 episode_id，仅纯旧分镜按 location+time 去重）----
+  const hasSegmentIr = (data.episodes || []).some(ep => (ep.storyboards || []).some(sb => sb.segment_ir));
   const sceneNewIds = []; // 按导出顺序保存新场景 id（含去重后的映射），用于恢复分镜 scene_index
   const sceneDedupeMap = new Map(); // key: "location|time" → 已创建的 scene id
   for (let i = 0; i < (data.scenes || []).length; i++) {
     const s = data.scenes[i];
     const dedupeKey = `${(s.location || '').trim()}|${(s.time || '').trim()}`;
-    if (sceneDedupeMap.has(dedupeKey)) {
+    if (!hasSegmentIr && sceneDedupeMap.has(dedupeKey)) {
       // 同 location+time 已存在，直接复用，不重复插入
       sceneNewIds.push(sceneDedupeMap.get(dedupeKey));
       if (s.original_id != null) idMaps.scenes.set(Number(s.original_id), Number(sceneDedupeMap.get(dedupeKey)));

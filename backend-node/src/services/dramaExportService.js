@@ -153,28 +153,26 @@ function exportDrama(db, cfg, log, dramaId) {
     'SELECT * FROM props WHERE drama_id = ? AND deleted_at IS NULL ORDER BY id'
   ).all(Number(dramaId));
 
-  // ---- 场景去重（数据库中可能存在同 location+time 的重复记录，导出时只保留第一条）----
-  const seenSceneKeys = new Set();
-  const dedupedScenes = [];
+  // 结构化分镜和连续性表按场景 ID 引用；仅纯旧分镜沿用地点、时段去重。
+  const hasSegmentIr = Object.values(storyboardsByEp).some(sbs => sbs.some(sb => sb.segment_ir));
+  const firstSceneByKey = new Map();
+  const sceneDedupeIdMap = new Map();
+  const exportedScenes = [];
   for (const s of scenes) {
     const key = `${(s.location || '').trim()}|${(s.time || '').trim()}`;
-    if (seenSceneKeys.has(key)) continue;
-    seenSceneKeys.add(key);
-    dedupedScenes.push(s);
-  }
-  // 为去重后被丢弃的重复场景 ID 建立到保留场景的映射，确保分镜 scene_index 仍指向保留的场景
-  const sceneDedupeIdMap = new Map(); // 原 ID → 保留后的同 key 首个 ID
-  for (const s of scenes) {
-    const key = `${(s.location || '').trim()}|${(s.time || '').trim()}`;
-    const kept = dedupedScenes.find(d => `${(d.location||'').trim()}|${(d.time||'').trim()}` === key);
-    if (kept) sceneDedupeIdMap.set(s.id, kept.id);
+    const keptId = hasSegmentIr ? s.id : (firstSceneByKey.get(key) ?? s.id);
+    sceneDedupeIdMap.set(s.id, keptId);
+    if (keptId === s.id) {
+      exportedScenes.push(s);
+      firstSceneByKey.set(key, s.id);
+    }
   }
 
   // ---- 构建 ID → 导出数组下标 的映射（用于分镜 characters/scene_id/prop_ids 跨项目还原） ----
   const charIdToIndex = {};
   characters.forEach((c, idx) => { charIdToIndex[c.id] = idx; });
   const sceneIdToIndex = {};
-  dedupedScenes.forEach((s, idx) => { sceneIdToIndex[s.id] = idx; });
+  exportedScenes.forEach((s, idx) => { sceneIdToIndex[s.id] = idx; });
   // 去重丢弃的重复场景 ID 也指向保留场景的下标
   for (const [origId, keptId] of sceneDedupeIdMap.entries()) {
     if (!(origId in sceneIdToIndex)) sceneIdToIndex[origId] = sceneIdToIndex[keptId];
@@ -215,13 +213,10 @@ function exportDrama(db, cfg, log, dramaId) {
     }
     return out;
   };
-  /** IR 里的场景 id 指向去重后保留的场景，其余 id 原样带出、导入时映射 */
   const exportIr = (raw) => {
     if (!raw) return null;
     try {
-      const ir = JSON.parse(raw);
-      if (ir && ir.scene && sceneDedupeIdMap.has(ir.scene.scene_id)) ir.scene.scene_id = sceneDedupeIdMap.get(ir.scene.scene_id);
-      return ir;
+      return JSON.parse(raw);
     } catch (_) {
       return null;
     }
@@ -388,7 +383,7 @@ function exportDrama(db, cfg, log, dramaId) {
         extra_image_files: extraFiles,
       };
     }),
-    scenes: dedupedScenes.map(s => {
+    scenes: exportedScenes.map(s => {
       const epIdx = episodeIds.indexOf(s.episode_id);
       const extras = parseExtraImages(s.extra_images);
       const extraFiles = extras.map((relPath, i) => {
@@ -481,7 +476,7 @@ function exportDrama(db, cfg, log, dramaId) {
   }
 
   // 场景主图
-  for (const s of dedupedScenes) {
+  for (const s of exportedScenes) {
     if (s.local_path) {
       const abs = localPathToAbs(storagePath, s.local_path);
       const buf = safeReadFile(abs);
