@@ -1,7 +1,7 @@
 // 分镜：create, update, delete；帧提示词 get/save
 const { parseSegmentIr, readStoredIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
 const { planSegments } = require('./segmentIr/planner');
-const { withStoryboardAction } = require('./universalOmniMultiBeatFormat');
+const { beatSignature, universalDraftWithoutActionNote } = require('./universalOmniMultiBeatFormat');
 const {
   IR_OWNED_FIELDS,
   projectLegacyFields,
@@ -104,6 +104,16 @@ function updateStoryboard(db, log, id, req) {
   const allowed = ['title', 'description', 'location', 'time', 'duration', 'dialogue', 'narration', 'action', 'result', 'atmosphere', 'image_prompt', 'polished_prompt', 'video_prompt', 'scene_id', 'characters', 'composed_image', 'image_url', 'local_path', 'main_panel_idx', 'video_url', 'audio_local_path', 'narration_audio_local_path', 'status', 'shot_type', 'angle', 'angle_h', 'angle_v', 'angle_s', 'movement', 'segment_index', 'segment_title', 'creation_mode', 'universal_segment_text', 'layout_description', 'first_frame_image_id', 'last_frame_image_id', 'last_frame_image_url', 'last_frame_local_path'];
   const updates = [];
   const params = [];
+  if (req.confirm_universal_draft === true && (req.expected_universal_segment_text !== row.universal_segment_text ||
+      req.expected_action !== row.action || req.expected_result !== row.result)) {
+    throw Object.assign(new Error('分镜依据已变更，请刷新并核对当前稿'), { code: 'storyboard_draft_changed' });
+  }
+  if (!row.segment_ir && req.universal_segment_text !== undefined && (req.universal_segment_text !== row.universal_segment_text || req.confirm_universal_draft === true)) {
+    req = { ...req, universal_segment_text: universalDraftWithoutActionNote(req.universal_segment_text) };
+    updates.push('universal_beat_signature = ?');
+    params.push(req.universal_segment_text ? beatSignature(req.universal_segment_text,
+      req.action === undefined ? row.action : req.action, req.result === undefined ? row.result : req.result) : null);
+  }
   if (req.sound_source !== undefined) {
     const root = require('../config').loadConfig().storage?.local_path || './data/storage';
     updates.push('adopted_sound = ?');
@@ -171,15 +181,25 @@ function assertNotSegmentIr(db, id) {
   if (hasSegmentIr(db, id)) throw new SegmentIrOwnedError([]);
 }
 
-/** 在一次写事务内读取最新动作、校验所有权并保存，返回客户端应展示的最终稿。 */
-function saveLegacyUniversalPrompt(db, id, text) {
+/** 生成期间允许同一份编辑内容先行保存。来源另有改动时，保留较新稿件。 */
+function saveGeneratedDraft(db, id, text, source) {
   return db.transaction(() => {
-    const row = db.prepare('SELECT action, segment_ir FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(id);
+    const row = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(id);
     if (!row) return null;
     if (row.segment_ir) throw new SegmentIrOwnedError([]);
-    const saved = withStoryboardAction(text, row.action);
-    db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ?')
-      .run(saved, new Date().toISOString(), id);
+    const inputKeys = ['title', 'description', 'action', 'result', 'dialogue', 'narration', 'location', 'time', 'duration', 'shot_type', 'movement', 'atmosphere', 'layout_description', 'characters', 'scene_id', 'video_prompt', 'angle', 'angle_h', 'angle_v', 'angle_s', 'lighting_style', 'depth_of_field', 'image_prompt', 'polished_prompt'];
+    const draftChanged = row[source.field] !== source.persistedDraft && row[source.field] !== source.draft;
+    if (draftChanged || inputKeys.some(key => key !== source.field && row[key] !== source.original[key] && row[key] !== source.inputs[key])) {
+      throw Object.assign(new Error('生成期间分镜稿已有修改，已保留较新的稿件'), { code: 'storyboard_draft_changed' });
+    }
+    const now = new Date().toISOString();
+    if (source.field === 'video_prompt') {
+      db.prepare('UPDATE storyboards SET video_prompt=?, updated_at=? WHERE id=?').run(text, now, id);
+      return text;
+    }
+    const saved = universalDraftWithoutActionNote(text);
+    db.prepare('UPDATE storyboards SET universal_segment_text=?, universal_beat_signature=?, updated_at=? WHERE id=?')
+      .run(saved, beatSignature(saved, source.inputs.action, source.inputs.result), now, id);
     return saved;
   }).immediate();
 }
@@ -353,7 +373,7 @@ module.exports = {
   parseDramaCharacterIds,
   hasSegmentIr,
   assertNotSegmentIr,
-  saveLegacyUniversalPrompt,
+  saveGeneratedDraft,
   saveSegmentIr,
   createStoryboard,
   insertBeforeStoryboard,

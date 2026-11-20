@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { resolveStylePreset } = require('../src/constants/generationStylePresets');
 const promptI18n = require('../src/services/promptI18n');
 const { deriveStoryboardFieldsFromAi } = require('../src/services/episodeStoryboardService');
-const { withStoryboardAction } = require('../src/services/universalOmniMultiBeatFormat');
+const { universalDraftWithoutActionNote } = require('../src/services/universalOmniMultiBeatFormat');
 
 const ANIME_ZH = resolveStylePreset('anime style').zh;
 const REALISTIC_ZH = resolveStylePreset('realistic').zh;
@@ -24,24 +24,30 @@ function universalFor(style) {
 }
 
 describe('universal style line (AC2)', () => {
-  it('keeps the handoff when the generated beat only describes the object', () => {
+  it('retains the handoff as source evidence without issuing a second staging direction', () => {
     const action = '助理把合同递给经理，经理抬手接住。';
     const draft = LLM_TEXT.replace('镜头缓推。', '合同已经放在桌面上。');
     const fields = deriveStoryboardFieldsFromAi({ duration: 5, action, universal_segment_text: draft }, ANIME_ZH, '9:16', { universalOmni: true });
-    assert.ok(fields.universalSegmentText.includes(action));
+    assert.equal(fields.action, action);
+    assert.ok(!fields.universalSegmentText.includes(action));
     assert.match(fields.universalSegmentText, /分镜1： 5秒: 合同已经放在桌面上/);
   });
 
-  it('rebuilds a single action note on retry, preserving intentional camera directions and beat timings', () => {
+  it('removes the superseded system note on retry and preserves the authored beat timings', () => {
     const draft = '生成一个由以下2个分镜组成的视频。\n分镜1： 2秒: 一镜到底，桌面反光。\n分镜2： 3秒: 她收回手。';
-    const first = withStoryboardAction(draft, '助理递出钥匙');
-    assert.equal(withStoryboardAction(first, '助理递出钥匙'), first);
-    const revised = withStoryboardAction(first, '经理拿起手机');
-    assert.doesNotMatch(revised, /钥匙/);
-    assert.match(revised, /经理拿起手机/);
-    assert.equal(withStoryboardAction(revised, null), draft);
-    assert.equal(withStoryboardAction(draft, '她收回手。'), draft);
-    assert.equal(withStoryboardAction('', '经理拿起手机'), '');
+    const old = '本镜动作依据（在以下节拍内各演一次，以此为准）：助理递出钥匙\n' + draft;
+    assert.equal(universalDraftWithoutActionNote(old), draft);
+    assert.equal(universalDraftWithoutActionNote(draft), draft);
+    assert.equal(universalDraftWithoutActionNote(''), '');
+  });
+
+  it('keeps a sustained unoccupied shot and all offscreen narration in the batch fallback', () => {
+    const narration = '远处传来报时。'.repeat(35);
+    const fields = deriveStoryboardFieldsFromAi({ duration: 8, movement: '固定', action: '水面始终平静',
+      narration, characters: [] }, ANIME_ZH, '9:16', { universalOmni: true });
+    assert.match(fields.universalSegmentText, /分镜1： 8秒: 固定。水面始终平静/);
+    assert.ok(fields.universalSegmentText.includes(narration));
+    assert.doesNotMatch(fields.universalSegmentText, /@人物|@图片|推轨|横移|分镜2/);
   });
 
   it('anime drama has no realistic tag', () => {

@@ -46,6 +46,11 @@ const VOLC_PROTOCOLS = new Set(['volcengine', 'volcengine_omni']);
 
 /** 每条：protocols 命中且 match(model) 为真即采用；按顺序取第一条 */
 const ENTRIES = [
+  ...[['kling_omni', 2500], ['vidu', 5000]].map(([protocol, maxPromptChars]) => ({
+    protocols: new Set([protocol]), match: () => true,
+    caps: { ...CONSERVATIVE, maxPromptChars },
+    unknownFields: ['duration', 'refImages', 'ratios', 'firstLastFrame', 'nativeAudio'],
+  })),
   ...Object.entries(wanVideoModels).map(([id, mode]) => {
     const omni = mode === 'omni';
     const legacy = id.startsWith('wan2.6-');
@@ -209,7 +214,13 @@ function clampDuration(caps, seconds) {
   return Math.min(max, Math.max(min, aligned));
 }
 
+// 各提交入口按 Unicode 码点计数，与万相的提示词上限一致。
+function promptChars(text) {
+  return Array.from(text).length;
+}
+
 module.exports = {
+  promptChars,
   getVideoCaps,
   WAN_LEGACY_KEYFRAME_MODEL,
   clampDuration,

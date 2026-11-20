@@ -1,7 +1,7 @@
 // ? Go pkg/video + VideoGenerationService ????????? API??????(????)
 const fs = require('fs');
 const { createHash } = require('node:crypto');
-const { getVideoCaps, clampDuration, isSeedance2FamilyModel, WAN_LEGACY_KEYFRAME_MODEL } = require('./modelCapabilities');
+const { getVideoCaps, clampDuration, isSeedance2FamilyModel, WAN_LEGACY_KEYFRAME_MODEL, promptChars } = require('./modelCapabilities');
 const { buildWanVideoBody, localImagePath: resolveDashScopeLocalImage, dashScopeBaseUrl } = require('./wanVideoRequest');
 const path = require('path');
 const { toLocalPath } = require('../utils/storagePaths');
@@ -862,6 +862,11 @@ async function callKlingOmniVideoApi(config, log, opts) {
   const modelName = model || 'kling-video-o1';
   const durStr = omniDurationString(modelName, duration);
   const ratio = resolveKlingOmniAspectRatio(aspect_ratio, log, video_gen_id);
+  const textPrompt = (prompt || '').trim();
+  const limit = getVideoCaps({ protocol: 'kling_omni', model: modelName }).maxPromptChars;
+  if (!textPrompt || promptChars(textPrompt) > limit) {
+    return { submission: 'rejected', error: `可灵 Omni 提示词须为 1–${limit} 字，当前 ${promptChars(textPrompt)} 字` };
+  }
 
   const refList = Array.isArray(reference_urls) ? reference_urls.filter(Boolean) : [];
   const primary = (image_url || '').trim();
@@ -885,11 +890,6 @@ async function callKlingOmniVideoApi(config, log, opts) {
       item.type = 'first_frame';
     }
     image_list.push(item);
-  }
-
-  const textPrompt = (prompt || '').trim().slice(0, 2500);
-  if (!textPrompt) {
-    return { submission: 'rejected', error: '可灵 Omni：multi_shot=false 时 prompt 不能为空' };
   }
 
   const body = {
@@ -2142,7 +2142,9 @@ async function callViduVideoApi(config, log, opts) {
   if (!ep.startsWith('/')) ep = '/' + ep;
   const url = base + ep;
 
-  let effectivePrompt = (prompt || '').trim();
+  const effectivePrompt = (prompt || '').trim();
+  const limit = getVideoCaps({ protocol: 'vidu', model: modelName }).maxPromptChars;
+  if (promptChars(effectivePrompt) > limit) return { submission: 'rejected', error: `Vidu 提示词超过 ${limit} 字，请精简或拆段` };
 
   log.info('[Vidu] task prepare', {
     video_gen_id,
@@ -2239,20 +2241,14 @@ async function callViduVideoApi(config, log, opts) {
       if (aspectMismatch && !usedLetterbox) {
         const suffix = viduMismatchAspectPromptSuffix(ratio);
         const sep = '\n\n';
-        let combined = effectivePrompt ? `${effectivePrompt}${sep}${suffix}` : suffix;
-        const maxLen = 5000;
-        if (combined.length > maxLen) {
-          const room = maxLen - suffix.length - sep.length;
-          const head = room > 0 && effectivePrompt ? effectivePrompt.slice(0, room) : '';
-          combined = head ? `${head}${sep}${suffix}` : suffix.slice(0, maxLen);
-        }
-        effectivePrompt = combined;
-        body.prompt = effectivePrompt;
-        log.info('[Vidu] appended framing hint to prompt (mismatch, no letterbox)', {
+        const combined = effectivePrompt ? `${effectivePrompt}${sep}${suffix}` : suffix;
+        if (promptChars(combined) <= limit) body.prompt = combined;
+        log.info('[Vidu] framing hint on reference mismatch', {
           video_gen_id,
           image: dims ? `${dims.width}x${dims.height}` : '?',
           target_ratio: ratio,
-          prompt_chars_after: effectivePrompt.length,
+          prompt_chars_after: body.prompt.length,
+          appended: body.prompt === combined,
           suffix_chars: suffix.length,
         });
       } else if (dims && !aspectMismatch) {

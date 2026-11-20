@@ -3,6 +3,8 @@
  * 输出是 SegmentIR v1 数组，入库前会被 schema 校验与段规划器再处理一遍。
  */
 
+const { beatContinuity } = require('../../storyboardContinuity');
+
 function systemPrompt(caps) {
   const { min, max } = caps.duration;
   return `你是竖屏短剧的分镜导演。把一集剧本拆成若干"段"，每段对应一次视频生成，输出严格的 JSON 数组，不要任何解释文字。
@@ -12,7 +14,7 @@ function systemPrompt(caps) {
   "version": 1,
   "duration_s": 整数秒，在 ${min}–${max} 之间，等于本段各镜头 seconds 之和,
   "scene": { "scene_id": 场景列表里的 id, "state_id": null, "setting": "这一段里这个地点此刻的样子，一两句" },
-  "main_move": "本段最主要的一种运镜，相邻两段不要相同",
+  "main_move": "本段最主要的一种运镜，也可写固定",
   "tone": "光线与情绪的一句话",
   "continuity": { "mode": "refs" },
   "cast": [{ "character_id": 角色列表里的 id, "wardrobe_id": null, "alias": "角色名" }],
@@ -34,14 +36,16 @@ function systemPrompt(caps) {
 
 写法要求：
 1. 台词逐字照抄剧本，不改字、不换说话人、不增删；一个镜头最多两句。
-2. 只写拍得到、听得到的东西；情绪写成脸和身体上能看见的小动作，幅度往小处写。
+2. 写出观众能看到或听到的变化。表演幅度、景别和声音由这一拍承担的剧情决定。
 3. 指人一律写角色名，不用代词。每个出镜的人都写清朝向和眼睛看着哪里。
 4. 一个镜头只放一个主要动作、最多一种运镜。8 秒以内的段最多一次硬切，15 秒以内最多三次。
-5. 每段至少一个让局势变化的事件；10 秒以上至少两个，15 秒以上至少三个。
-6. 第一段在 3 秒内就出现冲突或异常；最后一段停在集尾悬念的画面上。
+5. 把剧本已有的事件写入相应节拍。过渡、空镜或有意持续的状态可以写 event 为 null。
+6. 剧本有开场冲突或集尾悬念时，把它安排在相应的位置。
 7. 剧情关键的文字、数字放进 cards，不让画面里出现文字。
 8. 不写淡入淡出、黑场、字幕、背景音乐、画质词，也不写"没有某物"这类句子，直接写看到的样子。
-9. 换地点、时间跳跃、同一角色换装时开新段；同一场连续的对话尽量放在同一段。`;
+9. 换地点、时间跳跃、同一角色换装时开新段；同一场连续的对话尽量放在同一段。
+
+${beatContinuity}`;
 }
 
 function userPrompt({ script, characters, scenes, props, caps }) {

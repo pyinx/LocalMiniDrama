@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { promptChars } = require('./modelCapabilities');
 const { toLocalPath } = require('../utils/storagePaths');
 
 const SIZES_1080 = { '16:9': '1920*1080', '9:16': '1080*1920', '1:1': '1440*1440', '4:3': '1632*1248', '3:4': '1248*1632' };
@@ -50,7 +51,7 @@ function prepareWanVideo(caps, opts) {
   if (first && refs.length && (omni || caps.wan26 || caps.vace)) return fail('不能同时指定首尾帧和多图参考');
   const prompt = String(opts.prompt || '').replace(/@图片(\d+)/g, (_, n) => caps.refToken + n);
   if (!prompt.trim() && (mode === 'text' || mode === 'reference' || (omni && !first && !refs.length))) return fail('需要提示词');
-  if ([...prompt].length > caps.maxPromptChars) return fail(`提示词超过 ${caps.maxPromptChars} 字`);
+  if (promptChars(prompt) > caps.maxPromptChars) return fail(`提示词超过 ${caps.maxPromptChars} 字`);
   const input = prompt ? { prompt } : {};
   if (!omni && !caps.vace && opts.style_negative) input.negative_prompt = opts.style_negative;
   const parameters = { duration };

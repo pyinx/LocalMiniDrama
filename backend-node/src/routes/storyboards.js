@@ -2,8 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const response = require('../response');
 const storyboardService = require('../services/storyboardService');
+const { draftConflict } = require('../services/storyboardContinuity');
 const episodeStoryboardService = require('../services/episodeStoryboardService');
-const { enforceUniversalStyleLine, universalDraftWithoutActionNote } = require('../services/universalOmniMultiBeatFormat');
+const { buildUniversalStyleLine, universalDraftWithoutActionNote } = require('../services/universalOmniMultiBeatFormat');
 const videoClient = require('../services/videoClient');
 const segmentReplanService = require('../services/segmentReplanService');
 const segmentCompileService = require('../services/segmentCompileService');
@@ -15,6 +16,10 @@ const { parseSegmentIr } = require('../services/segmentIr/schema');
 
 /** 结构化分镜（IR）相关错误：所有权冲突 409，IR 不合法 422；其他错误返回 false 交给调用方 */
 function sendSegmentIrError(res, err) {
+  if (err?.code === 'storyboard_draft_changed') {
+    response.error(res, 409, err.code, err.message);
+    return true;
+  }
   if (err && err.code === 'segment_ir_owned') {
     response.error(res, 409, 'segment_ir_owned', err.message, { fields: err.fields || [] });
     return true;
@@ -33,9 +38,9 @@ const { buildUniversalSegmentUserPromptBundle } = require('../services/universal
 const { normalizeUniversalSegmentShotDurations } = require('../services/universalSegmentDurationNormalize');
 
 /** 流已开始，写回失败只能通过末尾 error 事件报告。 */
-function saveStreamedUniversalPrompt(db, id, text, writeNd) {
+function saveStreamedDraft(db, id, text, source, writeNd) {
   try {
-    const saved = storyboardService.saveLegacyUniversalPrompt(db, id, text);
+    const saved = storyboardService.saveGeneratedDraft(db, id, text, source);
     if (saved) return saved;
     writeNd({ type: 'error', code: 'NOT_FOUND', message: '分镜不存在' });
   } catch (err) {
@@ -181,7 +186,7 @@ function angleCoverageLine(sbRow) {
 /**
  * 凡非空字段逐条列出；模型须在同一段成稿中全部体现其语义（可改写，不可丢信息）。
  */
-function buildClassicRequiredCoverageDigest(sbRow, linkedSceneText) {
+function buildClassicRequiredCoverageDigest(sbRow, linkedSceneText, hasDraft) {
   const lines = [];
   const add = (label, text) => {
     const s = text != null ? String(text).trim() : '';
@@ -203,12 +208,13 @@ function buildClassicRequiredCoverageDigest(sbRow, linkedSceneText) {
     if (Number.isFinite(ei)) add('情绪强度', String(ei));
     else add('情绪强度', String(sbRow.emotion_intensity).trim());
   }
-  add('景别', sbRow.shot_type);
-  const ang = angleCoverageLine(sbRow);
-  if (ang) add('镜头方式（视角/机位）', ang);
+  if (!hasDraft) {
+    add('景别', sbRow.shot_type);
+    add('镜头方式（视角/机位）', angleCoverageLine(sbRow));
+    add('运镜', movementDisplay(sbRow) || sbRow.movement);
+  }
   add('光线/灯光风格', lightingDisplay(sbRow) || sbRow.lighting_style);
   add('景深', depthDisplay(sbRow) || sbRow.depth_of_field);
-  add('运镜', movementDisplay(sbRow) || sbRow.movement);
   const dur = Number(sbRow.duration);
   const sec = Number.isFinite(dur) && dur > 0 ? Math.round(dur) : 5;
   add('时长（秒）', `${sec}`);
@@ -269,6 +275,38 @@ function normalizeUniversalSegmentAtImageSpacing(text) {
     /@图片(\d+)(?=[\u4e00-\u9fffA-Za-z「『【（])/gu,
     '@图片$1 '
   );
+}
+
+/** 一次校验单镜生成和润色的同一输出协议。旧的自由文本仍可作为输入草稿。 */
+function prepareUniversalDraft(raw, built) {
+  const conflict = draftConflict(raw);
+  if (conflict) return { error: conflict };
+  const invalid = message => ({ error: { code: 'invalid_storyboard_response', message } });
+  const lines = String(raw || '').trim().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const first = lines.findIndex(s => /^分镜\s*\d+/.test(s));
+  if (first < 0 || first > 3) {
+    return invalid('模型未返回可识别的分拍正文，当前稿已保留');
+  }
+  const header = lines.slice(0, first);
+  if (header[0]?.startsWith('画面风格和类型:') || header[0]?.startsWith('画面风格和类型：')) header.shift();
+  if (/^生成一个由以下\s*\d+\s*个分镜组成的视频[。.]?$/.test(header[0] || '')) header.shift();
+  if (header[0] === built.line3Required) header.shift();
+  if (header.length) return invalid('分拍之前含有不属于格式头的内容，未删减或保存候选稿，请重新整理分拍');
+  const beats = lines.slice(first);
+  if (beats.length > 8) return invalid('本段超过 8 个节拍，请精简或拆段');
+  for (const [i, line] of beats.entries()) {
+    const m = line.match(/^分镜\s*(\d+)\s*[:：]\s*(\d+(?:\.\d+)?)\s*秒\s*[:：]\s*(.+)$/);
+    if (!m || Number(m[1]) !== i + 1 || Number(m[2]) <= 0) return invalid(`分镜${i + 1} 的编号、秒数或正文不完整，当前稿已保留`);
+    if (built.referenceCount && [...m[3].matchAll(/@图片(\d+)/g)].some(hit => +hit[1] < 1 || +hit[1] > built.referenceCount)) {
+      return invalid(`分镜${i + 1} 使用了未绑定的参考图，当前稿已保留`);
+    }
+    beats[i] = `分镜${i + 1}： ${m[2]}秒: ${m[3]}`;
+  }
+  const timed = normalizeUniversalSegmentShotDurations(beats.join('\n'), built.durationLabel, built.durationSec);
+  const sum = [...timed.matchAll(/^分镜\d+： ([\d.]+)秒/gm)].reduce((n, m) => n + Number(m[1]), 0);
+  if (Math.abs(sum - built.durationSec) > 0.00001) return invalid('分拍秒数无法对齐本段时长，请调整节拍');
+  return { text: [buildUniversalStyleLine(built.styleZh), `生成一个由以下${beats.length}个分镜组成的视频。`,
+    built.line3Required, normalizeUniversalSegmentAtImageSpacing(timed)].join('\n') };
 }
 
 function routes(db, log) {
@@ -714,7 +752,7 @@ function routes(db, log) {
           if (built.code === 'not_found') return response.notFound(res, built.message);
           return response.badRequest(res, built.message);
         }
-        const { userPrompt, durationLabel, durationSec } = built;
+        const { userPrompt, durationSec } = built;
         const out = await aiClient.generateText(
           db,
           log,
@@ -723,14 +761,12 @@ function routes(db, log) {
           promptI18n.getUniversalOmniSegmentPrompt(),
           { scene_key: 'image_polish', max_tokens: 2400, temperature: 0.28 }
         );
-        if (!out || String(out).trim().length < 20) {
-          return response.badRequest(res, 'AI 返回内容过短，请检查文本模型配置');
+        const prepared = prepareUniversalDraft(out, built);
+        if (prepared.error) {
+          const { code, message, detail } = prepared.error;
+          return response.error(res, code === 'storyboard_conflict' ? 409 : 422, code, message, detail);
         }
-        let text = String(out).trim();
-        text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
-        text = normalizeUniversalSegmentAtImageSpacing(text);
-        text = enforceUniversalStyleLine(text, built.styleZh);
-        text = storyboardService.saveLegacyUniversalPrompt(db, sbId, text);
+        const text = storyboardService.saveGeneratedDraft(db, sbId, prepared.text, built.source);
         if (!text) return response.notFound(res, '分镜不存在');
         log.info('[分镜] generateUniversalSegmentPrompt 完成', { id: sbId, len: text.length, duration_sec: durationSec });
         response.success(res, { universal_segment_text: text });
@@ -755,7 +791,7 @@ function routes(db, log) {
         if (built.code === 'not_found') return response.notFound(res, built.message);
         return response.badRequest(res, built.message);
       }
-      const { userPrompt, durationLabel, durationSec } = built;
+      const { userPrompt, durationSec } = built;
 
       res.status(200);
       res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
@@ -789,15 +825,12 @@ function routes(db, log) {
         return res.end();
       }
 
-      if (!finalRaw || String(finalRaw).trim().length < 20) {
-        writeNd({ type: 'error', message: 'AI 返回内容过短，请检查文本模型配置' });
+      const prepared = prepareUniversalDraft(finalRaw, built);
+      if (prepared.error) {
+        writeNd({ type: 'error', ...prepared.error });
         return res.end();
       }
-      let text = String(finalRaw).trim();
-      text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
-      text = normalizeUniversalSegmentAtImageSpacing(text);
-      text = enforceUniversalStyleLine(text, built.styleZh);
-      text = saveStreamedUniversalPrompt(db, sbId, text, writeNd);
+      const text = saveStreamedDraft(db, sbId, prepared.text, built.source, writeNd);
       if (!text) return res.end();
       log.info('[分镜] generateUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
@@ -831,7 +864,7 @@ function routes(db, log) {
         if (built.code === 'not_found') return response.notFound(res, built.message);
         return response.badRequest(res, built.message);
       }
-      const { userPrompt: baseUser, durationLabel, durationSec, episodeId, storyboardNumber } = built;
+      const { userPrompt: baseUser, durationSec, episodeId, storyboardNumber } = built;
 
       let scriptText = '';
       try {
@@ -860,11 +893,8 @@ function routes(db, log) {
           .get(episodeId, storyboardNumber);
       } catch (_) {}
 
-      const polishPassStamp = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
       const polishUserPrompt = [
         'TASK: POLISH_UNIVERSAL_OMNI_SEGMENT',
-        `POLISH_PASS_STAMP: ${polishPassStamp}`,
-        'POLISH_REFRESH（多次点击「润色」时强制）: 在严格遵守 MULTI_BEAT_OUTPUT、子分镜秒数之和=TOTAL_CLIP_SECONDS、IMAGE_SLOT_MAP、不编造剧本外情节的前提下，**本轮输出须与 CURRENT_OMNI_DRAFT 在中文表述上有明显差异**（换动词/语序、合并或拆分从句、加强或收紧运镜与情绪描写均可；**第3行仍须与 LINE3_REQUIRED 完全一致**）。除第3行外，**禁止**与草稿逐字相同或仅标点差异；若 M 与秒数分配不变，子分镜正文也须重写措辞。',
         'DIALOGUE_RETENTION（硬性，与 system 全能润色一致）: BASE_OMNI_CONTRACT 内 STORYBOARD FIELDS 的 DIALOGUE、NARRATION、VIDEO_PROMPT 及 CURRENT_OMNI_DRAFT 中一切对白/旁白/引号句，成稿各「分镜k」行须**逐条以「」或明确旁白写出**，保留笑点、数字、剧名、奖项名等关键信息；禁止用「两人对话」「念词带过」等概括替代具体台词。总秒数与各 Tk 不变前提下提高信息密度：台词与反应优先，少写无推进的纯氛围叠句。',
         'You are refining the CURRENT omni multi-beat prompt for a short drama vertical-video shot.',
         `FULL_EPISODE_SCRIPT（本集完整剧本，用于信息对齐与连戏；不得引入剧本未写的情节）:\n${scriptText || '(本集剧本正文为空，请仅依据下方 STORYBOARD FIELDS 与邻镜信息)'}`,
@@ -914,15 +944,12 @@ function routes(db, log) {
         return res.end();
       }
 
-      if (!finalRaw || String(finalRaw).trim().length < 20) {
-        writeNd({ type: 'error', message: 'AI 返回内容过短，请检查文本模型配置' });
+      const prepared = prepareUniversalDraft(finalRaw, built);
+      if (prepared.error) {
+        writeNd({ type: 'error', ...prepared.error });
         return res.end();
       }
-      let text = String(finalRaw).trim();
-      text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
-      text = normalizeUniversalSegmentAtImageSpacing(text);
-      text = enforceUniversalStyleLine(text, built.styleZh);
-      text = saveStreamedUniversalPrompt(db, sbId, text, writeNd);
+      const text = saveStreamedDraft(db, sbId, prepared.text, built.source, writeNd);
       if (!text) return res.end();
       log.info('[分镜] polishUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
@@ -937,6 +964,7 @@ function routes(db, log) {
       const sbId = Number(req.params.id);
       const sbRow = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(sbId);
       if (!sbRow) return response.notFound(res, '分镜不存在');
+      if (sbRow.segment_ir) return response.error(res, 409, 'segment_ir_owned', '结构化分镜请用编译预览');
       const mode = sbRow.creation_mode === 'universal' ? 'universal' : 'classic';
       if (mode === 'universal') {
         return response.badRequest(res, '当前为全能模式，请使用「润色全能提示词」');
@@ -1092,14 +1120,11 @@ function routes(db, log) {
 
       const retentionClauses = extractRetentionClausesFromVideoPrompts(
         currentDraft || '',
-        String(autoComposed || '').trim()
+        currentDraft ? '' : String(autoComposed || '').trim()
       );
 
-      const polishPassStamp = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
       const polishUserPrompt = [
         'TASK: POLISH_CLASSIC_STORYBOARD_STILL_TO_VIDEO_PROMPT',
-        `POLISH_PASS_STAMP: ${polishPassStamp}`,
-        'POLISH_REFRESH: 用户可多次润色；事实与时长不变，但须明显换表述；禁止与 CURRENT_VIDEO_DRAFT 仅标点或个别虚词差异。',
         'OUTPUT_GOAL: 单段、可直接送图生视频模型的专业提示词；首帧画面已由参考图锁定，文案负责动效、节奏、运镜意图、声画暗示与画风气质。',
         '',
         `PROJECT:\nDRAMA_TITLE: ${dramaTitle || '(unknown)'}\nEPISODE_TITLE: ${episodeTitle || '(unknown)'}`,
@@ -1118,13 +1143,13 @@ function routes(db, log) {
         fieldLines || '(empty)',
         '',
         'REQUIRED_COVERAGE_DIGEST（下列凡出现「- 维度：」行的，润色成稿必须全部体现其语义；可与邻镜/剧本融合叙述，禁止省略事实、禁止改对白原意、禁止改时长秒数）:',
-        buildClassicRequiredCoverageDigest(sbRow, linkedSceneText),
+        buildClassicRequiredCoverageDigest(sbRow, linkedSceneText, Boolean(currentDraft)),
         '',
         `FIRST_FRAME_VISUAL_ANCHOR（分镜参考静帧对应的英文/中文图提示摘要；动效须与此一致，禁止改换装、改人脸特征、改场景时代）:\n${
           firstFrameAnchor || '(无图侧文本；仅依据 STORYBOARD_FIELDS 与剧本推断画面)'
         }`,
         '',
-        `AUTO_COMPOSED_VIDEO_PROMPT（与程序字段拼装一致，作事实底线）:\n${autoComposed}`,
+        `AUTO_COMPOSED_VIDEO_PROMPT（与程序字段拼装一致，供补充缺失的剧情事实，分拍机位采用当前稿）:\n${autoComposed}`,
         '',
         `CURRENT_VIDEO_DRAFT（用户当前 video_prompt，优先在其上润色）:\n${currentDraft || '(empty — use AUTO_COMPOSED + FIELDS)'}`,
         '',
@@ -1168,17 +1193,18 @@ function routes(db, log) {
         return res.end();
       }
 
-      if (!finalRaw || String(finalRaw).trim().length < 12) {
+      const conflict = draftConflict(finalRaw);
+      if (conflict) {
+        writeNd({ type: 'error', ...conflict });
+        return res.end();
+      }
+      if (!finalRaw?.trim() || (finalRaw.trim().length < 12 && finalRaw.trim() !== currentDraft)) {
         writeNd({ type: 'error', message: 'AI 返回内容过短，请检查文本模型配置' });
         return res.end();
       }
-      const text = String(finalRaw).trim();
-      const nowIso = new Date().toISOString();
-      db.prepare('UPDATE storyboards SET video_prompt = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').run(
-        text,
-        nowIso,
-        sbId
-      );
+      const text = saveStreamedDraft(db, sbId, String(finalRaw).trim(),
+        { field: 'video_prompt', persistedDraft: sbRow.video_prompt, draft: currentDraft, original: sbRow, inputs: sbRow }, writeNd);
+      if (!text) return res.end();
       log.info('[分镜] polishClassicVideoPromptStream 完成', { id: sbId, len: text.length });
       writeNd({ type: 'done', video_prompt: text });
       res.end();

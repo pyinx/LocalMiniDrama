@@ -14,13 +14,18 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
 
   const sb = db.prepare(
     `SELECT id, episode_id, storyboard_number, scene_id, title, description, location, time,
-      action, dialogue, narration, result, atmosphere,
+      action, dialogue, narration, result, atmosphere, layout_description,
       image_prompt, polished_prompt, video_prompt, universal_segment_text,
       shot_type, angle, angle_h, angle_v, angle_s, movement, lighting_style, depth_of_field,
       characters, local_path, duration, segment_index, segment_title
      FROM storyboards WHERE id = ? AND deleted_at IS NULL`
   ).get(sbId);
   if (!sb) return { ok: false, code: 'not_found', message: '分镜不存在' };
+  const source = { field: 'universal_segment_text', persistedDraft: sb.universal_segment_text, draft: opts.universalSegmentOverride, original: { ...sb } };
+  const fields = bodyIn.field_overrides || {};
+  for (const key of ['title', 'description', 'location', 'time', 'action', 'dialogue', 'narration', 'result', 'atmosphere', 'shot_type', 'movement', 'layout_description']) {
+    if (Object.hasOwn(fields, key) && (fields[key] === null || typeof fields[key] === 'string')) sb[key] = fields[key];
+  }
 
   let dramaId = null;
   let dramaRow = null;
@@ -60,6 +65,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     chunk('DIALOGUE', sb.dialogue),
     chunk('NARRATION', sb.narration),
     chunk('RESULT', sb.result),
+    chunk('LAYOUT', sb.layout_description),
     chunk('ATMOSPHERE', sb.atmosphere),
     chunk('IMAGE_PROMPT', sb.image_prompt),
     chunk('POLISHED_IMAGE_PROMPT', sb.polished_prompt),
@@ -392,7 +398,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
       chunk('SEGMENT_TITLE_NEXT', nextSeg || null),
       segChange
         ? 'BOUNDARY_HINT: 段落标题相对上一镜已变化 → 转场/新叙事块概率高 → 可提高 M 或前几秒侧重空间/情绪铺垫再入冲突。'
-        : 'BOUNDARY_HINT: 用 ACTION 的动作和回应决定节拍。多人互动须在同一构图中清楚呈现双方，或按动作先后切换视点；单人持续动作可用一拍。',
+        : 'BOUNDARY_HINT: 根据动作与回应选择节拍。需要看清交互时，可以同框或切换视点；画外回应和持续静止也可按原稿成立。',
     ].join('\n');
   } catch (_) {
     shotPacingBlock = [
@@ -443,7 +449,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     '- 第3行：必须逐字等于 LINE3_REQUIRED（见下）。',
     '- 第4行到第(3+M)行：依次为「分镜1： T1秒:」「分镜2： T2秒:」…「分镜M： TM秒:」；每行冒号后先写秒数再写该子时段内的动态影像与运镜描写。',
     `- 约束：T1+T2+…+TM 必须严格等于 TOTAL_CLIP_SECONDS（数值与 ${durationLabel} 一致）；每个 Tk>0；子分镜序号连续无跳号。`,
-    '- 若 M=1：即仅一行「分镜1： TOTAL秒:」写满整段；若 M>1：每行只覆盖本子时段，前后行衔接成连续时间线，避免剧情跳跃或重复前一行已完成的动作。',
+    '- 若 M=1：一行「分镜1： TOTAL秒:」覆盖整段。若 M>1，每行只覆盖本子时段。连续动作承接上一拍结尾，原稿有意跳时或蒙太奇时保留该安排。',
     '- 禁止额外说明行、markdown、英文小标题；禁止把「子分镜」写成多次独立成片 API。',
   ].join('\n');
 
@@ -474,6 +480,9 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
 
   return {
     ok: true,
+    source: { ...source, inputs: sb },
+    line3Required,
+    referenceCount: slots.length,
     userPrompt,
     styleZh,
     durationLabel,

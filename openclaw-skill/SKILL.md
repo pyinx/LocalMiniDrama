@@ -400,14 +400,20 @@ file: <图片文件>
 ## 🎞️ 视频生成
 
 ### 批量生成视频
+
+从本集取得用户选中的分镜 ID，先登记批次。
 ```
 POST {baseUrl}/api/v1/videos/episode/{episode_id}/batch
 Content-Type: application/json
 
 {
-  "types": ["video"]
+  "storyboard_ids": [12, 13]
 }
 ```
+
+只处理本次选中的条目。已有 `video_id` 时查询原任务。等待提交的条目用返回的 `operation_key`、作品和分镜 ID、当前提示词与实际参考图调用 `POST /api/v1/videos`。结构化分镜由平台按所选模型编译，全能分镜使用当前的 `universal_segment_text`。网络重试复用原操作标识。
+
+如返回 `storyboard_review_needed`，向作者展示分拍正文和来源动作、结果。可按作者意图润色核对，或由作者选择「采用当前分拍」。如返回 `storyboard_draft_changed`，重新读取当前稿。润色流里的 `delta` 只用于预览；等到 `done` 才采用成稿，收到冲突时向作者呈现节拍与两句原文。
 
 ### 查询视频任务
 ```
@@ -679,7 +685,7 @@ POST /api/v1/images/episode/{episode_id}/batch
 **Step 11：批量生成视频**
 ```
 POST /api/v1/videos/episode/{episode_id}/batch
-→ 轮询视频任务直到完成
+→ 按上方「批量生成视频」提交等待条目，轮询已提交的视频任务
 ```
 
 **Step 12：合成最终视频**

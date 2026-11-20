@@ -141,6 +141,7 @@ function ensureAllColumns(database) {
     { name: 'title',             type: 'TEXT' },
     { name: 'description',       type: 'TEXT' },
     { name: 'layout_description', type: 'TEXT' },   // 画面布局与人物站位（首尾帧模式空间合同）
+    { name: 'universal_beat_signature', type: 'TEXT' }, // 已逐拍对照的正文及其动作、结果版本
     { name: 'location',          type: 'TEXT' },
     { name: 'time',              type: 'TEXT' },
     { name: 'duration',          type: 'REAL' },

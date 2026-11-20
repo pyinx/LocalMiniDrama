@@ -5,13 +5,10 @@
  * 纯函数：所有数据库内容由调用方放进 ctx.bindings。
  */
 const P = require('./rules/phrases');
+const { promptChars } = require('../modelCapabilities');
 
 const PRIORITY = { scene: 0, lead: 1, character: 2, crowd: 3, prop: 4, tail_frame: 5 };
 const EMIT = { character: 0, crowd: 0, scene: 1, prop: 2, tail_frame: 3 };
-
-function firstClause(text) {
-  return String(text).split(/[，；,;]/)[0];
-}
 
 function envelopeOk(d, { min, max, step }) {
   return d >= min && d <= max && (d - min) % step === 0;
@@ -126,11 +123,12 @@ function compileSegment(ir, ctx) {
   const voiced = new Set();
   const hasLines = ir.shots.some((s) => s.lines.length);
 
-  function shotText(shot, k, trim) {
+  function shotText(shot, k) {
     const parts = [P.shotHead(k + 1, shot.seconds) + (k > 0 ? (shot.cut === 'hard' ? P.cutHard : P.cutContinuous) : '') + P.framing(shot.size, shot.camera)];
     for (const s of shot.subjects) parts.push(P.subject(who(s.alias), s.frame_pos, s.facing, s.gaze, s.pose, s.holding));
     if (shot.movement) parts.push(P.movement(shot.movement));
-    parts.push(P.action(trim.action ? firstClause(shot.action) : shot.action));
+    parts.push(P.action(shot.action));
+    if (shot.event?.trim() && !shot.action.includes(shot.event.trim())) parts.push(P.event(shot.event.trim()));
     const speaking = new Set(shot.lines.filter((l) => l.kind !== 'vo' && l.speaker).map((l) => l.speaker));
     for (const line of shot.lines) {
       const w = line.speaker ? who(line.speaker) : null;
@@ -149,12 +147,12 @@ function compileSegment(ir, ctx) {
       if (native && !speaking.has(s.alias)) parts.push(P.silentNative(who(s.alias)));
       if (!native && speaking.has(s.alias)) parts.push(P.dubbed(who(s.alias)));
     }
-    if (shot.sfx.length && !trim.sfx) parts.push(P.sfx(shot.sfx.join('、')));
+    if (shot.sfx.length) parts.push(P.sfx(shot.sfx.join('、')));
     return parts.join('');
   }
 
-  function assemble(trim) {
-    voiced.clear();
+  const shotLines = ir.shots.map(shotText);
+  function assemble(includeTone) {
     const lines = [P.stylePrefix + ctx.style.video];
     if (refLines.length) lines.push(...refLines);
     const place = tokens[sceneAlias] ? `${tokens[sceneAlias]}（${sceneName}）` : sceneName;
@@ -163,23 +161,23 @@ function compileSegment(ir, ctx) {
     if (cont.position_lock) lines.push(P.positionLock(cont.position_lock));
     if (cont.axis_lock) lines.push(P.axisLock(cont.axis_lock));
     if (cont.ambience) lines.push(P.ambience(cont.ambience));
-    if (ir.tone && !trim.tone) lines.push(P.tone(ir.tone));
+    if (ir.tone && includeTone) lines.push(P.tone(ir.tone));
     lines.push(P.shotCount(ir.shots.length, ir.duration_s));
-    ir.shots.forEach((shot, k) => lines.push(shotText(shot, k, trim)));
+    lines.push(...shotLines);
     if (native && !hasLines) lines.push(P.allSilent);
     lines.push(native ? P.tailNative : P.tailDubbed);
     return lines.join('\n');
   }
 
-  // ---- 超长裁剪：先砍动作细节，再砍音效与基调；镜头语言、台词、连续性和尾注不动
-  const steps = [{}, { action: true }, { action: true, sfx: true }, { action: true, sfx: true, tone: true }];
-  let prompt = assemble(steps[0]);
-  for (let i = 1; i < steps.length && prompt.length > caps.maxPromptChars; i++) {
-    prompt = assemble(steps[i]);
-    add('info', 'prompt_trimmed', `prompt 超过模型上限 ${caps.maxPromptChars} 字，已裁剪（第 ${i} 级）`);
+  let prompt = assemble(true);
+  if (ir.tone && promptChars(prompt) > caps.maxPromptChars) {
+    prompt = assemble(false);
+    add('info', 'prompt_trimmed', `提示词超过模型上限 ${caps.maxPromptChars} 字，已省略整段基调`);
   }
-  if (prompt.length > caps.maxPromptChars) {
-    add('block', 'prompt_too_long', `裁剪后 prompt 仍有 ${prompt.length} 字，超过模型上限 ${caps.maxPromptChars} 字，请拆段或精简镜头`);
+  if (promptChars(prompt) > caps.maxPromptChars) {
+    const sizes = shotLines.map(promptChars);
+    const longest = sizes.indexOf(Math.max(...sizes));
+    add('block', 'prompt_too_long', `完整提示词 ${promptChars(prompt)} 字，超过模型上限 ${caps.maxPromptChars} 字。镜头 ${longest + 1} 的正文最长（${sizes[longest]} 字），请精简或拆段。`, { shot: longest + 1 });
   }
 
   const request = { generate_audio: native, mode: firstLast ? 'first_last' : 'refs', ...frames };

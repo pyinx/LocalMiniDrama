@@ -2,27 +2,24 @@
  * 全能模式 universal_segment_text 统一格式：多子分镜段落（与 generate/polish 接口一致）
  */
 
+const { createHash } = require('node:crypto');
+
 const LEGACY_SCENE_REFERENCE =
   '环境、光影与陈设定性参考 @图片1。若 @图片1 为宫格或多画面拼图，禁止成片复刻其分格或并列布局，仅提取统一的室内空间与光线语义；须单镜头完整连续画面。';
 const DEFAULT_LINE3 = '环境、光影与陈设参考 @图片1。每个时刻使用完整画幅，禁止宫格或并列分屏。按剧情安排机位和切镜。';
-const ACTION_PREFIX = '本镜动作依据（在以下节拍内各演一次，以此为准）：';
+const OLD_ACTION_PREFIX = '本镜动作依据（在以下节拍内各演一次，以此为准）：';
 
 /** 编辑正文与系统补入的动作依据分开，避免旧动作在下次润色时又被写回。 */
 function universalDraftWithoutActionNote(text) {
   if (!text) return text;
   return String(text).replace(LEGACY_SCENE_REFERENCE, DEFAULT_LINE3)
-    .split(/\r?\n/).filter(line => !line.startsWith(ACTION_PREFIX)).join('\n');
+    .split(/\r?\n/).filter(line => !line.trimStart().startsWith(OLD_ACTION_PREFIX)).join('\n');
 }
 
-function withStoryboardAction(text, action) {
-  const draft = universalDraftWithoutActionNote(text);
-  const source = String(action || '').replace(/\s+/g, ' ').trim();
-  if (!source || !draft?.trim() || draft.includes(source)) return draft;
-  const note = ACTION_PREFIX + source;
-  const firstBeat = draft.search(/分镜\s*1\s*[:：]\s*[\d.]+\s*秒/);
-  if (firstBeat < 0) return note + '\n' + draft;
-  return [draft.slice(0, firstBeat).trimEnd(), note, draft.slice(firstBeat)].filter(Boolean).join('\n');
+function beatSignature(text, action, result) {
+  return createHash('sha256').update(JSON.stringify([text, action, result].map(s => String(s ?? '').trim()))).digest('hex');
 }
+
 
 function trim(s) {
   return s != null && String(s).trim() ? String(s).trim() : '';
@@ -72,55 +69,20 @@ function splitDurationSeconds(dur, m) {
   return Array.from({ length: m }, (_, i) => base + (i < rem ? 1 : 0));
 }
 
-/**
- * 分镜批量生成时模型未返回 universal_segment_text 时的多行兜底
- */
-function buildFallbackUniversalMultiBeatText(sb, d, styleHint) {
-  const dur = Math.max(1, Number(d.durationSec) || 5);
-  const M = chooseBeatCount(dur);
-  const secs = splitDurationSeconds(dur, M);
-  const loc = [sb?.location, sb?.time].filter(Boolean).join('，').trim() || '叙事空间';
-  const act = trim(d.action) || '人物在场景内完成本镜戏核动作';
-  const res = trim(d.result);
-  const dia = trim(d.dialogue);
-  const narr = trim(d.narration);
-  const atm = trim(sb?.atmosphere);
-  const styleTail = trim(styleHint) || '电影感叙事';
-  const styleLine = buildUniversalStyleLine(styleTail);
-
-  const lines = [styleLine, `生成一个由以下${M}个分镜组成的视频。`, DEFAULT_LINE3];
-
-  for (let k = 0; k < M; k++) {
-    const tk = secs[k];
-    const isFirst = k === 0;
-    const isLast = k === M - 1;
-    let body = '';
-    if (isFirst) {
-      body = `镜头从 @图片1 的${loc}建立画面起，平稳缓推向戏眼；@图片2 处于${act.slice(0, 80)}，${atm ? `${atm}，` : ''}光影随空间纵深拉开。`;
-    } else if (isLast) {
-      body = `镜头徐徐拉回或推近收束；@图片2 ${res || '完成本镜动作阶段'}，情绪落点明确。`;
-    } else {
-      body = `镜头继续推进，跟住 @图片2 的动作节奏，${act.slice(0, 100)}，运镜含定镜与缓推轨衔接。`;
-    }
-    if (dia && (isLast || (M <= 2 && k === M - 1))) {
-      body += ` @图片2 说："${dia.replace(/"/g, '')}"`;
-    } else if (!dia && k === M - 1) {
-      body += ' 无对白。';
-    } else if (!dia && k < M - 1) {
-      body += ' 无对白。';
-    }
-    if (narr && isLast) {
-      body += ` 旁白（画面无声）："${narr.replace(/"/g, '')}"`;
-    }
-    lines.push(`分镜${k + 1}： ${tk}秒: ${body}`);
-  }
-  return lines.join('\n');
+/** 全能初稿缺少分拍正文时，沿用已有字段组成一拍。此处尚无参考图槽位。 */
+function buildFallbackUniversalMultiBeatText(sb, { shotType, angle, movement, action, result, dialogue, narration, durationSec }, style) {
+  const facts = [sb.location, sb.time, shotType, angle, movement, action || sb.description, result,
+    sb.atmosphere, sb.lighting_style, sb.depth_of_field, sb.emotion, sb.sound_effect,
+    dialogue || '无对白', narration && `旁白：「${narration}」`];
+  const beat = facts.filter(Boolean).map(s => String(s).trim().replace(/\r?\n/g, ' ')).join('。');
+  return [buildUniversalStyleLine(style), '生成一个由以下1个分镜组成的视频。',
+    '每个时刻使用完整画幅。按分镜正文安排机位。', `分镜1： ${durationSec}秒: ${beat}`].join('\n');
 }
 
 module.exports = {
   DEFAULT_LINE3,
   universalDraftWithoutActionNote,
-  withStoryboardAction,
+  beatSignature,
   buildUniversalStyleLine,
   enforceUniversalStyleLine,
   normalizeUniversalSegmentTextNewlines,

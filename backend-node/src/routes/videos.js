@@ -4,9 +4,9 @@ const videoService = require('../services/videoService');
 const taskService = require('../services/taskService');
 const batch = require('../services/workbenchVideoBatch');
 const { normalizeAspectRatioForApi, resolveVideoTarget, videoTargetHash, prepareWanKeyframeInput } = require('../services/videoClient');
-const { WAN_LEGACY_KEYFRAME_MODEL } = require('../services/modelCapabilities');
+const { WAN_LEGACY_KEYFRAME_MODEL, promptChars } = require('../services/modelCapabilities');
 const { prepareWanVideo, localImagePath } = require('../services/wanVideoRequest');
-const { withStoryboardAction } = require('../services/universalOmniMultiBeatFormat');
+const { beatSignature, universalDraftWithoutActionNote } = require('../services/universalOmniMultiBeatFormat');
 const { storageRoot: resolveStorageRoot, filesBaseUrl } = require('../utils/storagePaths');
 const jimengRenderer = require('../services/jimeng/renderer');
 
@@ -89,10 +89,17 @@ function routes(db, log, cfg) {
           return response.error(res, 422, 'jimeng_requires_structured', '即梦渲染只支持结构化分镜，请先用「结构化分镜」重新生成本集分镜');
         }
         const provider = target.config?.provider || body.provider || 'chatfire';
-        const board = storyboardId && db.prepare('SELECT s.duration,s.dialogue,s.narration,s.action,s.creation_mode,s.adopted_sound FROM storyboards s JOIN episodes e ON e.id=s.episode_id WHERE s.id=? AND e.drama_id=? AND s.deleted_at IS NULL AND e.deleted_at IS NULL').get(storyboardId, dramaId);
+        const board = storyboardId && db.prepare('SELECT s.duration,s.dialogue,s.narration,s.action,s.result,s.universal_segment_text,s.universal_beat_signature,s.creation_mode,s.adopted_sound FROM storyboards s JOIN episodes e ON e.id=s.episode_id WHERE s.id=? AND e.drama_id=? AND s.deleted_at IS NULL AND e.deleted_at IS NULL').get(storyboardId, dramaId);
         let prompt = body.prompt || '';
         if (!compiledIr && (board?.creation_mode === 'universal' || (board && body.reference_mode === 'omni'))) {
-          prompt = withStoryboardAction(prompt, board.action);
+          prompt = universalDraftWithoutActionNote(prompt || board.universal_segment_text || '');
+          if (board.universal_beat_signature && board.universal_beat_signature !== beatSignature(prompt, board.action, board.result)) {
+            return response.error(res, 409, 'storyboard_draft_changed', '提交正文、动作或结果与已保存的分拍版本不同，请核对当前稿后重新润色或保存修订');
+          }
+          if (!board.universal_beat_signature && [board.action, board.result].some(s => s?.trim() && !prompt.includes(s.trim()))) {
+            return response.error(res, 409, 'storyboard_review_needed', '旧稿的分拍正文与动作、结果尚未核对。可润色核对，或在「全能提示词」中选择「采用当前分拍」。',
+              { action: board.action, result: board.result, draft: prompt });
+          }
         }
         const row = storyboardId && dramaId ? db.prepare('SELECT style,metadata FROM dramas WHERE id=?').get(dramaId) : null;
         const { zh, en, legacy } = require('../utils/dramaStyleMerge').styleFieldsFromDramaRow(row);
@@ -224,6 +231,9 @@ function routes(db, log, cfg) {
             (hasLines && !soundChosen && '当前万相模型只生成无声视频。本镜包含台词或旁白，请换用支持人声的模型，或在剪辑工作台选定配音或静音');
           resolution = prepared.resolution;
           duration = target.caps.duration.min;
+        }
+        if (!compiledIr && !prior.existing && !target.caps.unknownFields.includes('maxPromptChars') && promptChars(prompt) > target.caps.maxPromptChars) {
+          incompatibility ||= `本段完整提示词超过模型上限 ${target.caps.maxPromptChars} 字，请精简或拆段`;
         }
         const result = db.transaction(() => {
           if (operation) {

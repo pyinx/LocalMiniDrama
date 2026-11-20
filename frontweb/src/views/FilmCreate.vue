@@ -1252,6 +1252,9 @@
                         <el-dropdown-item command="polish-force" :disabled="!sbUniversalSegmentTrimmed(sb)">
                           不查图片强制润色
                         </el-dropdown-item>
+                        <el-dropdown-item command="adopt" :disabled="!sbUniversalSegmentTrimmed(sb)">
+                          采用当前分拍
+                        </el-dropdown-item>
                         <el-dropdown-item
                           command="to-grok-video-tags"
                           divided
@@ -1272,13 +1275,13 @@
                 />
                 <el-input
                   v-else
-                  v-model="sbUniversalSegmentText[sb.id]"
+                  :model-value="universalDraftPreview[sb.id] ?? sbUniversalSegmentText[sb.id]"
+                  readonly
                   type="textarea"
                   :rows="10"
                   :autosize="{ minRows: 10, maxRows: 22 }"
                   placeholder="例如：@图片1 为夜景街道，@图片2 从餐厅冲出停在光斑里，低头操作手机…"
                   class="sb-universal-textarea"
-                  @blur="() => onSaveUniversalSegmentField(sb)"
                 />
               </template>
               <template v-else>
@@ -3291,6 +3294,7 @@ const sbVideoErrors = ref({})
 const generatingSbImageIds = reactive(new Set())
 const generatingSbVideoIds = reactive(new Set())
 const generatingUniversalSegmentIds = reactive(new Set())
+const universalDraftPreview = reactive({})
 // 重新生成角色/场景/道具关联分镜图的 loading set，key: 'char-{id}' | 'scene-{id}' | 'prop-{id}'
 const regenSbImagesForAsset = reactive(new Set())
 const regenSbImagesProgress = ref({})
@@ -5988,7 +5992,18 @@ function onUniversalSegmentToGrokVideoTags(sb) {
   ElMessage.success('已改为 Grok 视频占位符格式（<IMAGE_N>）')
 }
 
-function onUniversalSegmentPromptMenu(sb, cmd) {
+async function onUniversalSegmentPromptMenu(sb, cmd) {
+  if (cmd === 'adopt') {
+    try {
+      const row = await storyboardsAPI.update(sb.id, { universal_segment_text: sbUniversalSegmentTrimmed(sb),
+        confirm_universal_draft: true, expected_universal_segment_text: sb.universal_segment_text ?? null,
+        expected_action: sb.action ?? null, expected_result: sb.result ?? null })
+      sb.universal_segment_text = row.universal_segment_text
+      sbUniversalSegmentText.value[sb.id] = row.universal_segment_text
+      ElMessage.success('已采用当前分拍')
+    } catch (e) { ElMessage.error(e.message || '采用分拍失败') }
+    return
+  }
   if (cmd === 'generate') onGenerateUniversalSegmentPrompt(sb, {})
   else if (cmd === 'generate-force') onGenerateUniversalSegmentPrompt(sb, { forceWithoutReferenceImages: true })
   else if (cmd === 'polish') onPolishUniversalSegmentPromptStream(sb, {})
@@ -6001,7 +6016,7 @@ async function onGenerateUniversalSegmentPrompt(sb, opts = {}) {
   if (!sb?.id || generatingUniversalSegmentIds.has(sb.id)) return
   const force = !!opts.forceWithoutReferenceImages
   generatingUniversalSegmentIds.add(sb.id)
-  let live = ''
+  universalDraftPreview[sb.id] = ''
   try {
     const durationSec = universalSegmentDurationSecForSb(sb)
     const data = await storyboardsAPI.generateUniversalSegmentPromptStream(
@@ -6012,8 +6027,7 @@ async function onGenerateUniversalSegmentPrompt(sb, opts = {}) {
         ...(force ? { force_without_reference_images: true } : {}),
       },
       (delta) => {
-        live += delta
-        sbUniversalSegmentText.value = { ...sbUniversalSegmentText.value, [sb.id]: live }
+        universalDraftPreview[sb.id] += delta
       }
     )
     const text = (data?.universal_segment_text ?? '').toString().trim()
@@ -6031,6 +6045,7 @@ async function onGenerateUniversalSegmentPrompt(sb, opts = {}) {
   } catch (e) {
     ElMessage.error(e.message || '生成失败，请检查文本模型配置')
   } finally {
+    delete universalDraftPreview[sb.id]
     generatingUniversalSegmentIds.delete(sb.id)
   }
 }
@@ -6045,7 +6060,7 @@ async function onPolishUniversalSegmentPromptStream(sb, opts = {}) {
     return
   }
   generatingUniversalSegmentIds.add(sb.id)
-  let live = ''
+  universalDraftPreview[sb.id] = ''
   try {
     const durationSec = universalSegmentDurationSecForSb(sb)
     const data = await storyboardsAPI.polishUniversalSegmentPromptStream(
@@ -6057,8 +6072,7 @@ async function onPolishUniversalSegmentPromptStream(sb, opts = {}) {
         ...(force ? { force_without_reference_images: true } : {}),
       },
       (delta) => {
-        live += delta
-        sbUniversalSegmentText.value = { ...sbUniversalSegmentText.value, [sb.id]: live }
+        universalDraftPreview[sb.id] += delta
       }
     )
     const text = (data?.universal_segment_text ?? '').toString().trim()
@@ -6076,6 +6090,7 @@ async function onPolishUniversalSegmentPromptStream(sb, opts = {}) {
   } catch (e) {
     ElMessage.error(e.message || '润色失败，请检查文本模型配置')
   } finally {
+    delete universalDraftPreview[sb.id]
     generatingUniversalSegmentIds.delete(sb.id)
   }
 }
@@ -6115,7 +6130,7 @@ async function polishUniversalSegmentsAfterGeneration(opts = {}) {
       if (!draft) continue
 
       generatingUniversalSegmentIds.add(sb.id)
-      let live = ''
+      universalDraftPreview[sb.id] = ''
       try {
         const durationSec = universalSegmentDurationSecForSb(sb)
         const data = await storyboardsAPI.polishUniversalSegmentPromptStream(
@@ -6127,8 +6142,7 @@ async function polishUniversalSegmentsAfterGeneration(opts = {}) {
             force_without_reference_images: true,
           },
           (delta) => {
-            live += delta
-            sbUniversalSegmentText.value = { ...sbUniversalSegmentText.value, [sb.id]: live }
+            universalDraftPreview[sb.id] += delta
           }
         )
         const text = (data?.universal_segment_text ?? '').toString().trim()
@@ -6146,6 +6160,7 @@ async function polishUniversalSegmentsAfterGeneration(opts = {}) {
         if (onShotError) onShotError(sb, msg)
         else ElMessage.warning(`分镜 #${sb.storyboard_number ?? sb.id} 全能润色失败：${msg}`)
       } finally {
+        delete universalDraftPreview[sb.id]
         generatingUniversalSegmentIds.delete(sb.id)
       }
       await pipelineRest()
@@ -6187,10 +6202,9 @@ function sbCanSubmitVideo(sb) {
 }
 
 /** 提交给视频 API 的文案：全能模式有片段描述时仅提交该段（不拼接 video_prompt，避免动作/旁白盖过 @图片 等编排） */
-function buildSbVideoPromptForApi(sb, { preferClassicPrompt = false } = {}) {
+function buildSbVideoPromptForApi(sb) {
   const vp = (sb.video_prompt || '').toString().trim()
   const seg = sbUniversalSegmentTrimmed(sb)
-  if (preferClassicPrompt) return vp || seg
   if (isSbUniversalMode(sb.id)) {
     if (seg) return seg
     return vp
@@ -6619,11 +6633,10 @@ async function onGenerateSbVideo(sb) {
     if (!universalOmniApi && vLast && referenceUrls && !referenceUrls.includes(vLast)) {
       referenceUrls = [...referenceUrls, vLast]
     }
-    const preferClassicPrompt = universal && !universalOmniApi
     const res = await videosAPI.create({
       drama_id: dramaId.value,
       storyboard_id: sb.id,
-      prompt: buildSbVideoPromptForApi(sb, { preferClassicPrompt }),
+      prompt: buildSbVideoPromptForApi(sb),
       image_url: universalOmniApi ? undefined : ((vFirst || absoluteUrl) || undefined),
       first_frame_url: universalOmniApi ? undefined : (vFirst || absoluteUrl || undefined),
       last_frame_url: universalOmniApi ? undefined : vLast,

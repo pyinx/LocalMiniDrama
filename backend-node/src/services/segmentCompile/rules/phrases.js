@@ -24,6 +24,7 @@ module.exports = {
     `${who}在${pos}，${facing}，眼睛看着${gaze}${pose ? `，${pose}` : ''}${holding ? `，手里拿着${holding}` : ''}。`,
   movement: (m) => `运镜：${[m.type, m.speed, m.direction].filter(Boolean).join('，')}。`,
   action: (text) => `${text}。`,
+  event: (text) => `本拍的叙事变化：${text}。`,
   voice: (who, desc) => `${who}的嗓音：${desc}。`,
   sayNative: (who, text, delivery) => `${who}${delivery ? `${delivery}地` : ''}开口，嘴型与每个字对齐："${text}"，说完闭上嘴。`,
   innerNative: (who, text) => `${who}嘴没有动，画面里响起${who}自己心里的声音："${text}"。`,

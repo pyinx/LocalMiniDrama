@@ -12,7 +12,7 @@ for (const [route, stream] of [
   ['polishUniversalSegmentStream', true],
 ]) {
   describe(route, () => {
-    for (const outcome of ['IR takes ownership', 'storyboard is deleted', 'legacy storyboard remains']) {
+    for (const outcome of ['IR takes ownership', 'storyboard is deleted', 'action changes', 'legacy storyboard remains']) {
       it(outcome, async (t) => {
         const { db, ids } = createIrTestDb();
         t.after(() => db.close());
@@ -30,7 +30,7 @@ for (const [route, stream] of [
         });
         const request = routes[route](req, res);
         assert.equal(provider.mock.callCount(), 1);
-        if (outcome === 'legacy storyboard remains') {
+        if (outcome === 'action changes') {
           db.prepare('UPDATE storyboards SET action=? WHERE id=?').run('助理把钢笔递给林远。', id);
         }
         if (outcome === 'IR takes ownership') storyboardService.saveSegmentIr(db, noopLog, id, sampleIr(ids));
@@ -42,19 +42,20 @@ for (const [route, stream] of [
         if (outcome === 'legacy storyboard remains') {
           const text = stream ? events.at(-1).universal_segment_text : res.body.data.universal_segment_text;
           assert.match(text, /人事推来协议/);
-          assert.match(text, /助理把钢笔递给林远/);
           assert.doesNotMatch(text, /旧动作/);
           assert.equal(readRow().universal_segment_text, text);
           if (stream) assert.deepEqual(events.map((e) => e.type), ['delta', 'done']);
         } else {
           const owned = outcome === 'IR takes ownership';
+          const changed = outcome === 'action changes';
+          const code = owned ? 'segment_ir_owned' : changed ? 'storyboard_draft_changed' : 'NOT_FOUND';
           if (stream) {
             assert.deepEqual(events.map((e) => e.type), ['delta', 'error']);
-            assert.equal(events[1].code, owned ? 'segment_ir_owned' : 'NOT_FOUND');
+            assert.equal(events[1].code, code);
             assert.ok(res.headersSent);
           } else {
-            assert.equal(res.statusCode, owned ? 409 : 404);
-            assert.equal(res.body.error.code, owned ? 'segment_ir_owned' : 'NOT_FOUND');
+            assert.equal(res.statusCode, owned || changed ? 409 : 404);
+            assert.equal(res.body.error.code, code);
           }
           assert.deepEqual(readRow(), before);
         }

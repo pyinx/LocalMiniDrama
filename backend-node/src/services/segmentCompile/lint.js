@@ -5,6 +5,8 @@
  * - 台词保真（警告）：IR 台词与本集剧本比对。
  */
 
+const { promptChars } = require('../modelCapabilities');
+
 const TEXT_RULES = [
   { code: 'pronoun_reference', re: /(?<![其吉])(他们|她们|他|她)|那人|对方/g, msg: '用代词指人，模型可能当成新人物；请写人物名' },
   { code: 'refers_previous', re: /接上一段|接上段|同上|延续刚才|如前所述/g, msg: '模型看不到上一段，请把起始状态写出来' },
@@ -51,8 +53,8 @@ function lintText(text, path = '') {
 function lintSegment(ir, compiled, caps) {
   const findings = freeTextFields(ir).flatMap(([path, text]) => lintText(text, path));
   if (compiled) {
-    if (compiled.prompt.length > caps.maxPromptChars) {
-      findings.push({ level: 'block', code: 'prompt_too_long', where: {}, msg: `prompt ${compiled.prompt.length} 字超过上限 ${caps.maxPromptChars}` });
+    if (promptChars(compiled.prompt) > caps.maxPromptChars && !compiled.findings?.some(f => f.code === 'prompt_too_long')) {
+      findings.push({ level: 'block', code: 'prompt_too_long', where: {}, msg: `prompt ${promptChars(compiled.prompt)} 字超过上限 ${caps.maxPromptChars}` });
     }
     if (compiled.refs.length > caps.refImages) {
       findings.push({ level: 'block', code: 'too_many_references', where: {}, msg: `参考图 ${compiled.refs.length} 张超过上限 ${caps.refImages}` });

@@ -2,7 +2,7 @@
 const taskService = require('./taskService');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
-const { enforceUniversalStyleLine, withStoryboardAction } = require('./universalOmniMultiBeatFormat');
+const { buildFallbackUniversalMultiBeatText, enforceUniversalStyleLine, universalDraftWithoutActionNote } = require('./universalOmniMultiBeatFormat');
 const { SegmentIrOwnedError } = require('./segmentIr/project');
 const { readStoredIr } = require('./segmentIr/schema');
 const { syncStoryboardCharacters } = require('./imageService');
@@ -82,86 +82,6 @@ function logDebugStoryboardPrompts(log, tag, userPrompt, systemPrompt) {
   }
 }
 
-/** 将 lighting_style 枚举转为中文布光提示（兜底用） */
-function lightingStyleHintZh(code) {
-  const m = {
-    natural: '自然窗光或环境散射光',
-    front: '正面柔光面部受光均匀',
-    side: '侧光约45°勾勒轮廓',
-    backlit: '逆光轮廓光发丝边缘发亮',
-    top: '顶光压暗眼窝',
-    under: '底光或脚光非常规氛围',
-    soft: '软光低反差过渡柔和',
-    dramatic: '戏剧高反差主辅分明',
-    golden_hour: '金色时刻暖斜阳',
-    blue_hour: '蓝调时刻冷环境光',
-    night: '夜景人工点光源',
-    neon: '霓虹混合色温',
-  };
-  return m[String(code || '').trim()] || '主光方向明确侧光或窗光';
-}
-
-/** 按时长与已有运镜字段拼灵境式「运镜链」（至少两步，强调摄影机在动） */
-function buildCameraMotionChain(movement, shotType, durationSec) {
-  const dur = Math.max(1, Number(durationSec) || 5);
-  const mv = String(movement || '').trim();
-  const st = String(shotType || '').trim();
-  const parts = [];
-  if (dur >= 12) {
-    parts.push('定镜约1秒建立空间');
-    if (/跟|追随|尾随/.test(mv)) parts.push('侧后方跟拍主体位移');
-    else if (/摇/.test(mv)) parts.push(`${mv || '轻摇'}拓展画幅信息`);
-    else parts.push('缓推轨贴近动作核心');
-    parts.push('横移从前景遮挡或门框一侧滑出拓宽视野带出纵深与环境细节');
-  } else if (dur >= 8) {
-    parts.push('定镜');
-    parts.push(mv && !/^固定|^定镜/.test(mv) ? mv : '缓推轨由远及近');
-    parts.push('微横移或轻摇让背景纵深与环境细节可读');
-  } else if (dur >= 5) {
-    parts.push('定镜起幅');
-    parts.push(mv || '缓推轨或短跟拍强化动线');
-  } else {
-    parts.push(mv || '短跟拍或微推');
-  }
-  if ((st.includes('远') || st.includes('全景')) && !parts.some((p) => /推|移|跟|摇/.test(p))) {
-    parts.push('缓推轨向事件中心');
-  }
-  const chain = [...new Set(parts)].filter(Boolean).join('，');
-  return chain || '定镜，缓推轨';
-}
-
-/** 全能分镜：模型未返回 universal_segment_text 时的灵境式高密度单行（视频时间轴 + 运镜链） */
-function buildFallbackUniversalSeedanceLine(sb, d, styleHint) {
-  const act = (d.action || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-  const res = (d.result || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-  const emo = (d.emotion || sb.emotion || '').replace(/\s+/g, ' ').trim().slice(0, 24);
-  const atm = (sb.atmosphere || '').replace(/\s+/g, ' ').trim().slice(0, 100);
-  const shotBits = [d.shotType, d.angle].filter(Boolean).join('，').trim();
-  const loc = [sb.location, sb.time].filter(Boolean).join('，').trim() || '叙事空间';
-  const dur = Math.max(1, Number(d.durationSec) || normalizeDuration(sb.duration) || 5);
-  const lightZh = lightingStyleHintZh(d.lightingStyle);
-  const dof = d.depthOfField === 'extreme_shallow' ? '浅景深前景虚化明显' : d.depthOfField === 'shallow' ? '浅景深背景柔化' : d.depthOfField === 'deep' ? '深焦前后景均清晰' : d.depthOfField === 'medium' ? '景深适中' : '景深随景别可感';
-  const shotNum = Math.max(1, Number(d.shotNumber) || 1);
-  const link = shotNum <= 1 ? '开篇情绪奠基' : '延续上一镜动势与视线';
-  const motionCore =
-    act ||
-    '在镜内时长里完成一段可感知的动作阶段变化，含走位或身体重心的转移，避免单姿势摆拍';
-  const emoParen = emo ? `（${emo}）` : '（专注投入）';
-  const fg = atm ? `${atm.slice(0, 42)}与主体相关的虚化层次` : '与动作相关的近景细节或桌面器物';
-  const mg = act ? '主体动作与表情核心区' : '主体占据画面叙事中心';
-  const bg = loc ? `${loc}的环境延展与氛围层次` : '环境纵深与空间气氛';
-  const lightBlock = `[${lightZh}；结合${loc}，建议色温具象化如4500K-5600K区间择一；明暗比约2:1至3:1；${dof}]`;
-  const camChain = buildCameraMotionChain(d.movement, d.shotType, dur);
-  const narrDyn = `约${dur}秒内——在${loc}，@人物1${act ? `先后：${act}` : '持续推进戏内动作'}，${res ? `阶段收束为：${res}` : '动作与视线随时间有阶段推进'}；镜头以「${camChain}」配合人物动线，读出空间纵深与时间流逝`;
-  const lensBlock = `运镜链：${camChain}；景别机位：${shotBits || '中景，平视'}，三分法或对角线择一（结尾动势：[${res || '视线或身体动线指向下一个节拍，动势渐收可衔接下镜'}]）`;
-  const sfx = `环境层-[与${loc}一致的环境声底与远处细节] 动作层-[与动作同步的物理接触声] 情绪层-[无旋律仅以空间混响与材质细微声烘托情绪张力]`;
-  const styleTail = (styleHint && String(styleHint).trim()) || '电影感叙事光色';
-  const dia = (d.dialogue || '').trim().replace(/"/g, "'");
-  let line = `主体：@人物1${emoParen}[朝向：依轴线面向戏中对象或画左/画右择一并保持统一] 正在 ${motionCore}（与上镜衔接：${link}） 叙事动态：${narrDyn} 空间：前景-[${fg}] 中景-[${mg}] 背景-[${bg}] 光影：${lightBlock} 镜头：${lensBlock}`;
-  if (dia) line += ` 台词：第1秒 @人物1："${dia.slice(0, 120)}"`;
-  line += ` 音效：${sfx} ${styleTail} [禁BGM][禁字幕]`;
-  return line.replace(/\r?\n/g, ' ');
-}
 
 function getStoryboardsForEpisode(db, episodeId) {
   const rows = episodeStoryboardRows(db, episodeId);
@@ -420,26 +340,10 @@ function deriveStoryboardFieldsFromAi(sb, style, videoRatio, opts = {}) {
     universalSegmentText = enforceUniversalStyleLine(universalSegmentText, opts.universalStyleZh || style);
   }
   if (universalOmni && !universalSegmentText) {
-    universalSegmentText = buildFallbackUniversalSeedanceLine(
-      sb,
-      {
-        shotNumber,
-        durationSec,
-        shotType,
-        movement,
-        angle,
-        action,
-        dialogue,
-        result,
-        emotion,
-        lightingStyle,
-        depthOfField,
-      },
-      style
-    );
+    universalSegmentText = buildFallbackUniversalMultiBeatText(sb, { shotType, angle, movement, action, result, dialogue, narration, durationSec }, opts.universalStyleZh || style);
   }
   const creationMode = universalOmni ? 'universal' : 'classic';
-  universalSegmentText = universalOmni ? withStoryboardAction(universalSegmentText, action) : null;
+  universalSegmentText = universalOmni ? universalDraftWithoutActionNote(universalSegmentText) : null;
   return {
     shotNumber,
     title,
@@ -478,7 +382,7 @@ function updateStoryboardRowFromDerived(db, existingId, episodeIdNum, d, sb, now
       image_prompt = ?, video_prompt = ?, characters = ?,
       shot_type = ?, angle = ?, angle_h = ?, angle_v = ?, angle_s = ?, movement = ?,
       lighting_style = ?, depth_of_field = ?, segment_index = ?, segment_title = ?,
-      creation_mode = ?, universal_segment_text = ?,
+      creation_mode = ?, universal_segment_text = ?, universal_beat_signature = NULL,
       updated_at = ?
      WHERE id = ? AND episode_id = ? AND deleted_at IS NULL`
   ).run(
@@ -792,7 +696,7 @@ function buildContinuationPrompt(originalUserPrompt, alreadySaved, lastShotNum, 
     ? '\n- 每条新增分镜必须含非空字符串 narration（至少一句解说，与首次任务一致；禁止留空）'
     : '';
   const uniLine = universalOmni
-    ? '\n- 每条新增分镜必须含 creation_mode:"universal" 与非空 universal_segment_text（单行：须含「叙事动态」时间线+「镜头」运镜链至少两步如定镜/缓推轨/横移从遮挡后滑出；按 duration 秒写视频动势，禁止静帧式描写；与首轮要求一致）'
+    ? '\n- 每条新增分镜沿用本次系统消息的多节拍格式、参考图规则与创作约束，填写 creation_mode:"universal" 和 universal_segment_text。'
     : '';
   // 全量已生成分镜摘要（每行一个，仅 shot_number + segment + title）
   const allSummary = alreadySaved.map((sb) => {
@@ -1617,7 +1521,7 @@ function updateStoryboardAsSplitSegment(db, sbId, baseRow, plan, now) {
   db.prepare(
     `UPDATE storyboards SET
       title = ?, duration = ?, dialogue = ?, narration = ?, action = ?, result = ?,
-      shot_type = ?, movement = ?, universal_segment_text = NULL,
+      shot_type = ?, movement = ?, universal_segment_text = NULL, universal_beat_signature = NULL,
       video_prompt = NULL, video_url = NULL, audio_local_path = NULL, adopted_sound = NULL,
       narration_audio_local_path = NULL, status = 'pending', updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`

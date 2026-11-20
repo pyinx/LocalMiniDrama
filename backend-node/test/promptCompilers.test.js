@@ -147,6 +147,25 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
     assert.ok(out.findings.some((f) => f.level === 'block' && f.code === 'prompt_too_long'));
   });
 
+  it('preserves the complete beat across model budgets', () => {
+    for (const target of Object.values(TARGETS)) {
+      for (const action of ['水位越过刻线，又退到线下', '球碰到挡板;沿来路弹回', '舞者伸出左手，指尖停在门外']) {
+        const ir = irOf({ tone: '' });
+        Object.assign(ir.shots[1], { action, event: '警报解除', sfx: ['画外铃响🔔'] });
+        const ctx = ctxFor(target);
+        const full = compileSegment(ir, ctx).prompt;
+        assert.ok(full.includes('警报解除'));
+        for (const extra of [0, -1]) {
+          const result = compileSegment(ir, { ...ctx, caps: { ...ctx.caps, maxPromptChars: [...full].length + extra } });
+          for (const fact of [action, '警报解除', '画外铃响']) assert.ok(result.prompt.includes(fact));
+          const block = result.findings.find(f => f.code === 'prompt_too_long');
+          if (extra === 0) assert.equal(block, undefined);
+          else assert.ok(block?.level === 'block' && /镜头/.test(block.msg) && block.where.shot != null);
+        }
+      }
+    }
+  });
+
   it('orders and caps references', () => {
     const ir = irOf({
       cast: [
