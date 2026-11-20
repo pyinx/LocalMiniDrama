@@ -350,6 +350,11 @@ function ensureAllColumns(database) {
   // --- video_generations ---
   ensureColumns(database, 'video_generations', [
     { name: 'drama_id',             type: 'INTEGER' },
+    { name: 'video_config_id',      type: 'INTEGER' },
+    { name: 'video_protocol',       type: 'TEXT' },
+    { name: 'video_target_hash',    type: 'TEXT' },
+    { name: 'video_request_hash',   type: 'TEXT' },
+    { name: 'media_check',          type: 'TEXT' },
     { name: 'compiled_json',        type: 'TEXT' },     // 结构化分镜编译结果（refs/请求开关/findings），异步生成直接使用
     { name: 'run_key',              type: 'TEXT' },     // 即梦渲染：本次提交的运行标识
     { name: 'storyboard_id',        type: 'INTEGER' },

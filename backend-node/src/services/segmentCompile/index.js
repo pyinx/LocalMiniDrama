@@ -109,7 +109,7 @@ function compileSegment(ir, ctx) {
     byPriority.slice(caps.refImages).forEach((r) => add('warn', 'reference_dropped', `参考图超过模型上限 ${caps.refImages} 张，「${r.name}」改用文字指代`, { alias: r.alias }));
     refs = kept
       .sort((x, y) => EMIT[x.kind] - EMIT[y.kind] || x.order - y.order)
-      .map((r, i) => ({ ...r, token: family === 'jimeng' ? `{{${r.alias}}}` : `@图片${i + 1}` }));
+      .map((r, i) => ({ ...r, token: family === 'jimeng' ? `{{${r.alias}}}` : `${caps.refToken || '@图片'}${i + 1}` }));
   }
   const tokens = Object.fromEntries(refs.map((r) => [r.alias, r.token]));
   const who = (alias) => tokens[alias] || names[alias] || alias;

@@ -1007,6 +1007,7 @@
           <div class="sb-ctrl-bar">
             <span class="sb-ctrl-num">{{ i + 1 }}</span>
             <span class="sb-ctrl-title">{{ sb.title || '未命名分镜' }}</span>
+            <span class="sb-ctrl-duration">计划时长 {{ formatStoryboardDuration(sb.duration) }}</span>
             <el-tag v-if="sb.movement" size="small" effect="plain" type="info" class="sb-movement-tag">{{ getMovementLabel(sb.movement) }}</el-tag>
             <el-button size="small" plain class="sb-ctrl-btn sb-ctrl-config-btn" @click="onOpenVideoParamsDialog(sb)">⚙ 分镜配置</el-button>
             <el-button
@@ -1218,7 +1219,7 @@
                     <el-tooltip placement="top" :show-after="280" :show-arrow="false" popper-class="sb-universal-tooltip-popper">
                       <template #content>
                         <div class="sb-universal-tooltip">
-                          全能生视频链路（<strong>AI 配置 · 视频</strong>：接口规范 <code>kling_omni</code> / <code>volcengine_omni</code>，或厂商「低价 Seedance2」，或勾选「确认支持全能模式」）：此处为提交主提示词；只要本框有内容，生视频时<strong>只</strong>发送这段，不会拼接下方「视频提示词」里的动作/对话/旁白。参考图顺序一般为：场景 → 角色（多张）→ 物品（<strong>不含</strong>经典分镜中间主图）；请用 <strong>@图片1</strong>、<strong>@图片2</strong>…（<strong>@图片N 后建议加半角空格</strong>）对应参考图，勿用 @姓名 指图；有场景图时 <strong>@图片1</strong> 只表环境，人物从 <strong>@图片2</strong> 起。若场景参考是<strong>四宫格/多视角拼图</strong>，仅借空间与氛围，须在文案中写明<strong>单镜头完整画幅、禁止分屏宫格</strong>，避免成片模仿拼图布局。全能提示词下拉中「生成」会按<strong>本条分镜总时长</strong>与本集剧本、镜序、邻镜信息，自动决定子分镜数 M（第2行「由以下M个分镜…」），第4行起为「分镜1：T1秒:」…多行，且各段秒数之和等于本镜时长；第3行仍为环境/参考图约束；「生成」与「润色」均为<strong>流式输出</strong>到本框；「润色」在此基础上增强。若本框留空，则退回仅用「视频提示词」。
+                          全能生视频链路（<strong>AI 配置 · 视频</strong>：接口规范 <code>kling_omni</code> / <code>volcengine_omni</code>、万相 2.7 R2V / 3.0，或厂商「低价 Seedance2」，或勾选「确认支持全能模式」）：此处为提交主提示词；只要本框有内容，生视频时<strong>只</strong>发送这段，不会拼接下方「视频提示词」里的动作/对话/旁白。参考图顺序一般为：场景 → 角色（多张）→ 物品（<strong>不含</strong>经典分镜中间主图）；请用 <strong>@图片1</strong>、<strong>@图片2</strong>…（<strong>@图片N 后建议加半角空格</strong>）对应参考图，勿用 @姓名 指图；有场景图时 <strong>@图片1</strong> 只表环境，人物从 <strong>@图片2</strong> 起。若场景参考是<strong>四宫格/多视角拼图</strong>，仅借空间与氛围，须在文案中写明<strong>单镜头完整画幅、禁止分屏宫格</strong>，避免成片模仿拼图布局。全能提示词下拉中「生成」会按<strong>本条分镜总时长</strong>与本集剧本、镜序、邻镜信息，自动决定子分镜数 M（第2行「由以下M个分镜…」），第4行起为「分镜1：T1秒:」…多行，且各段秒数之和等于本镜时长；第3行仍为环境/参考图约束；「生成」与「润色」均为<strong>流式输出</strong>到本框；「润色」在此基础上增强。若本框留空，则退回仅用「视频提示词」。
                         </div>
                       </template>
                       <el-icon class="sb-universal-hint-icon" tabindex="0" role="img" aria-label="片段说明">
@@ -2455,7 +2456,7 @@
             <el-radio-button value="classic">经典分镜</el-radio-button>
             <el-radio-button value="universal">全能模式</el-radio-button>
           </el-radio-group>
-          <div class="vp-mode-hint">全能模式：中间为片段描述；生视频时使用 <strong>AI 配置里当前启用的视频</strong>（接口规范 <code>kling_omni</code> / <code>volcengine_omni</code>，或「低价 Seedance2」，或勾选「确认支持全能模式」）并合并场景/角色/道具等参考图（不含经典分镜主图）。经典字段保留，可随时切回。</div>
+          <div class="vp-mode-hint">全能模式：中间为片段描述；生视频时使用 <strong>AI 配置里当前启用的视频</strong>（接口规范 <code>kling_omni</code> / <code>volcengine_omni</code>、万相 2.7 R2V / 3.0，或「低价 Seedance2」，或勾选「确认支持全能模式」）并合并场景/角色/道具等参考图（不含经典分镜主图）。经典字段保留，可随时切回。</div>
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
@@ -2687,6 +2688,7 @@
 
 <script setup>
 import { previousStoryboard, previousTakeUrl } from '@/utils/mediaUrl'
+import { isAutomaticallyUsableVideo, isMediaCheckFailure, mediaCheckIssueMessages, omniReferenceUrls } from '@/utils/storyboardMedia'
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
 import DeliveryLoudness from '@/components/DeliveryLoudness.vue'
 import EpisodeSeamEditor from '@/components/EpisodeSeamEditor.vue'
@@ -2704,7 +2706,7 @@ import { useGenerationTaskStore, GEN_RESOURCE } from '@/stores/generationTaskSto
 import { syncGeneratingSetsFromStore, buildEpisodeContext, buildExtractTaskMeta, isEpisodeExtractRunning } from '@/composables/useGenerationTaskSync'
 import { dramaAPI } from '@/api/drama'
 import { generationAPI } from '@/api/generation'
-import { aiAPI } from '@/api/ai'
+import { aiAPI, getActiveVideoAiConfig, invalidateActiveVideoAiConfigCache } from '@/api/ai'
 import { characterAPI } from '@/api/characters'
 import { propAPI } from '@/api/props'
 import { sceneAPI } from '@/api/scenes'
@@ -2720,7 +2722,7 @@ import { generationSettingsAPI } from '@/api/prompts'
 import { parseScriptIntoEpisodes } from '@/utils/scriptEpisodes'
 import NovelImportDialog from '@/components/NovelImportDialog.vue'
 import StoryProposalReview from '@/components/StoryProposalReview.vue'
-import { canUseUniversalOmniVideoApi } from '@/utils/videoOmniSupport'
+import { canUseUniversalOmniVideoApi, videoModelNameFromAiConfig, wanModeForConfig, wanStoryboardUsesText, wanTextFields } from '@/utils/videoOmniSupport'
 import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
 import StylePickerButton from '@/components/StylePickerButton.vue'
 import AIConfigContent from '@/components/AIConfigContent.vue'
@@ -2733,7 +2735,7 @@ import ScriptReviewDialog from '@/components/ScriptReviewDialog.vue'
 import { jimengOptionState } from '@/utils/segmentUi'
 import FindingList from '@/components/FindingList.vue'
 import { videoMergesAPI } from '@/api/videoMerges'
-import { groupFindings, findingWhere } from '@/utils/segmentUi'
+import { groupFindings, findingWhere, formatStoryboardDuration } from '@/utils/segmentUi'
 import {
   generationStyleOptions,
   getStylePromptEn,
@@ -3846,15 +3848,30 @@ function getSbAllVideos(storyboardId) {
   if (!Array.isArray(list)) return []
   return list.filter((i) => i.status === 'completed' && recordHasPlayableVideoUrl(i))
 }
+function getVideoById(storyboardId, id) {
+  if (id == null) return null
+  return (sbVideos.value[storyboardId] || []).find(item => item.id === id) || null
+}
+function qualityFailureMessage(...records) {
+  const failed = records.find(isMediaCheckFailure)
+  return failed ? mediaCheckIssueMessages(failed).join('；') : ''
+}
 /** 各播放入口使用服务器解析出的采用片。 */
 function getSbVideo(storyboardId) {
   const sb = (store.storyboards || []).find(b => b.id === storyboardId)
   if (sb && 'resolved_video' in sb) return sb.resolved_video
-  return getSbAllVideos(storyboardId)[0] || null
+  return getSbAllVideos(storyboardId).find(isAutomaticallyUsableVideo) || null
 }
-function needsBatchVideo(sb) {
-  if (getSbVideo(sb.id) || getSbAllVideos(sb.id).length) return false
-  if (isSbUniversalMode(sb.id)) return sbCanSubmitVideo(sb) && collectSbOmniReferenceAbsoluteUrls(sb).length > 0
+function needsBatchVideo(sb, cfg) {
+  if (getSbVideo(sb.id)) return false
+  if (sb.adopted_video_generation_id != null) return false
+  // A null resolved_video means the backend found no eligible automatic take.
+  // For older responses without that field, preserve a completed take as before.
+  if (!('resolved_video' in sb) && getSbAllVideos(sb.id).some(isAutomaticallyUsableVideo)) return false
+  const universal = isSbUniversalMode(sb.id)
+  const refs = universal ? collectSbOmniReferenceAbsoluteUrls(sb) : []
+  if (sb.segment_ir || canUseWanTextForShot(sb, cfg, universal, refs)) return sbCanSubmitVideo(sb)
+  if (universal) return sbCanSubmitVideo(sb) && refs.length > 0
   return !!getSbFirstFrameUrl(sb)
 }
 /** 取下一个分镜（按 storyboard_number 顺序） */
@@ -5496,6 +5513,11 @@ function getSbLastFrameUrl(sb) {
   return ''
 }
 
+function canUseWanTextForShot(sb, cfg, universal, refs) {
+  const frame = getSbFirstFrameUrl(sb) || (storyboardUseFirstLastFrame.value && getSbLastFrameUrl(sb))
+  return wanStoryboardUsesText(cfg, universal, refs, frame)
+}
+
 /** 经典模式视频：首帧 URL（连贯帧可覆盖首帧）+ 可选尾帧 */
 function sbVideoFirstLastUrls(sb, universal, contiguityFirstFrameUrl) {
   let first =
@@ -6144,7 +6166,7 @@ async function getMainImageUrlForVideo(sb) {
 function toAbsoluteImageUrl(url) {
   if (!url || !String(url).trim()) return ''
   const s = String(url).trim()
-  if (s.startsWith('http://') || s.startsWith('https://')) return s
+  if (/^(https?:\/\/|oss:\/\/|data:image\/)/i.test(s)) return s
   const base = (baseUrl.value || '').replace(/\/$/, '') || (typeof window !== 'undefined' ? window.location.origin : '')
   return base ? base + (s.startsWith('/') ? s : '/' + s) : s
 }
@@ -6216,23 +6238,7 @@ function getSbUniversalOmniRefSlots(sb) {
 /** 全能模式：场景/角色/物品 → 绝对 URL 列表（不含经典分镜中间主图；供可灵 Omni / 火山多图参考，最多 10，方舟侧最多取 9 张） */
 function collectSbOmniReferenceAbsoluteUrls(sb) {
   if (!sb?.id) return []
-  const urls = []
-  const seen = new Set()
-  function pushAbs(u) {
-    const abs = toAbsoluteImageUrl(u)
-    if (!abs || seen.has(abs)) return
-    seen.add(abs)
-    urls.push(abs)
-  }
-  const scene = getSbSelectedScene(sb.id)
-  if (scene && hasAssetImage(scene)) pushAbs(assetImageUrl(scene))
-  for (const c of getSbSelectedCharacters(sb.id)) {
-    if (hasAssetImage(c)) pushAbs(assetImageUrl(c))
-  }
-  for (const p of getSbSelectedProps(sb.id)) {
-    if (hasAssetImage(p)) pushAbs(assetImageUrl(p))
-  }
-  return urls.slice(0, 10)
+  return omniReferenceUrls(getSbSelectedScene(sb.id), getSbSelectedCharacters(sb.id), getSbSelectedProps(sb.id), toAbsoluteImageUrl)
 }
 
 /** 非 Seedance2 全能降级：仅场景参考图（若有） */
@@ -6244,32 +6250,6 @@ function collectSbSceneOnlyReferenceAbsoluteUrls(sb) {
     return abs ? [abs] : []
   }
   return []
-}
-
-let activeVideoAiConfigCache = null
-let activeVideoAiConfigCacheAt = 0
-const ACTIVE_VIDEO_AI_CONFIG_TTL_MS = 15000
-
-function invalidateActiveVideoAiConfigCache() {
-  activeVideoAiConfigCache = null
-  activeVideoAiConfigCacheAt = 0
-}
-
-async function getActiveVideoAiConfig() {
-  const now = Date.now()
-  if (activeVideoAiConfigCache && now - activeVideoAiConfigCacheAt < ACTIVE_VIDEO_AI_CONFIG_TTL_MS) {
-    return activeVideoAiConfigCache
-  }
-  try {
-    const rows = await aiAPI.list('video')
-    const list = Array.isArray(rows) ? rows : []
-    const active = list.filter((c) => c.is_active !== false)
-    activeVideoAiConfigCache = active.find((c) => c.is_default) || active[0] || null
-  } catch {
-    activeVideoAiConfigCache = null
-  }
-  activeVideoAiConfigCacheAt = now
-  return activeVideoAiConfigCache
 }
 
 async function confirmUniversalNonSeedance2Video() {
@@ -6554,9 +6534,19 @@ async function onGenerateSbVideo(sb) {
   }
   const universal = isSbUniversalMode(sb.id)
   let universalOmniApi = universal
-  if (universal) {
-    const videoCfg = await getActiveVideoAiConfig()
+  const videoCfg = await getActiveVideoAiConfig()
+  const textOnly = canUseWanTextForShot(sb, videoCfg, universal, universal && collectSbOmniReferenceAbsoluteUrls(sb))
+  if (universal && !textOnly && !sb.segment_ir) {
+    const protocol = String(videoCfg?.api_protocol || videoCfg?.provider || '').trim().toLowerCase()
+    if (!sb.segment_ir && protocol === 'dashscope' && videoModelNameFromAiConfig(videoCfg).toLowerCase() === 'wan2.2-kf2v-flash') {
+      ElMessage.warning('当前万相模型只生成 5 秒无声视频，且不支持全能参考。请换用支持多图参考的视频模型。')
+      return
+    }
     if (!canUseUniversalOmniVideoApi(videoCfg)) {
+      if (wanModeForConfig(videoCfg)) {
+        ElMessage.warning('当前万相型号无法按多图参考生成，请使用 wan2.7-r2v 或 wan3.0-video。')
+        return
+      }
       try {
         await confirmUniversalNonSeedance2Video()
       } catch {
@@ -6576,7 +6566,11 @@ async function onGenerateSbVideo(sb) {
   } else {
     hasAnyImage = hasClassicFrame
   }
-  if (!hasAnyImage) {
+  if (!hasAnyImage && !textOnly && !sb.segment_ir) {
+    if (wanModeForConfig(videoCfg) === 'reference') {
+      ElMessage.warning('当前万相参考生视频型号需要参考图，请先为分镜选择图片。')
+      return
+    }
     if (!universal) {
       await ElMessageBox.alert(
         '当前为传统模式，生视频需要分镜参考图。请先生成或上传分镜图片后再试。',
@@ -6634,6 +6628,8 @@ async function onGenerateSbVideo(sb) {
       first_frame_url: universalOmniApi ? undefined : (vFirst || absoluteUrl || undefined),
       last_frame_url: universalOmniApi ? undefined : vLast,
       reference_image_urls: referenceUrls,
+      reference_mode: universal ? 'omni' : undefined,
+      ...(textOnly ? wanTextFields() : {}),
       style: getSelectedStyle(),
       aspect_ratio: projectAspectRatio.value || '16:9',
       resolution: videoResolution.value || undefined,
@@ -6644,6 +6640,12 @@ async function onGenerateSbVideo(sb) {
       if (pollRes?.status === 'failed') {
         sbVideoErrors.value[sb.id] = pollRes.error || '视频生成失败'
       } else if (pollRes?.status === 'completed') {
+        const qualityError = qualityFailureMessage(pollRes.result, getVideoById(sb.id, res.id))
+        if (qualityError) {
+          sbVideoErrors.value[sb.id] = qualityError
+          ElMessage.warning(`${qualityError}。可在审片中查看候选。`)
+          return
+        }
         sbVideoErrors.value[sb.id] = ''
         ElMessage.success('视频生成完成')
       }
@@ -6692,6 +6694,12 @@ async function onResumeSbVideoPoll(sb) {
     if (pollRes?.status === 'failed') {
       sbVideoErrors.value[sb.id] = pollRes.error || '继续查询失败'
     } else if (pollRes?.status === 'completed') {
+      const qualityError = qualityFailureMessage(pollRes.result, getVideoById(sb.id, failed.id))
+      if (qualityError) {
+        sbVideoErrors.value[sb.id] = qualityError
+        ElMessage.warning(`${qualityError}。可在审片中查看候选。`)
+        return
+      }
       sbVideoErrors.value[sb.id] = ''
       ElMessage.success('视频查询完成')
     }
@@ -7017,7 +7025,8 @@ async function startBatchVideoGeneration() {
     }
     const boards = store.storyboards || []
     // 只处理：有参考图（经典=分镜主图；全能=场景/角色/道具，不含经典主图）且 还没有已完成视频 的分镜
-    const todo = boards.filter(needsBatchVideo)
+    const cfg = await getActiveVideoAiConfig()
+    const todo = boards.filter(sb => needsBatchVideo(sb, cfg))
     if (todo.length === 0) {
       ElMessage.info('没有需要生成视频的分镜（分镜缺少图片，或视频已全部生成）')
       return
@@ -7039,19 +7048,22 @@ async function startBatchVideoGeneration() {
           const planned = batch.find(i => i.storyboard_id === sb.id)
           if (planned?.status === 'completed') {
             await loadSingleStoryboardMedia(sb.id)
+            const checked = getVideoById(sb.id, planned.video_id)
+            const qualityError = qualityFailureMessage(checked, planned)
+            if (qualityError) throw new Error(qualityError)
             continue
           }
           if (!planned?.operation_key) throw new Error('找不到本镜的批次操作，请重新载入')
           if (planned.status === 'failed') throw new Error(planned.error_msg || '本次生成失败，可在分镜里核查后重拍')
           const universal = isSbUniversalMode(sb.id)
           const omniRefs = universal ? collectSbOmniReferenceAbsoluteUrls(sb) : []
-          if (universal ? !omniRefs.length : !getSbFirstFrameUrl(sb)) continue
+          const textOnly = canUseWanTextForShot(sb, cfg, universal, omniRefs)
           generatingSbVideoIds.add(sb.id)
           const firstFrameUrl = await getMainImageUrlForVideo(sb)
           const absoluteUrl = universal ? (omniRefs[0] || '') : toAbsoluteImageUrl(firstFrameUrl)
           // 连贯帧：提取上一条视频末帧作为参考（全能模式不走连贯帧替换）
           let contiguityFirstFrameUrl = absoluteUrl
-          if (contiguity && !universal && !planned.video_id) {
+          if (contiguity && !universal && !textOnly && !planned.video_id) {
             const prevVideoUrl = await previousTakeUrl(boards, sb.id, storyboardsAPI.get)
             if (prevVideoUrl) {
               const lastFrameBlob = await captureVideoLastFrame(toAbsoluteImageUrl(prevVideoUrl))
@@ -7078,6 +7090,8 @@ async function startBatchVideoGeneration() {
             first_frame_url: vFirst,
             last_frame_url: vLast,
             reference_image_urls: refUrls,
+            reference_mode: universal ? 'omni' : undefined,
+            ...(textOnly ? wanTextFields() : {}),
             style: getSelectedStyle(),
             aspect_ratio: projectAspectRatio.value || '16:9',
             resolution: videoResolution.value || undefined,
@@ -7089,9 +7103,17 @@ async function startBatchVideoGeneration() {
             if (pollRes?.status === 'failed') {
               batchVideoErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${pollRes.error || '生成失败'}`)
               batchVideoProgress.value = { ...batchVideoProgress.value, failed: batchVideoProgress.value.failed + 1 }
+            } else {
+              await loadSingleStoryboardMedia(sb.id)
+              const checked = getVideoById(sb.id, res.id || planned.video_id)
+              const qualityError = qualityFailureMessage(pollRes?.result, checked, res)
+              if (qualityError) throw new Error(qualityError)
             }
           } else {
             await loadSingleStoryboardMedia(sb.id)
+            const checked = getVideoById(sb.id, res?.id || planned.video_id)
+            const qualityError = qualityFailureMessage(checked, res)
+            if (qualityError) throw new Error(qualityError)
           }
         } catch (e) {
           batchVideoErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${e.message || '提交失败'}`)
@@ -7761,7 +7783,8 @@ async function runOneClickPipeline(textOnly = false) {
     // 步骤 9：生成分镜视频
     {
       await loadStoryboardMedia()
-      const boards2 = (store.storyboards || []).filter(needsBatchVideo)
+      const cfg = await getActiveVideoAiConfig()
+      const boards2 = (store.storyboards || []).filter(sb => needsBatchVideo(sb, cfg))
       const concurrency = pipelineVideoConcurrency.value
       setPipelineStep(9, `生成分镜视频（${boards2.length} 个，并发 ${concurrency}）...`)
       const { paused } = await runConcurrently(boards2, concurrency, async (sb) => {
@@ -7789,6 +7812,8 @@ async function runOneClickPipeline(textOnly = false) {
               first_frame_url: vFirst,
               last_frame_url: vLast,
               reference_image_urls: refUrls,
+              reference_mode: universal ? 'omni' : undefined,
+              ...(canUseWanTextForShot(sb, cfg, universal, omniRefs) ? wanTextFields() : {}),
               style,
               aspect_ratio: projectAspectRatio.value || '16:9',
               resolution: videoResolution.value || undefined,
@@ -7799,6 +7824,8 @@ async function runOneClickPipeline(textOnly = false) {
               const result = await pollTaskWithPause(res.task_id, () => loadSingleStoryboardMedia(sb.id), meta)
               if (result?.paused) return { paused: true }
               if (result?.error) throw new Error(result.error)
+              const qualityError = qualityFailureMessage(result?.result, getVideoById(sb.id, res.id))
+              if (qualityError) throw new Error(qualityError)
             } else await loadSingleStoryboardMedia(sb.id)
           })
           if (ok && typeof ok === 'object' && ok.paused) return { paused: true }
@@ -8094,7 +8121,8 @@ async function runRepairPipeline() {
       if (paused) { await waitForResume() }
     }
     await loadStoryboardMedia()
-    const boards2 = (store.storyboards || []).filter(needsBatchVideo)
+    const cfg = await getActiveVideoAiConfig()
+    const boards2 = (store.storyboards || []).filter(sb => needsBatchVideo(sb, cfg))
     {
       const concurrency = pipelineVideoConcurrency.value
       pipelineCurrentStep.value = `正在生成分镜视频（并发${concurrency}）...`
@@ -8123,6 +8151,8 @@ async function runRepairPipeline() {
               first_frame_url: vFirst,
               last_frame_url: vLast,
               reference_image_urls: refUrls,
+              reference_mode: universal ? 'omni' : undefined,
+              ...(canUseWanTextForShot(sb, cfg, universal, omniRefs) ? wanTextFields() : {}),
               aspect_ratio: projectAspectRatio.value || '16:9',
               resolution: videoResolution.value || undefined,
               duration: getSbVideoDurationForApi(sb),
@@ -8132,6 +8162,8 @@ async function runRepairPipeline() {
               const result = await pollTaskWithPause(res.task_id, () => loadSingleStoryboardMedia(sb.id), meta)
               if (result?.paused) return { paused: true }
               if (result?.error) throw new Error(result.error)
+              const qualityError = qualityFailureMessage(result?.result, getVideoById(sb.id, res.id))
+              if (qualityError) throw new Error(qualityError)
             } else await loadSingleStoryboardMedia(sb.id)
           })
           if (ok && typeof ok === 'object' && ok.paused) return { paused: true }
@@ -9720,11 +9752,12 @@ html.light .storyboard-row:hover {
 /* ── 分镜控制栏（卡片外，缩进） ── */
 .sb-ctrl-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-left: 32px;
   margin-bottom: 4px;
-  height: 26px;
+  min-height: 26px;
 }
 .sb-ctrl-num {
   background: var(--el-color-primary);
@@ -9750,6 +9783,11 @@ html.light .storyboard-row:hover {
 }
 html.light .sb-ctrl-title {
   color: #000;
+}
+.sb-ctrl-duration {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .sb-movement-tag.el-tag {
   height: 18px;

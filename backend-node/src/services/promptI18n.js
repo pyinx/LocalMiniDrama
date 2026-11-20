@@ -296,7 +296,7 @@ Sum(T1..TM) MUST equal this shot's JSON "duration" seconds exactly.
 Reference tokens: @图片1 = scene/environment only; @图片2+ = characters in characters[] order; then props if any.
 Dialogue: @图片2 says:"verbatim line" or …嗓音…："line". No speech: end with 无对白。
 Narration: 旁白（画面无声）："verbatim narration"
-Each beat: rich motion picture prose (push in, pull back, rack focus), not a static snapshot caption.`;
+Preserve each action from ACTION as a visible event. Show who acts on whom or what and the visible response. Choose cuts or continuous staging to suit the event.`;
   }
   return `
 【universal_segment_text — 多子分镜段落格式（与「生成全能提示词」「润色」完全一致）】
@@ -311,7 +311,7 @@ Each beat: rich motion picture prose (push in, pull back, rack focus), not a sta
 
 子分镜正文写法（电影化中文长句，参考产品范例）：
 - **参考图**：仅用 @图片1、@图片2…（阿拉伯数字）；@图片1 只写环境/光影/陈设；角色从 @图片2 起按 characters[] 顺序；有道具则继续 @图片3 …
-- **运镜**：每段含至少两步运镜（如 缓推、横移、跟拍、拉回、俯拍特写），与人物动作同步。
+- **动作与机位**：把 ACTION 中每项动作放进具体的时段，交代谁对谁或什么做了什么、动作引起什么可见反应。按需要安排同框、转焦或切镜。递接物件要拍到递接过程，情绪特写要能看出前后变化。
 - **对白**：有 dialogue 时必须写出原文，格式如 @图片2 的嗓音…："对白原文" 或 @图片2 说："对白原文"；无对白则句末写 **无对白。**
 - **解说**：有 narration 时写在合适子分镜：**旁白（画面无声）："解说原文"**
 - **禁止**：概括式台词（如「他说了一句重要的话」）、@人物N、markdown、SoulLens 段标签
@@ -1371,14 +1371,14 @@ Line 2 — exactly (M must match count of 分镜k lines):
 Line 3 — copy LINE3_REQUIRED from the USER message verbatim.
 
 Lines 4 through (3+M) — for each k, one full line:
-分镜k： Tk秒: <Rich cinematic Chinese prose for this slice only: camera motion chain (≥2 moves when Tk≥3s), @图片N bindings per IMAGE_SLOT_MAP, light, emotion. Dialogue: …说："verbatim" or …："verbatim". No speech: 无对白。 Narration: 旁白（画面无声）："verbatim". Avoid static snapshot captions.>
+分镜k： Tk秒: <Stage the visible action and its consequence within this slice; keep the acting subject, recipient and relevant object readable, @图片N bindings per IMAGE_SLOT_MAP, light, emotion. Dialogue: …说："verbatim" or …："verbatim". No speech: 无对白。 Narration: 旁白（画面无声）："verbatim". Avoid static snapshot captions.>
 
 DIALOGUE — CRITICAL (when USER message contains DIALOGUE_VERBATIM):
 - Every line listed under「必须逐字出现在输出中的台词」MUST appear in some子分镜 line inside 「」, character-for-character (only spacing around @图片N may vary).
 - NEVER replace dialogue with summaries like「他选择了一个亿」「说完台词」without the actual quoted words.
 - Distribute lines across beats by story order; longer Tk beats that contain speech must include the full quoted line(s), not paraphrase.
 - If DIALOGUE / DESCRIPTION【对话】/ VIDEO_PROMPT_对话段 / EPISODE_SCRIPT imply spoken lines, include them verbatim even when CURRENT_UNIVERSAL_SEGMENT omitted them.
-- Silent shots: state silence explicitly; do not invent dialogue.
+- A line spoken across a cut is quoted once. Mark continuing speech in adjacent beats; mark silence only where the soundtrack is actually silent.
 
 Reference images — CRITICAL (applies to every子分镜 line’s prose):
 - Use ONLY IMAGE_SLOT_MAP tokens @图片1, @图片2, … (Arabic digits).
@@ -1391,7 +1391,7 @@ Pacing & M selection (professional):
 - Never change the **total** seconds: T1+…+TM must equal TOTAL_CLIP_SECONDS.
 
 Scene reference layout — CRITICAL (when SCENE_REFERENCE_LAYOUT applies):
-- Reference may be multi-panel; do NOT make the final video mimic grids. Each子分镜 line’s prose should reinforce: one continuous full frame, no split-screen collage in the delivered clip.
+- A reference may be multi-panel. Each instant of the delivered clip uses a single full frame. Sequential changes of viewpoint are allowed.
 
 If CURRENT_UNIVERSAL_SEGMENT is non-empty, preserve narrative beats but rewrite to satisfy MULTI_BEAT_OUTPUT, duration sum, and IMAGE_SLOT_MAP.`;
 }

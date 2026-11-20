@@ -1,7 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { groupFindings, findingTag, findingWhere, irToForm, formToIr, newShotForm } from '../src/utils/segmentUi.js'
+import { groupFindings, findingTag, findingWhere, formatStoryboardDuration, irToForm, formToIr, newShotForm } from '../src/utils/segmentUi.js'
+
+test('planned storyboard duration preserves seconds and identifies unset values', () => {
+  assert.equal(formatStoryboardDuration(6), '6 秒')
+  assert.equal(formatStoryboardDuration('3.5'), '3.5 秒')
+  for (const value of [null, undefined, 0, -1, '', '未知', Infinity]) {
+    assert.equal(formatStoryboardDuration(value), '未设置')
+  }
+})
 
 const IR = {
   version: 1,

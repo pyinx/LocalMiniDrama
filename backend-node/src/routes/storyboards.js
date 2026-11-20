@@ -3,7 +3,7 @@ const path = require('path');
 const response = require('../response');
 const storyboardService = require('../services/storyboardService');
 const episodeStoryboardService = require('../services/episodeStoryboardService');
-const { enforceUniversalStyleLine } = require('../services/universalOmniMultiBeatFormat');
+const { enforceUniversalStyleLine, universalDraftWithoutActionNote } = require('../services/universalOmniMultiBeatFormat');
 const videoClient = require('../services/videoClient');
 const segmentReplanService = require('../services/segmentReplanService');
 const segmentCompileService = require('../services/segmentCompileService');
@@ -35,7 +35,8 @@ const { normalizeUniversalSegmentShotDurations } = require('../services/universa
 /** 流已开始，写回失败只能通过末尾 error 事件报告。 */
 function saveStreamedUniversalPrompt(db, id, text, writeNd) {
   try {
-    if (storyboardService.saveLegacyUniversalPrompt(db, id, text)) return true;
+    const saved = storyboardService.saveLegacyUniversalPrompt(db, id, text);
+    if (saved) return saved;
     writeNd({ type: 'error', code: 'NOT_FOUND', message: '分镜不存在' });
   } catch (err) {
     writeNd({ type: 'error', code: err.code || 'INTERNAL_ERROR', message: err.message });
@@ -729,7 +730,8 @@ function routes(db, log) {
         text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
         text = normalizeUniversalSegmentAtImageSpacing(text);
         text = enforceUniversalStyleLine(text, built.styleZh);
-        if (!storyboardService.saveLegacyUniversalPrompt(db, sbId, text)) return response.notFound(res, '分镜不存在');
+        text = storyboardService.saveLegacyUniversalPrompt(db, sbId, text);
+        if (!text) return response.notFound(res, '分镜不存在');
         log.info('[分镜] generateUniversalSegmentPrompt 完成', { id: sbId, len: text.length, duration_sec: durationSec });
         response.success(res, { universal_segment_text: text });
       } catch (err) {
@@ -795,7 +797,8 @@ function routes(db, log) {
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
       text = enforceUniversalStyleLine(text, built.styleZh);
-      if (!saveStreamedUniversalPrompt(db, sbId, text, writeNd)) return res.end();
+      text = saveStreamedUniversalPrompt(db, sbId, text, writeNd);
+      if (!text) return res.end();
       log.info('[分镜] generateUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
       res.end();
@@ -817,7 +820,7 @@ function routes(db, log) {
         req.body && req.body.draft_universal_segment_text != null
           ? String(req.body.draft_universal_segment_text)
           : '';
-      const draft = draftRaw.trim();
+      const draft = universalDraftWithoutActionNote(draftRaw.trim());
       if (!draft) {
         return response.badRequest(res, '请先填写或生成全能片段描述后再润色（编辑器内容不能为空）');
       }
@@ -919,7 +922,8 @@ function routes(db, log) {
       text = normalizeUniversalSegmentShotDurations(text, durationLabel, durationSec);
       text = normalizeUniversalSegmentAtImageSpacing(text);
       text = enforceUniversalStyleLine(text, built.styleZh);
-      if (!saveStreamedUniversalPrompt(db, sbId, text, writeNd)) return res.end();
+      text = saveStreamedUniversalPrompt(db, sbId, text, writeNd);
+      if (!text) return res.end();
       log.info('[分镜] polishUniversalSegmentStream 完成', { id: sbId, len: text.length, duration_sec: durationSec });
       writeNd({ type: 'done', universal_segment_text: text });
       res.end();

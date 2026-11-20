@@ -10,6 +10,8 @@
  */
 
 const STANDARD_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'];
+const wanVideoModels = require('../constants/wanVideoModels.json');
+const WAN_LEGACY_KEYFRAME_MODEL = 'wan2.2-kf2v-flash';
 
 /** Wan 带 size 参数的模型：画面比例 → 720P 档尺寸 */
 const WAN_SIZES = {
@@ -44,6 +46,25 @@ const VOLC_PROTOCOLS = new Set(['volcengine', 'volcengine_omni']);
 
 /** 每条：protocols 命中且 match(model) 为真即采用；按顺序取第一条 */
 const ENTRIES = [
+  ...Object.entries(wanVideoModels).map(([id, mode]) => {
+    const omni = mode === 'omni';
+    const legacy = id.startsWith('wan2.6-');
+    return {
+      protocols: new Set(['dashscope']), match: m => m === id, unknownFields: [],
+      caps: {
+        family: 'wan', wanMode: mode, wan26: legacy,
+        refImages: omni ? 10 : mode === 'reference' ? 5 : 0,
+        refToken: legacy && mode === 'reference' ? 'character' : '图',
+        firstLastFrame: omni || (!legacy && mode === 'image'), nativeAudio: true,
+        audioSwitch: omni || id.endsWith('-flash'),
+        duration: { min: 2, max: omni ? 30 : legacy && mode === 'reference' ? 10 : 15, step: 1 },
+        ratios: omni ? [...STANDARD_RATIOS, 'adaptive'] : Object.keys(WAN_SIZES),
+        resolutions: omni ? ['480P', '720P', '1080P'] : ['720P', '1080P'],
+        defaultResolution: '1080P', maxPromptChars: omni ? 20000 : legacy ? 1500 : 5000,
+        ...(legacy && mode !== 'image' ? { sizes: WAN_SIZES } : {}),
+      },
+    };
+  }),
   {
     protocols: VOLC_PROTOCOLS,
     match: isSeedance2FamilyModel,
@@ -107,24 +128,26 @@ const ENTRIES = [
     },
     unknownFields: ['maxPromptChars', 'nativeAudio'],
   },
-  ...[
-    ['wan2.2-kf2v-flash', { refImages: 0, firstLastFrame: true, duration: { min: 5, max: 5, step: 1 } }],
-    ['wan2.6-t2v', { refImages: 0, firstLastFrame: false, duration: { min: 5, max: 15, step: 5 }, sizes: WAN_SIZES }],
-    ['wan2.6-i2v-flash', { refImages: 0, firstLastFrame: false, duration: { min: 5, max: 15, step: 5 } }],
-    ['wanx2.1-vace-plus', { refImages: 3, firstLastFrame: false, duration: { min: 5, max: 5, step: 1 }, sizes: WAN_SIZES }],
-    ['wan2.6-r2v-flash', { refImages: 5, firstLastFrame: false, duration: { min: 5, max: 10, step: 5 }, sizes: WAN_SIZES }],
-  ].map(([id, extra]) => ({
+  {
     protocols: new Set(['dashscope']),
-    match: (m) => m === id,
+    match: m => m === 'wanx2.1-vace-plus',
     caps: {
-      family: 'wan',
-      maxPromptChars: 800,
-      ratios: extra.sizes ? Object.keys(extra.sizes) : ['16:9', '9:16', '1:1'],
-      nativeAudio: false,
-      ...extra,
+      family: 'wan', wanMode: 'reference', vace: true, refToken: '图', refImages: 3, firstLastFrame: false,
+      duration: { min: 5, max: 5, step: 1 }, sizes: WAN_SIZES, ratios: Object.keys(WAN_SIZES),
+      resolutions: ['720P'], defaultResolution: '720P', maxPromptChars: 800, nativeAudio: false,
     },
-    unknownFields: ['duration', 'maxPromptChars', 'nativeAudio'],
-  })),
+    unknownFields: [],
+  },
+  {
+    protocols: new Set(['dashscope']),
+    match: model => model === WAN_LEGACY_KEYFRAME_MODEL,
+    caps: {
+      family: 'wan', refImages: 0, firstLastFrame: true, duration: { min: 5, max: 5, step: 1 },
+      maxPromptChars: 800, ratios: STANDARD_RATIOS, nativeAudio: false,
+      resolutions: ['480P', '720P', '1080P'], defaultResolution: '720P',
+    },
+    unknownFields: ['maxPromptChars'],
+  },
   ...[
     ['Seedance_2.5', 4, 30, 30, 15000, true],
     ['Seedance_2.5_flash', 4, 30, 10, 15000, true],
@@ -155,6 +178,7 @@ function clone(caps) {
     ...caps,
     duration: { ...caps.duration },
     ratios: [...caps.ratios],
+    ...(caps.resolutions ? { resolutions: [...caps.resolutions] } : {}),
     ...(caps.sizes ? { sizes: { ...caps.sizes } } : {}),
   };
 }
@@ -187,6 +211,7 @@ function clampDuration(caps, seconds) {
 
 module.exports = {
   getVideoCaps,
+  WAN_LEGACY_KEYFRAME_MODEL,
   clampDuration,
   isSeedance2FamilyModel,
 };

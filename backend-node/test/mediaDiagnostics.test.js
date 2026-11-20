@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { getFfmpegPath } = require('../src/utils/ffmpegPath');
+const { inspectGeneratedTake } = require('../src/services/mediaDiagnostics');
 const { takeWorkspace } = require('./helpers/workbenchTakes');
 
 function ffmpeg(args) {
@@ -15,6 +16,33 @@ function makeClip(ws, file, { color = 'white', filter, audio, seconds = 2 } = {}
   if (filter) args.push('-vf', filter);
   ffmpeg([...args, '-t', String(seconds), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(ws.storage, file)]);
 }
+
+test('generated take quality checks inspect the original source metadata', async t => {
+  const ws = await takeWorkspace(t);
+  makeClip(ws, 'source.mp4', { seconds: 2 });
+  const inspect = expected => inspectGeneratedTake(path.join(ws.storage, 'source.mp4'), expected);
+  const bad = await inspect({ duration: 8, aspect_ratio: '9:16', resolution: '720p' });
+  assert.equal(bad.status, 'failed');
+  assert.deepEqual(bad.issues.map(issue => issue.code).sort(), ['aspect_ratio_mismatch', 'duration_short', 'resolution_low']);
+  assert.deepEqual([bad.width, bad.height], [96, 64]);
+  const good = await inspect({ duration: 2, aspect_ratio: '3:2' });
+  assert.equal(good.status, 'passed');
+  assert.equal(good.has_audio, false);
+  const missing = await inspectGeneratedTake(path.join(ws.storage, 'missing.mp4'), {});
+  assert.equal(missing.status, 'unavailable');
+  assert.deepEqual(missing.issues, []);
+});
+
+test('generated Wan take checks reject a horizontal image inside a portrait canvas', async t => {
+  const ws = await takeWorkspace(t);
+  const expected = { duration: 2, aspect_ratio: '9:16', resolution_by_area: true };
+  makeClip(ws, 'padded.mp4', { filter: 'pad=96:170:0:52' });
+  const padded = await inspectGeneratedTake(path.join(ws.storage, 'padded.mp4'), expected);
+  assert.deepEqual(padded.issues.map(issue => issue.code), ['content_aspect_ratio_mismatch']);
+  makeClip(ws, 'dark.mp4', { color: 'black', filter: 'pad=96:170:0:52' });
+  const dark = await inspectGeneratedTake(path.join(ws.storage, 'dark.mp4'), expected);
+  assert.equal(dark.status, 'passed', 'dark frames alone do not establish a crop mismatch');
+});
 
 test('frame checks belong to the selected take and remeasure after replacement', async t => {
   const ws = await takeWorkspace(t);

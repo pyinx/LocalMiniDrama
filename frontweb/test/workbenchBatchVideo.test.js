@@ -16,3 +16,10 @@ test('resuming a canvas batch reuses its task without requesting new inputs', ()
   assert.deepEqual(dispatchBatchVideo({ operation_key: 'batch-shot', status: 'waiting' },
     () => ({ prompt: '灯渐暗' }), body => body), { operation_key: 'batch-shot', prompt: '灯渐暗' })
 })
+
+test('a completed batch slot with a failed media check is surfaced as a failure', () => {
+  const item = { operation_key: 'batch-shot', video_id: 31, status: 'completed', media_check: {
+    status: 'failed', issues: [{ code: 'duration_short', message: '时长不足：实际 5s' }],
+  } }
+  assert.throws(() => dispatchBatchVideo(item, () => ({}), () => ({})), /时长不足：实际 5s/)
+})

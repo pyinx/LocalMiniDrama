@@ -1,21 +1,38 @@
 const response = require('../response');
+const { createHash } = require('node:crypto');
 const videoService = require('../services/videoService');
 const taskService = require('../services/taskService');
 const batch = require('../services/workbenchVideoBatch');
-const { normalizeAspectRatioForApi, resolveVideoTarget } = require('../services/videoClient');
+const { normalizeAspectRatioForApi, resolveVideoTarget, videoTargetHash, prepareWanKeyframeInput } = require('../services/videoClient');
+const { WAN_LEGACY_KEYFRAME_MODEL } = require('../services/modelCapabilities');
+const { prepareWanVideo, localImagePath } = require('../services/wanVideoRequest');
+const { withStoryboardAction } = require('../services/universalOmniMultiBeatFormat');
+const { storageRoot: resolveStorageRoot, filesBaseUrl } = require('../utils/storagePaths');
 const jimengRenderer = require('../services/jimeng/renderer');
 
 const segmentCompileService = require('../services/segmentCompileService');
 
 const JIMENG_CONFLICT = new Set(['confirmation_required', 'confirmation_consumed', 'confirmation_stale', 'generation_in_progress']);
+const operationConflict = res => response.error(res, 409, 'VIDEO_OPERATION_CONFLICT', '原提交内容已变化或记录已删除，请核查后重新发起');
+
+function resolveOperation(db, key, dramaId, storyboardId, storageRoot) {
+  if (!key) return {};
+  const planned = db.prepare(`SELECT b.*, e.drama_id FROM video_batch_items b
+    JOIN episodes e ON e.id=b.episode_id WHERE b.operation_key=?`).get(key);
+  if (planned && (planned.storyboard_id !== storyboardId || planned.drama_id !== dramaId)) return { conflict: true };
+  const existing = planned ? batch.resolveBatchVideo(db, planned, storageRoot)
+    : db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(key);
+  if (existing && (existing.deleted_at || existing.drama_id !== dramaId || existing.storyboard_id !== storyboardId)) return { conflict: true };
+  return { planned, existing };
+}
 
 /**
  * 结构化分镜：在插入生成记录之前同步编译并检查。阻断时直接返回错误响应（不建任务、不插行）。
  * @returns {null | { compiled, findings, target }} 旧分镜返回 null（沿用前端传来的提示词）
  */
-function compileForRequest(db, res, storyboardId, model) {
+function compileForRequest(db, res, storyboardId, target) {
   if (storyboardId == null) return null;
-  const r = segmentCompileService.compileStoryboard(db, storyboardId, { model: model || undefined });
+  const r = segmentCompileService.compileStoryboard(db, storyboardId, { target });
   if (!r.ok) {
     if (r.code === 'legacy_storyboard' || r.code === 'not_found') return null;
     response.error(res, 422, r.code, r.message, { errors: r.errors });
@@ -48,22 +65,35 @@ function routes(db, log, cfg) {
         const now = new Date().toISOString();
         const dramaId = Number(body.drama_id) || 0;
         const storyboardId = body.storyboard_id != null ? Number(body.storyboard_id) : null;
-        const compiledIr = compileForRequest(db, res, storyboardId, body.model);
-        if (compiledIr === false) return;
         const operation = body.operation_key ?? null;
         if (operation !== null && (typeof operation !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(operation))) {
           return response.badRequest(res, '视频操作标识无效');
         }
+        const requestHash = operation && createHash('sha256')
+          .update(JSON.stringify(Object.entries(body).sort(([a], [b]) => a.localeCompare(b)))).digest('hex');
+        const prior = operation ? db.transaction(() => resolveOperation(db, operation, dramaId, storyboardId, storageRoot)).immediate() : {};
+        if (prior.conflict) return operationConflict(res);
+        if (prior.existing && (prior.planned || prior.existing.video_request_hash)) {
+          if (!prior.planned && prior.existing.video_request_hash !== requestHash) return operationConflict(res);
+          return response.success(res, prior.existing.id == null ? prior.existing : videoService.getById(db, prior.existing.id));
+        }
+        const target = resolveVideoTarget(db, body.model || undefined);
+        const compiledIr = compileForRequest(db, res, storyboardId, target);
+        if (compiledIr === false) return;
         isJimeng = compiledIr?.target.protocol === jimengRenderer.PROTOCOL;
         if (isJimeng) {
           const st = await jimengRenderer.status(db);
           if (!st.available) return response.error(res, 503, 'jimeng_unavailable', st.message, { reason: st.reason });
         }
-        if (!compiledIr && resolveVideoTarget(db, body.model || undefined).protocol === jimengRenderer.PROTOCOL) {
+        if (!compiledIr && target.protocol === jimengRenderer.PROTOCOL) {
           return response.error(res, 422, 'jimeng_requires_structured', '即梦渲染只支持结构化分镜，请先用「结构化分镜」重新生成本集分镜');
         }
-        const provider = body.provider || 'chatfire';
+        const provider = target.config?.provider || body.provider || 'chatfire';
+        const board = storyboardId && db.prepare('SELECT s.duration,s.dialogue,s.narration,s.action,s.creation_mode,s.adopted_sound FROM storyboards s JOIN episodes e ON e.id=s.episode_id WHERE s.id=? AND e.drama_id=? AND s.deleted_at IS NULL AND e.deleted_at IS NULL').get(storyboardId, dramaId);
         let prompt = body.prompt || '';
+        if (!compiledIr && (board?.creation_mode === 'universal' || (board && body.reference_mode === 'omni'))) {
+          prompt = withStoryboardAction(prompt, board.action);
+        }
         const row = storyboardId && dramaId ? db.prepare('SELECT style,metadata FROM dramas WHERE id=?').get(dramaId) : null;
         const { zh, en, legacy } = require('../utils/dramaStyleMerge').styleFieldsFromDramaRow(row);
         const catalog = require('../constants/generationStylePresets');
@@ -81,23 +111,28 @@ function routes(db, log, cfg) {
         if (storyboardId) {
           prompt = require('../services/workbenchCreativeMethods').withCreativeGuidance(db, prompt, dramaId, 'video', storyboardId);
         }
-        const model = body.model ?? null;
+        const model = target.model || body.model || null;
         let duration = body.duration ?? null;
+        if (board?.duration > 0) duration = board.duration;
         // 画幅：请求体归一化（全角冒号等）后写入 DB；未传则从 drama.metadata 读取并同样归一化
         let aspectRatio = null;
-        if (body.aspect_ratio != null && String(body.aspect_ratio).trim() !== '') {
-          aspectRatio = normalizeAspectRatioForApi(body.aspect_ratio);
+        const wanCaps = target.protocol === 'dashscope' && target.caps?.wanMode ? target.caps : null;
+        const allowedRatios = wanCaps ? new Set(wanCaps.ratios) : undefined;
+        const explicitAspect = body.aspect_ratio != null && String(body.aspect_ratio).trim() !== '';
+        if (explicitAspect) {
+          aspectRatio = normalizeAspectRatioForApi(body.aspect_ratio, allowedRatios);
         }
+        const invalidAspect = explicitAspect && !aspectRatio;
         if (!aspectRatio && dramaId) {
           try {
             const dramaRow = db.prepare('SELECT metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(dramaId);
             if (dramaRow && dramaRow.metadata) {
               const meta = typeof dramaRow.metadata === 'string' ? JSON.parse(dramaRow.metadata) : dramaRow.metadata;
-              if (meta && meta.aspect_ratio) aspectRatio = normalizeAspectRatioForApi(meta.aspect_ratio);
+              if (meta && meta.aspect_ratio) aspectRatio = normalizeAspectRatioForApi(meta.aspect_ratio, allowedRatios);
             }
           } catch (_) {}
         }
-        const resolution = body.resolution ?? null;
+        let resolution = body.resolution ?? null;
         const seed = body.seed != null ? Number(body.seed) : null;
         const cameraFixed = body.camera_fixed != null ? (body.camera_fixed ? 1 : 0) : null;
         const watermark = body.watermark != null ? (body.watermark ? 1 : 0) : 0;
@@ -108,7 +143,7 @@ function routes(db, log, cfg) {
         // 多图模式：sxy，存 JSON 数组到 reference_image_urls
         let refImagesJson =
           body.reference_image_urls && Array.isArray(body.reference_image_urls)
-            ? JSON.stringify(body.reference_image_urls.slice(0, 10))
+            ? JSON.stringify(wanCaps ? body.reference_image_urls : body.reference_image_urls.slice(0, 10))
             : null;
         let compiledJson = null;
         if (compiledIr) {
@@ -128,28 +163,90 @@ function routes(db, log, cfg) {
             model: compiledIr.target.model,
           });
         }
+        let incompatibility;
+        if (!prior.existing && wanCaps) {
+          let refs = refImagesJson ? JSON.parse(refImagesJson) : [];
+          const mode = compiledIr ? undefined : body.reference_mode || (board?.creation_mode === 'universal' ? 'omni' : undefined);
+          const identity = value => {
+            if (typeof value !== 'string' || /^(data:|oss:)/i.test(value)) return value;
+            try { return localImagePath(value, filesBaseUrl(cfg), resolveStorageRoot(cfg)) || value; } catch { return value; }
+          };
+          // 经典分镜旧客户端会把首尾帧同时填入参考图列表；只消除这类重复表达。
+          if (storyboardId && !compiledIr && mode !== 'omni' && (firstFrameUrl || imageUrl) && refs.length) {
+            const frames = [firstFrameUrl || imageUrl, lastFrameUrl].filter(Boolean).map(identity);
+            if (refs.every(url => frames.includes(identity(url)))) {
+              if (wanCaps.wanMode === 'reference' && !lastFrameUrl && (wanCaps.wan26 || wanCaps.vace)) firstFrameUrl = imageUrl = null;
+              else if (wanCaps.wanMode !== 'reference') refs = [];
+            }
+          }
+          const audio = body.generate_audio ?? compiledIr?.compiled.request.generate_audio;
+          const extend = compiledIr?.compiled.request.prompt_extend ?? body.prompt_extend;
+          let roles;
+          if (wanCaps.vace) {
+            if (compiledIr) roles = compiledIr.compiled.refs.map(ref => ref.kind === 'scene' ? 'bg' : 'obj');
+            else if (body.reference_roles) roles = body.reference_roles;
+            else if (storyboardId) {
+              const scene = db.prepare('SELECT c.local_path,c.image_url FROM scenes c JOIN storyboards s ON s.scene_id=c.id WHERE s.id=?').get(storyboardId);
+              const background = scene && [scene.local_path, scene.image_url].filter(Boolean).map(identity);
+              roles = refs.map(url => background?.includes(identity(url)) ? 'bg' : 'obj');
+            }
+          }
+          const plan = prepareWanVideo(wanCaps, { model, prompt, duration, resolution, seed,
+            aspect_ratio: aspectRatio, first_frame_url: firstFrameUrl, last_frame_url: lastFrameUrl,
+            image_url: imageUrl, reference_urls: refs, reference_roles: roles, reference_mode: mode, generate_audio: audio });
+          incompatibility = invalidAspect ? `${model} 不支持画面比例 ${body.aspect_ratio}` : plan.error;
+          if (!Array.isArray(body.reference_image_urls) && body.reference_image_urls != null && !compiledIr) incompatibility = '参考图必须是图片地址列表';
+          if (!incompatibility) {
+            resolution = plan.resolution;
+            duration = plan.duration;
+            refImagesJson = refs.length ? JSON.stringify(refs) : null;
+            if (roles || typeof audio === 'boolean' || typeof extend === 'boolean') {
+              const metadata = compiledJson ? JSON.parse(compiledJson) : {};
+              compiledJson = JSON.stringify({ ...metadata, request: { ...metadata.request, generate_audio: audio, prompt_extend: extend, reference_roles: roles } });
+            }
+          }
+        }
+        if (!prior.existing && target.protocol === 'dashscope' && target.model === WAN_LEGACY_KEYFRAME_MODEL) {
+          const prepared = await prepareWanKeyframeInput(target.caps, {
+            duration, resolution, aspect_ratio: aspectRatio, first_frame_url: firstFrameUrl, image_url: imageUrl,
+            last_frame_url: lastFrameUrl, reference_urls: refImagesJson && JSON.parse(refImagesJson),
+            reference_mode: !compiledIr && board?.creation_mode === 'universal' ? 'omni' : body.reference_mode,
+            files_base_url: filesBaseUrl(cfg), storage_local_path: resolveStorageRoot(cfg),
+          });
+          const hasLines = compiledIr
+            ? compiledIr.ir.shots.some(shot => shot.lines.length > 0)
+            : Boolean(board?.dialogue?.trim() || board?.narration?.trim());
+          let sound;
+          try { sound = require('../services/episodeSound').soundOf(board || {}); } catch (_) {}
+          const soundChosen = sound?.source === 'mute' || (sound?.source === 'dub' &&
+            require('../services/workbenchTakeService').localFile(storageRoot, sound.path));
+          incompatibility = (invalidAspect && '无法识别所选视频画幅，请重新选择') || prepared.error ||
+            (hasLines && !soundChosen && '当前万相模型只生成无声视频。本镜包含台词或旁白，请换用支持人声的模型，或在剪辑工作台选定配音或静音');
+          resolution = prepared.resolution;
+          duration = target.caps.duration.min;
+        }
         const result = db.transaction(() => {
           if (operation) {
-            const planned = db.prepare(`SELECT b.*, e.drama_id FROM video_batch_items b
-              JOIN episodes e ON e.id=b.episode_id WHERE b.operation_key=?`).get(operation);
-            if (planned && (planned.storyboard_id !== storyboardId || planned.drama_id !== dramaId)) return { conflict: true };
-            const existing = planned ? batch.resolveBatchVideo(db, planned, storageRoot)
-              : db.prepare('SELECT * FROM video_generations WHERE operation_key=?').get(operation);
+            const { conflict, planned, existing } = resolveOperation(db, operation, dramaId, storyboardId, storageRoot);
+            if (conflict) return { conflict };
             if (existing) {
-              if (existing.deleted_at || existing.drama_id !== dramaId || existing.storyboard_id !== storyboardId) return { conflict: true };
-              if (!planned && isJimeng) {
+              if (!planned && existing.video_request_hash) {
+                if (existing.video_request_hash !== requestHash) return { conflict: true };
+              } else if (!planned && isJimeng) {
                 const quote = db.prepare('SELECT items FROM jimeng_confirmations WHERE token=?').get(String(body.jimeng_confirmation || ''));
                 const node = quote && JSON.parse(quote.items).find(item => item.storyboard_id === storyboardId);
                 if (!node || existing.provider !== jimengRenderer.PROTOCOL || existing.provider_task_id !== node.key || existing.model !== compiledIr.target.model) return { conflict: true };
               } else if (!planned) {
-                const inputs = { prompt, style_negative: styleNegative, provider, model, duration, aspect_ratio: aspectRatio, resolution, seed,
+                const inputs = { prompt, style_negative: styleNegative, duration, aspect_ratio: aspectRatio, resolution, seed,
                   camera_fixed: cameraFixed, watermark, image_url: imageUrl, first_frame_url: firstFrameUrl,
-                  last_frame_url: lastFrameUrl, reference_image_urls: refImagesJson, compiled_json: compiledJson };
+                  last_frame_url: lastFrameUrl, reference_image_urls: refImagesJson, compiled_json: compiledJson,
+                  model: body.model ?? null, provider: body.provider || 'chatfire' };
                 if (Object.entries(inputs).some(([key, value]) => existing[key] !== value)) return { conflict: true };
               }
               return { id: existing.id, reused: true, legacy: existing.id == null ? existing : null };
             }
           }
+          if (incompatibility) return { incompatibility };
           if (isJimeng) {
             const id = jimengRenderer.prepareSubmit(db, log, storyboardId, body.jimeng_confirmation, { model: body.model || undefined });
             if (operation) db.prepare('UPDATE video_generations SET operation_key=? WHERE id=?').run(operation, id);
@@ -157,12 +254,13 @@ function routes(db, log, cfg) {
           }
           const task = taskService.createTask(db, log, 'video_generation', String(dramaId));
           const inserted = db.prepare(
-            `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, style_negative, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, compiled_json, status, task_id, created_at, updated_at, operation_key, dispatch_state)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, 'queued')`
-          ).run(dramaId, storyboardId, provider, prompt, styleNegative, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, compiledJson, task.id, now, now, operation);
+            `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, style_negative, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, compiled_json, video_config_id, video_protocol, video_target_hash, video_request_hash, status, task_id, created_at, updated_at, operation_key, dispatch_state)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, 'queued')`
+          ).run(dramaId, storyboardId, provider, prompt, styleNegative, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, compiledJson, target.config?.id ?? null, target.protocol, target.config ? videoTargetHash(target.config) : null, requestHash, task.id, now, now, operation);
           return { id: inserted.lastInsertRowid };
         }).immediate();
-        if (result.conflict) return response.error(res, 409, 'VIDEO_OPERATION_CONFLICT', '原提交内容已变化或记录已删除，请核查后重新发起');
+        if (result.conflict) return operationConflict(res);
+        if (result.incompatibility) return response.error(res, 422, 'video_model_incompatible', result.incompatibility);
         if (!result.reused) setImmediate(() => {
           if (isJimeng) return jimengRenderer.runSubmitted(db, log, result.id).catch(err => log.error('jimeng runSubmitted', { id: result.id, error: err.message }));
           videoService.processVideoGeneration(db, log, result.id);

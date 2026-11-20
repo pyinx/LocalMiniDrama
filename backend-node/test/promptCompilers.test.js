@@ -50,7 +50,7 @@ function checkStructure(out, ir, caps) {
   const rank = { character: 0, crowd: 0, scene: 1, prop: 2, tail_frame: 3 };
   assert.deepEqual(refs.map((r) => rank[r.kind]), [...refs.map((r) => rank[r.kind])].sort((a, b) => a - b));
   // 正文出现的每个参考记号都已绑定
-  const tokenRe = out.family === 'jimeng' ? /\{\{([^}]+)\}\}/g : /@图片(\d+)/g;
+  const tokenRe = out.family === 'jimeng' ? /\{\{([^}]+)\}\}/g : /(?:@图片|character|图)(\d+)/g;
   const bound = new Set(refs.map((r) => r.token));
   for (const m of prompt.matchAll(tokenRe)) assert.ok(bound.has(m[0]), `unbound token ${m[0]}`);
   // 每个镜头：景别、机位、每个出镜者的朝向与视线
@@ -84,11 +84,11 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
     const target = TARGETS[family];
     const ir = irOf({ prop_refs: [{ prop_id: 9, state_id: null, alias: '协议' }] });
     const ctx = ctxFor(target);
-    if (ctx.caps.duration.step > 1) { ir.shots[1].seconds = 7; ir.duration_s = 10; } // wan r2v: 5 或 10 秒
     const out = compileSegment(ir, ctx);
     assert.equal(out.family, family);
     checkStructure(out, ir, ctx.caps);
     if (family === 'jimeng') assert.ok(out.refs.every((r) => r.token === `{{${r.alias}}}`));
+    else if (family === 'wan') assert.deepEqual(out.refs.map(r => r.token), ['character1', 'character2', 'character3', 'character4']);
     else assert.deepEqual(out.refs.map((r) => r.token), out.refs.map((_, i) => `@图片${i + 1}`));
   }
   it('seedance structure', () => familyStructure('seedance'));

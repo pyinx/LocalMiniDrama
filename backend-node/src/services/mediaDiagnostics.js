@@ -17,6 +17,73 @@ async function probe(file) {
   return JSON.parse(stdout);
 }
 
+function resolutionTier(resolution) {
+  const match = String(resolution || '').trim().toLowerCase().match(/^(\d{3,4})p?$/);
+  return match ? Number(match[1]) : null;
+}
+
+// Inspect the provider's downloaded source before any canvas normalization. This
+// deliberately measures metadata only: a padded derivative must not hide the
+// dimensions or duration the provider actually returned.
+async function inspectGeneratedTake(file, expected = {}) {
+  try {
+    const media = await probe(file);
+    const stream = media.streams.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
+    const width = Number(stream?.width) || null;
+    const height = Number(stream?.height) || null;
+    const duration = Number(stream?.duration) || Number(media.format?.duration) || null;
+    if (!stream || !width || !height || !Number.isFinite(duration) || duration <= 0) {
+      return { status: 'unavailable', checked_at: new Date().toISOString(), issues: [], message: '原始视频尺寸或时长不可读取' };
+    }
+    const rotation = Number(stream.side_data_list?.find(s => s.rotation != null)?.rotation ?? stream.tags?.rotate ?? 0);
+    const sideways = Math.abs(rotation % 180) === 90;
+    const actualWidth = sideways ? height : width;
+    const actualHeight = sideways ? width : height;
+    const actual = { width: actualWidth, height: actualHeight, duration, aspect_ratio: actualWidth / actualHeight,
+      has_audio: media.streams.some(s => s.codec_type === 'audio') };
+    const issues = [];
+    const expectedDuration = Number(expected.duration);
+    // Tolerate container/frame rounding, not a provider snapping the request to a shorter preset.
+    if (Number.isFinite(expectedDuration) && expectedDuration > 0 && duration + 0.25 < expectedDuration) {
+      issues.push({ code: 'duration_short', expected: expectedDuration, actual: duration, message: `时长不足：期望 ${expectedDuration}s，实际 ${duration.toFixed(2)}s` });
+    }
+    const ratio = String(expected.aspect_ratio || '').match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    if (ratio) {
+      const wanted = Number(ratio[1]) / Number(ratio[2]);
+      if (Math.abs(actual.aspect_ratio / wanted - 1) > 0.03) {
+        issues.push({ code: 'aspect_ratio_mismatch', expected: expected.aspect_ratio, actual: `${actualWidth}:${actualHeight}`, message: `画幅不符：期望 ${expected.aspect_ratio}，原片为 ${actualWidth}×${actualHeight}` });
+      }
+    }
+    const pixels = resolutionTier(expected.resolution);
+    const sourceTier = resolutionTier(expected.source_resolution);
+    const belowDimensions = expected.resolution_by_area
+      ? actualWidth * actualHeight < pixels * pixels * (16 / 9) * 0.9
+      : Math.min(actualWidth, actualHeight) < pixels * 0.95;
+    if (sourceTier) actual.source_resolution = `${sourceTier}P`;
+    if (pixels && (belowDimensions || (sourceTier && sourceTier < pixels))) {
+      const sourceLabel = `${actualWidth}×${actualHeight}${sourceTier ? `（厂商报告 ${sourceTier}P）` : ''}`;
+      issues.push({ code: 'resolution_low', expected: expected.resolution, actual: `${actualWidth}x${actualHeight}`, message: `分辨率不足：期望 ${expected.resolution}，原片为 ${sourceLabel}` });
+    }
+    if (expected.require_audio === true && !actual.has_audio) {
+      issues.push({ code: 'audio_missing', message: '原片缺少要求的音轨' });
+    }
+    if (ratio && expected.resolution_by_area && !issues.some(issue => issue.code === 'aspect_ratio_mismatch')) {
+      // A stable, large inset can be a horizontal video packaged in a vertical canvas.
+      // An unreadable or changing dark scene is insufficient evidence to reject the take.
+      const sample = await framing(file, media).catch(() => null);
+      const rect = sample?.rect;
+      if (sample?.status === 'possible_bars' && rect.w * rect.h < 0.75 * sample.width * sample.height &&
+          Math.abs((rect.w / rect.h) / (Number(ratio[1]) / Number(ratio[2])) - 1) > 0.15) {
+        issues.push({ code: 'content_aspect_ratio_mismatch', expected: expected.aspect_ratio, actual: `${rect.w}x${rect.h}`,
+          message: `有效画面画幅不符：期望 ${expected.aspect_ratio}，多处采样的有效画面约为 ${rect.w}×${rect.h}` });
+      }
+    }
+    return { status: issues.length ? 'failed' : 'passed', checked_at: new Date().toISOString(), ...actual, issues };
+  } catch (err) {
+    return { status: 'unavailable', checked_at: new Date().toISOString(), issues: [], message: err.code === 'ENOENT' ? '缺少 FFmpeg 或 ffprobe' : '无法读取原始视频信息' };
+  }
+}
+
 function near(a, b, width, height) {
   return a && b && Math.abs(a.x - b.x) <= Math.max(2, width * 0.01) &&
     Math.abs(a.y - b.y) <= Math.max(2, height * 0.01) &&
@@ -157,4 +224,4 @@ function createDiagnostics(db, cfg) {
   };
 }
 
-module.exports = { createDiagnostics };
+module.exports = { createDiagnostics, inspectGeneratedTake };

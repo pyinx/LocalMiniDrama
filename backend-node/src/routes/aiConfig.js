@@ -127,6 +127,15 @@ function testConnection(log) {
   };
 }
 
+async function listWanVideoModels(req, res) {
+  try {
+    const { base_url, api_key } = req.body || {};
+    response.success(res, await aiConfigService.listWanVideoModels(base_url, api_key));
+  } catch (err) {
+    response.badRequest(res, err.message);
+  }
+}
+
 /** ModelArk / 方舟私有资产库：代理调用 CreateAssetGroup、ListAssets 等（与官方 Action 名一致） */
 function modelArkAsset(log) {
   return async (req, res) => {
@@ -191,6 +200,7 @@ module.exports = function aiConfigRoutes(db, log, cfg) {
     update: update(db, log, cfg),
     delete: remove(db, log, cfg),
     testConnection: testConnection(log),
+    listWanVideoModels,
     listJimeng2MaterialAssets: listJimeng2MaterialAssets(log),
     modelArkAsset: modelArkAsset(log),
     bulkUpdateKey: bulkUpdateKey(db, log, cfg),

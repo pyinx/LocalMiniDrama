@@ -1,5 +1,10 @@
-import { assetImageUrl } from './mediaUrl'
-import { parseDramaMetadata } from './canvasLayout'
+import { assetImageUrl } from './mediaUrl.js'
+import { parseDramaMetadata } from './canvasLayout.js'
+
+export function omniReferenceUrls(scene, characters, props, absolute) {
+  const urls = [scene, ...characters, ...props].map(assetImageUrl).filter(Boolean).map(absolute)
+  return [...new Set(urls.filter(Boolean))]
+}
 
 export function dramaUsesFirstLastFrame(drama) {
   const meta = parseDramaMetadata(drama?.metadata)
@@ -28,6 +33,24 @@ export function getSbVideosList(videosBySbId, storyboardId) {
   const list = videosBySbId?.[storyboardId]
   if (!Array.isArray(list)) return []
   return list.filter((v) => v.status === 'completed' && ((v.local_path && String(v.local_path).trim()) || isHttpVideoUrl(v.video_url)))
+}
+
+export function isMediaCheckFailure(record) {
+  const check = record?.media_check
+  return record?.eligible_for_automatic_use === false
+    || (check?.status === 'failed' && Array.isArray(check.issues) && check.issues.length > 0)
+}
+
+export function mediaCheckIssueMessages(record) {
+  if (!isMediaCheckFailure(record)) return []
+  const issues = record?.media_check?.issues
+  return Array.isArray(issues) && issues.length
+    ? issues.map(issue => issue?.message || issue?.code || '质量检查未通过')
+    : ['质量检查未通过']
+}
+
+export function isAutomaticallyUsableVideo(record) {
+  return !isMediaCheckFailure(record)
 }
 
 /** 首帧图记录（与 FilmCreate.getSbFirstImage 一致） */
@@ -94,13 +117,15 @@ export function resolveSbVideoRecord(sb, videosBySbId) {
   const list = getSbVideosList(videosBySbId, sb.id)
   if (list.length) {
     if (sb.video_url) {
-      const matched = list.find((v) => v.video_url === sb.video_url)
+      const matched = list.find((v) => v.video_url === sb.video_url && isAutomaticallyUsableVideo(v))
       if (matched) return matched
       const lp = sb.video_url.replace(/^\/static\//, '')
-      const byPath = list.find((v) => v.local_path && (v.local_path === lp || sb.video_url.includes(v.local_path)))
+      const byPath = list.find((v) => isAutomaticallyUsableVideo(v) && v.local_path && (v.local_path === lp || sb.video_url.includes(v.local_path)))
       if (byPath) return byPath
+      const rejectedMatch = list.some((v) => isMediaCheckFailure(v) && (v.video_url === sb.video_url || (v.local_path && (v.local_path === lp || sb.video_url.includes(v.local_path)))))
+      if (rejectedMatch) return null
     }
-    return list[0]
+    return list.find(isAutomaticallyUsableVideo) || null
   }
   if (sb.video_url || sb.local_path) {
     return { video_url: sb.video_url, local_path: sb.local_path }

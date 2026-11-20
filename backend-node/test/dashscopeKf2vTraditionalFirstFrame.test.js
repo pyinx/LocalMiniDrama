@@ -143,6 +143,10 @@ describe('DashScope 传统模式首帧不被参考图列表吞掉 (#77)', () => 
     const db = createTestDb();
     insertDashScopeConfig(db, fake.baseUrl, 'wan2.6-i2v-flash');
     const rowId = insertTraditionalVideoRow(db, 'wan2.6-i2v-flash', [fake.baseUrl + '/static/sb-main.png']);
+    // 历史队列中仍可能有多余的尾帧；使用真实可序列化的首图地址，单测不依赖开发机的素材。
+    const first = 'https://cdn.example.com/static/sb-main.png';
+    db.prepare('UPDATE video_generations SET first_frame_url=?,image_url=?,reference_image_urls=? WHERE id=?')
+      .run(first, first, JSON.stringify([first]), rowId);
 
     await videoService.processVideoGeneration(db, silentLog, Number(rowId));
 

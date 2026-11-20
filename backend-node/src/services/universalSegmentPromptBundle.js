@@ -1,4 +1,4 @@
-const { buildUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
+const { buildUniversalStyleLine, DEFAULT_LINE3, universalDraftWithoutActionNote } = require('./universalOmniMultiBeatFormat');
 
 /**
  * 全能片段（Omni / Seedance 多图参考）用户消息构建：供「生成」与「润色」共用。
@@ -72,7 +72,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     chunk('MOVEMENT', sb.movement),
     chunk('LIGHTING', sb.lighting_style),
     chunk('DEPTH_OF_FIELD', sb.depth_of_field),
-    chunk('CURRENT_UNIVERSAL_SEGMENT', universalForLine),
+    chunk('CURRENT_UNIVERSAL_SEGMENT', universalDraftWithoutActionNote(universalForLine)),
   ].filter(Boolean);
 
   const hasMediaRef = (row) =>
@@ -280,7 +280,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     ].join('\n');
     line3Required =
       slots[0].kind === '场景'
-        ? '环境、光影与陈设定性参考 @图片1。若 @图片1 为宫格或多画面拼图，禁止成片复刻其分格或并列布局，仅提取统一的室内空间与光线语义；须单镜头完整连续画面。'
+        ? DEFAULT_LINE3
         : '本片段以首张参考图 @图片1 作为画面锚点展开。';
   }
 
@@ -329,7 +329,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
           '- 绑定到某张参考图时，只能写 IMAGE_SLOT_MAP 里列出的 @图片N（阿拉伯数字，如 @图片1、@图片2）。',
           '- 禁止用 @场景、@姓名、@林薇、@道具名 等形式指代参考图；需要指图时一律 @图片N。',
           '- 若 @图片1 为「场景」：只写环境/光影/陈设；人物外貌与动作按 CHARACTER_IMAGE_BINDING 从 @图片2 起。若首张参考图即角色，则以 MAP 为准。',
-          '- 场景参考若为四宫格/九宫格等拼图：见 SCENE_REFERENCE_LAYOUT；成片须单镜头连续画面，禁止模仿拼图布局。',
+          '- 场景参考若为拼图，仅从各格取空间信息；成片的每一帧都使用完整画幅。',
         ]),
     '- 每个 @图片N 与后随的中/英文字之间保留一个半角空格（后处理也会修正，但模型应直接写对）。',
     '- ORDERED_CHARACTER_NAMES 仅供理解剧情，不得当作图占位符。',
@@ -347,7 +347,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     ? [
         'SCENE_REFERENCE_LAYOUT（场景参考图可能是多宫格/多视角拼图，仅作内容与空间参考，成片禁止模仿拼图）:',
         '- 场景槽位（通常为 @图片1）常见为四宫格、九宫格或带分割线的多视角场景图：只提取家具、装修、色调、空间关系与光影，不要在提示中引导模型生成「分屏、宫格、多画面并列、复刻参考图网格」。',
-        '- 每一个「分镜k： Tk秒:」所在行的正文里都应点明：单镜头连续画幅、无成片宫格分屏；参考拼图仅用于理解空间与光线。',
+        '- 多个视点可以沿时间顺序切换；同一时刻只显示一个视点。',
       ].join('\n')
     : '';
 
@@ -392,7 +392,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
       chunk('SEGMENT_TITLE_NEXT', nextSeg || null),
       segChange
         ? 'BOUNDARY_HINT: 段落标题相对上一镜已变化 → 转场/新叙事块概率高 → 可提高 M 或前几秒侧重空间/情绪铺垫再入冲突。'
-        : 'BOUNDARY_HINT: 同段落延续 → M 可保守；若 ACTION 内对白长、机位少，也可 M=1 但在单行内写满时间流动。',
+        : 'BOUNDARY_HINT: 用 ACTION 的动作和回应决定节拍。多人互动须在同一构图中清楚呈现双方，或按动作先后切换视点；单人持续动作可用一拍。',
     ].join('\n');
   } catch (_) {
     shotPacingBlock = [

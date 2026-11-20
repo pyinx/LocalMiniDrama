@@ -10,6 +10,24 @@ const videoClient = require('../src/services/videoClient');
 const videoService = require('../src/services/videoService');
 const { getFfmpegPath } = require('../src/utils/ffmpegPath');
 const { takeWorkspace } = require('./helpers/workbenchTakes');
+const { takeEligibility, resolveTake } = require('../src/services/workbenchTakeService');
+
+test('only explicit failed original-media checks block automatic use', () => {
+  assert.equal(takeEligibility({}), true); // pre-check legacy take
+  assert.equal(takeEligibility({ media_check: '{bad json' }), true);
+  assert.equal(takeEligibility({ media_check: JSON.stringify({ status: 'unavailable', issues: [] }) }), true);
+  assert.equal(takeEligibility({ media_check: JSON.stringify({ status: 'failed', issues: [{ code: 'duration_short' }] }) }), false);
+  assert.equal(takeEligibility({ media_check: JSON.stringify({ status: 'failed', issues: [] }) }), true);
+});
+
+test('automatic take resolution skips a failed newest take but preserves explicit adoption', () => {
+  const rows = [
+    { id: 2, video_url: '/static/new.mp4', created_at: '2026-01-02', media_check: JSON.stringify({ status: 'failed', issues: [{ code: 'duration_short' }] }) },
+    { id: 1, video_url: '/static/old.mp4', created_at: '2026-01-01' },
+  ];
+  assert.equal(resolveTake(null, { id: 5, updated_at: '2025-01-01' }, rows).id, 1);
+  assert.equal(resolveTake(null, { id: 5, adopted_video_generation_id: 2 }, rows).id, 2);
+});
 
 async function archive(ws, extras = []) {
   const res = await fetch(ws.url('/dramas/' + ws.id + '/export?take_ids=' + extras.join(',')));

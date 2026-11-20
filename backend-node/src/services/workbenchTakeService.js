@@ -34,6 +34,19 @@ function candidates(db, sbId) {
     AND v.status='completed' AND v.deleted_at IS NULL ORDER BY v.created_at DESC, v.id DESC`).all(sbId);
 }
 
+// A missing check is a legacy record; unavailable checks are inconclusive.
+// Only an explicit failed measurement with reported issues blocks automation.
+function parseMediaCheck(row) {
+  const check = row?.media_check;
+  if (typeof check !== 'string') return check || null;
+  try { return JSON.parse(check); } catch { return null; }
+}
+
+function takeEligibility(row) {
+  const check = parseMediaCheck(row);
+  return !(check?.status === 'failed' && Array.isArray(check.issues) && check.issues.length > 0);
+}
+
 // A few legacy projects used the main image slot to store a video. Before that slot
 // is rebound to a still, preserve the effective video in its dedicated legacy field.
 function videoUrlBeforeFrameChange(db, sb) {
@@ -52,7 +65,7 @@ function resolveTake(db, sb, rows) {
   if (sb.adopted_video_generation_id != null) {
     return publicMedia(rows.find(v => v.id === sb.adopted_video_generation_id));
   }
-  const latest = rows.find(publicMedia);
+  const latest = rows.find(v => publicMedia(v) && takeEligibility(v));
   // Legacy entries used local_path for both the video and the storyboard's still image.
   const videoPath = isVideoPath(sb.local_path) ? sb.local_path : null;
   const legacy = publicMedia({ video_url: sb.video_url, local_path: videoPath, storyboard_id: sb.id });
@@ -60,6 +73,7 @@ function resolveTake(db, sb, rows) {
     return publicMedia(latest);
   }
   const matches = rows.filter(v => sameMedia(legacy, publicMedia(v)));
+  if (matches.length && matches.every(v => !takeEligibility(v))) return publicMedia(latest);
   // A path shared by multiple candidates remains playable without assigning ownership.
   return matches.length === 1 ? publicMedia(matches[0]) : legacy;
 }
@@ -130,6 +144,8 @@ function details(db, sbId) {
     can_register_legacy: Boolean(current && current.id == null && !rows.some(v => sameMedia(current, publicMedia(v)))),
     candidates: rows.filter(publicMedia).map(v => ({
       ...publicMedia(v), model: v.model, created_at: v.created_at, keep_in_archive: !!v.keep_in_archive,
+      media_check: parseMediaCheck(v),
+      eligible_for_automatic_use: takeEligibility(v),
       reviews: reviews(db, v.id),
     })),
   };
@@ -185,6 +201,6 @@ function reviewStatus(db, sbId, id, reviewId, status) {
 }
 
 module.exports = {
-  fail, publicMedia, localFile, candidates, resolveTake, selectionFields, videoUrlBeforeFrameChange, adopt, take,
+  fail, publicMedia, localFile, candidates, parseMediaCheck, takeEligibility, resolveTake, selectionFields, videoUrlBeforeFrameChange, adopt, take,
   details, registerLegacy, keep, reviews, addReview, reviewStatus, validateReview,
 };

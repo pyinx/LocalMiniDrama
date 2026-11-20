@@ -71,7 +71,7 @@ export function getDramaGenerationOptions(drama) {
 
 export function toAbsoluteMediaUrl(url) {
   if (!url) return ''
-  if (/^https?:\/\//i.test(url)) return url
+  if (/^(https?:\/\/|oss:\/\/|data:image\/)/i.test(url)) return url
   if (typeof window !== 'undefined') {
     const path = url.startsWith('/') ? url : `/static/${url.replace(/^\//, '')}`
     return `${window.location.origin}${path}`

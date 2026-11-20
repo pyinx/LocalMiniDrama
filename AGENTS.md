@@ -33,6 +33,8 @@ No ESLint or other lint tool is configured in this codebase.
 cd frontweb && npm run build
 ```
 
+macOS installers are built and verified only for an explicitly requested release. Routine changes use the applicable source tests and web build.
+
 ### Key Development Notes
 
 - Pure JavaScript (no TypeScript) throughout.

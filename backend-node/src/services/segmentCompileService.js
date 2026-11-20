@@ -123,7 +123,7 @@ function compileStoryboard(db, storyboardId, opts = {}) {
   const drama = db.prepare('SELECT style, metadata FROM dramas WHERE id = ?').get(sb.drama_id);
   const styleText = (mergeCfgStyleWithDrama(cfg, drama || {}).style || {}).default_style_zh || '';
   const style = deriveStyleSentences(styleText || '电影风格，高清画质');
-  const target = videoClient.resolveVideoTarget(db, opts.model);
+  const target = opts.target || videoClient.resolveVideoTarget(db, opts.model);
   const continuity = (episodeContinuityService.getContinuity(db, sb.episode_id) || {})[String(ir.scene.scene_id)] || {};
 
   const bindings = loadBindings(db, cfg, sb.drama_id, ir);

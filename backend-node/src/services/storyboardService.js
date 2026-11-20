@@ -1,6 +1,7 @@
 // 分镜：create, update, delete；帧提示词 get/save
 const { parseSegmentIr, readStoredIr, SEGMENT_IR_VERSION } = require('./segmentIr/schema');
 const { planSegments } = require('./segmentIr/planner');
+const { withStoryboardAction } = require('./universalOmniMultiBeatFormat');
 const {
   IR_OWNED_FIELDS,
   projectLegacyFields,
@@ -170,14 +171,17 @@ function assertNotSegmentIr(db, id) {
   if (hasSegmentIr(db, id)) throw new SegmentIrOwnedError([]);
 }
 
-/** AI 可能在等待期间失去写权限，所有权条件必须与最终写入在同一条 SQL 中。 */
+/** 在一次写事务内读取最新动作、校验所有权并保存，返回客户端应展示的最终稿。 */
 function saveLegacyUniversalPrompt(db, id, text) {
-  const result = db.prepare(`UPDATE storyboards SET universal_segment_text = ?, updated_at = ?
-    WHERE id = ? AND deleted_at IS NULL AND (segment_ir IS NULL OR segment_ir = '')`)
-    .run(text, new Date().toISOString(), id);
-  if (result.changes) return true;
-  assertNotSegmentIr(db, id);
-  return false;
+  return db.transaction(() => {
+    const row = db.prepare('SELECT action, segment_ir FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(id);
+    if (!row) return null;
+    if (row.segment_ir) throw new SegmentIrOwnedError([]);
+    const saved = withStoryboardAction(text, row.action);
+    db.prepare('UPDATE storyboards SET universal_segment_text = ?, updated_at = ? WHERE id = ?')
+      .run(saved, new Date().toISOString(), id);
+    return saved;
+  }).immediate();
 }
 
 /**

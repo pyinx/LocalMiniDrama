@@ -2,6 +2,53 @@
 const fs = require('fs');
 const path = require('path');
 const { normalizeMaterialHubToken } = require('./jimengMaterialHubService');
+const { dashScopeBaseUrl } = require('./wanVideoRequest');
+const { getVideoCaps } = require('./modelCapabilities');
+
+// 百炼的模型目录决定哪些 ID 可见，本地能力表只决定哪些 ID 能交给分镜适配器。
+async function listWanVideoModels(baseUrl, apiKey) {
+  let url;
+  try {
+    url = new URL(dashScopeBaseUrl(baseUrl));
+  } catch {
+    throw new Error('请填写有效的百炼 Base URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('请填写有效的百炼 Base URL');
+  }
+  if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('请先填写百炼 API Key');
+  url.pathname = url.pathname.replace(/\/$/, '') + '/api/v1/models';
+  url.search = new URLSearchParams({ providers: 'wan', capabilities: 'VG', page_size: '100' }).toString();
+  const signal = AbortSignal.timeout(15000);
+  const ids = new Set();
+  let received = 0;
+  for (let page = 1; ; page++) {
+    url.searchParams.set('page_no', String(page));
+    let data;
+    let res;
+    try {
+      res = await fetch(url, { headers: { Authorization: 'Bearer ' + apiKey.trim() }, signal, redirect: 'error' });
+      if (res.ok) data = await res.json();
+    } catch {
+      throw new Error(signal.aborted ? '查询百炼模型目录超时，请重试' : '无法读取百炼模型目录，请检查 Base URL 和网络连接');
+    }
+    if (!res.ok) throw new Error('百炼模型目录请求失败（HTTP ' + res.status + '）');
+    const output = data?.output;
+    if (data?.success !== true || !Array.isArray(output?.models) || output.page_no !== page ||
+        !Number.isSafeInteger(output.total) || output.total < 0) {
+      throw new Error('百炼模型目录返回了无效的分页数据');
+    }
+    for (const item of output.models) {
+      if (item?.provider === 'wan' && Array.isArray(item.capabilities) && item.capabilities.includes('VG') && typeof item.model === 'string' && item.model.trim()) {
+        ids.add(item.model.trim());
+      }
+    }
+    received += output.models.length;
+    if (received >= output.total) break;
+    if (!output.models.length) throw new Error('百炼模型目录分页不完整，请刷新重试');
+  }
+  return Array.from(ids, id => ({ id, supported: !getVideoCaps({ protocol: 'dashscope', model: id }).unknown }));
+}
 
 function normalizeApiKeyForService(serviceType, apiKey) {
   if (serviceType === 'jimeng2_character_auth' && apiKey != null) {
@@ -92,8 +139,8 @@ function createConfig(db, log, req) {
     } else if (p === 'dashscope' || p === 'qwen_image') {
       if (st === 'image' || st === 'storyboard_image') endpoint = '/api/v1/services/aigc/multimodal-generation/generation';
       else if (st === 'video' && p === 'dashscope') {
-        endpoint = '/api/v1/services/aigc/image2video/video-synthesis';
-        queryEndpoint = '/api/v1/tasks/{taskId}';
+        // 提交路径由所选视频模型决定，一条配置可以包含多个模型。
+        queryEndpoint ||= '/api/v1/tasks/{taskId}';
       }
     } else if (p === 'volces' || p === 'volcengine' || p === 'volc') {
       if (st === 'video') {
@@ -583,6 +630,7 @@ function bulkUpdateApiKey(db, log, newKey) {
 }
 
 module.exports = {
+  listWanVideoModels,
   listConfigs,
   getConfig,
   createConfig,

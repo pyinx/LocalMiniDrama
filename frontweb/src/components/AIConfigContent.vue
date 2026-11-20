@@ -276,7 +276,7 @@
               </el-tooltip>
             </span>
           </template>
-          <el-select v-model="form.service_type" placeholder="选择类型" style="width: 100%" @change="onServiceTypeChange">
+          <el-select :model-value="form.service_type" placeholder="选择类型" style="width: 100%" @update:model-value="onServiceTypeChange">
             <el-option label="文本/对话" value="text" />
             <el-option label="文本生成图片" value="image" />
             <el-option label="分镜图片生成" value="storyboard_image" />
@@ -502,11 +502,13 @@ input_reference = (图片文件，可选)</pre>
               <el-collapse-item name="dashscope-vid">
                 <template #title><span class="ph-tag ph-tag-vid">视频</span> 通义万象 DashScope</template>
                 <div class="ph-body">
-                  <b>Base URL：</b><code>https://dashscope.aliyuncs.com</code><br>
-                  <b>Endpoint：</b><code>POST /api/v1/services/aigc/video-generation/video-synthesis</code><br>
-                  <pre>{ "model": "wan2.2-kf2v-flash",
-  "input": { "prompt": "...", "img_url": "https://..." },
-  "parameters": { "size": "1280*720", "duration": 5 } }</pre>
+                  <b>Base URL：</b><code>https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com</code><br>
+                  <b>工作空间地址</b>可在百炼控制台复制与 API Key 同地域的 Base URL。<br>
+                  <b>生成接口</b> <code>POST /api/v1/services/aigc/video-generation/video-synthesis</code><br>
+                  <pre>{ "model": "wan3.0-video",
+  "input": { "prompt": "图1中的人物推开门", "media": [{ "type": "reference_image", "url": "https://..." }] },
+  "parameters": { "resolution": "720P", "ratio": "9:16", "duration": 6, "audio": true } }</pre>
+                  2.7 R2V 支持最多 5 张参考图，纯图片参考可生成 2–15 秒。3.0 支持最多 10 张参考图，纯图片参考可生成 2–30 秒。3.0 的多图参考和首尾帧需分别使用。
                 </div>
               </el-collapse-item>
               <el-collapse-item name="gemini-vid">
@@ -805,7 +807,7 @@ input_reference = (图片文件，可选)</pre>
                 <template #content>
                   <div class="cfg-tip-content">
                     该厂商下可用的模型，多个用逗号或换行分隔。<br>
-                    可从上方「追加预设模型」下拉快速添加，也可手动输入。
+                    可从下拉列表添加，也可手动输入。
                   </div>
                 </template>
                 <el-icon class="tip-icon"><QuestionFilled /></el-icon>
@@ -815,16 +817,20 @@ input_reference = (图片文件，可选)</pre>
           <div class="model-row">
             <el-select
               v-model="presetModelPick"
-              placeholder="追加预设模型"
+              :placeholder="isWanVideoForm ? '从百炼目录添加模型' : '追加预设模型'"
               clearable
               filterable
+              :loading="isWanVideoForm && wanCatalogState === 'loading'"
               style="width: 220px; margin-bottom: 8px"
+              @visible-change="onModelMenuOpen"
               @change="onPresetModelSelect"
             >
-              <el-option v-for="m in availableModels" :key="m" :label="m" :value="m" />
+              <el-option v-for="m in availableModels" :key="m.id" :label="m.supported ? m.id : m.id + '（尚未适配）'" :value="m.id" :disabled="!m.supported" />
             </el-select>
+            <el-button v-if="isWanVideoForm" link type="primary" :disabled="!canLoadWanCatalog || wanCatalogState === 'loading'" @click="loadWanCatalog">刷新模型</el-button>
           </div>
-          <el-input v-model="form.modelText" type="textarea" :rows="2" placeholder="选择预设厂商后自动填入，可编辑；多个用逗号或换行分隔" />
+          <p v-if="isWanVideoForm && wanCatalogHint" class="field-tip" role="status">{{ wanCatalogHint }}</p>
+          <el-input v-model="form.modelText" type="textarea" :rows="2" placeholder="选择或输入模型 ID，多个用逗号或换行分隔" />
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -836,11 +842,13 @@ input_reference = (图片文件，可选)</pre>
           </template>
           <el-select
             v-model="form.default_model"
-            :placeholder="formModelList.length ? '从上面模型列表中选一个作为生成时使用的默认' : '请先填写上方模型列表'"
+            :placeholder="isWanVideoForm ? '选择默认视频模型' : (formModelList.length ? '从上面模型列表中选一个作为生成时使用的默认' : '请先填写上方模型列表')"
             clearable
             style="width: 100%"
+            @visible-change="onModelMenuOpen"
+            @change="isWanVideoForm && onPresetModelSelect($event)"
           >
-            <el-option v-for="m in formModelList" :key="m" :label="m" :value="m" />
+            <el-option v-for="m in defaultModelOptions" :key="m" :label="m" :value="m" />
           </el-select>
           <p class="field-tip">该配置被选为「默认」时，生成故事/图片/视频将使用此处指定的模型。</p>
         </el-form-item>
@@ -969,7 +977,7 @@ input_reference = (图片文件，可选)</pre>
             <li><b>文本生成图片</b>：通义万象（wan2.6-image）— 角色/场景/道具图</li>
             <li><b>文本生成图片</b>：通义千问图像（qwen-image-3.0，备选，不设为默认）— 角色/场景图</li>
             <li><b>分镜图片生成</b>：通义万象（wan2.6-image）— 支持角色参考图</li>
-            <li><b>视频生成</b>：通义万相（wan2.2-kf2v-flash）— 生成视频片段</li>
+            <li><b>视频生成</b>：从百炼目录添加当前已适配的通义万相视频模型</li>
           </ul>
         </div>
         <div class="one-key-section">
@@ -983,8 +991,11 @@ input_reference = (图片文件，可选)</pre>
           <p class="one-key-note">💡 通义一个 Key 同时支持文本、图片、视频等所有服务</p>
         </div>
       </div>
-      <el-form label-width="0" style="margin-top: 8px">
-        <el-form-item>
+      <el-form label-position="top" style="margin-top: 8px">
+        <el-form-item label="百炼工作空间 Base URL">
+          <el-input v-model="oneKeyTongyiBase" placeholder="输入与 API Key 同地域的百炼地址" />
+        </el-form-item>
+        <el-form-item label="API Key">
           <el-input
             v-model="oneKeyTongyiKey"
             type="password"
@@ -996,7 +1007,7 @@ input_reference = (图片文件，可选)</pre>
       </el-form>
       <template #footer>
         <el-button @click="oneKeyTongyiVisible = false">取消</el-button>
-        <el-button type="success" :loading="oneKeyTongyiSaving" :disabled="!oneKeyTongyiKey.trim()" @click="submitOneKeyTongyi">
+        <el-button type="success" :loading="oneKeyTongyiSaving" :disabled="!oneKeyTongyiBase.trim() || !oneKeyTongyiKey.trim()" @click="submitOneKeyTongyi">
           确定，一键创建配置
         </el-button>
       </template>
@@ -1312,8 +1323,9 @@ watch(
   { immediate: true }
 )
 
-function onServiceTypeChange() {
-  const st = form.value.service_type || 'text'
+function onServiceTypeChange(st) {
+  const previous = form.value.service_type
+  form.value.service_type = st
   if (st === 'jimeng2_character_auth') {
     if (!form.value.provider || form.value.provider === CUSTOM_PROVIDER_SENTINEL) {
       form.value.provider = 'jimeng_material_api'
@@ -1337,9 +1349,15 @@ function onServiceTypeChange() {
   const current = form.value.provider
   if (!current || !listByType.some((p) => p.id === current)) {
     form.value.provider = ''
+    form.value.api_protocol = ''
     form.value.base_url = ''
     form.value.modelText = ''
     form.value.default_model = ''
+  } else if (current === 'dashscope' && (st === 'video' || previous === 'video')) {
+    // 图片和视频共用供应商与密钥，切换类型时须重新选择该类型的模型。
+    const models = listByType.find(p => p.id === current)?.models || []
+    form.value.modelText = models.join('\n')
+    form.value.default_model = models[0] || ''
   }
 }
 
@@ -1386,6 +1404,7 @@ const testServiceType = ref('')
 const testError = ref('')
 const oneKeyTongyiVisible = ref(false)
 const oneKeyTongyiKey = ref('')
+const oneKeyTongyiBase = ref('')
 const oneKeyTongyiSaving = ref(false)
 const oneKeyCheapSeedance2Visible = ref(false)
 const oneKeyCheapSeedance2Key = ref('')
@@ -1445,7 +1464,7 @@ const providerConfigs = {
     { id: 'jimeng_novel', name: '即梦短剧 CLI（本机 jimeng-novel，可选）', models: ['Seedance_2.5', 'Seedance_2.5_flash', 'Seedance_2.5_draft', 'seedance2.0_fast_vision', 'seedance2.0_vision', 'Seedance_2.0_mini', 'wan3.0', 'happyhorse-1.1'] },
     { id: 'minimax', name: 'MiniMax 海螺', models: ['MiniMax-Hailuo-2.3', 'MiniMax-Hailuo-2.3-Fast', 'MiniMax-Hailuo-02'] },
     { id: 'gemini', name: 'Google Gemini (Veo)', models: ['veo-3.1-generate-preview', 'veo-3.0-generate-preview', 'veo-3.0-fast-generate-preview'] },
-    { id: 'dashscope', name: '通义万相', models: ['wan2.6-r2v-flash', 'wan2.6-t2v', 'wan2.2-kf2v-flash', 'wan2.6-i2v-flash', 'wanx2.1-vace-plus'] },
+    { id: 'dashscope', name: '通义万相' },
     {
       id: 'jimeng_ai_api',
       name: 'Jimeng AI API（自建即梦免费 API）',
@@ -1579,21 +1598,74 @@ const availableProviderOptions = computed(() => {
   return result
 })
 
-/** 当前厂商的预设模型列表（用于追加预设模型） */
+const isWanVideoForm = computed(() => !vendorLock.value.enabled && form.value.service_type === 'video'
+  && (form.value.api_protocol || form.value.provider) === 'dashscope')
+const canLoadWanCatalog = computed(() => Boolean(isWanVideoForm.value && form.value.base_url?.trim() && form.value.api_key?.trim()))
+const wanCatalog = ref([])
+const wanCatalogState = ref('idle')
+const wanCatalogError = ref('')
+let wanCatalogRequest = 0
+watch([dialogVisible, isWanVideoForm, () => form.value.base_url, () => form.value.api_key], () => {
+  wanCatalogRequest++
+  wanCatalog.value = []
+  wanCatalogState.value = 'idle'
+  wanCatalogError.value = ''
+}, { flush: 'sync' })
+
+async function loadWanCatalog() {
+  if (!canLoadWanCatalog.value || wanCatalogState.value === 'loading') return
+  const request = ++wanCatalogRequest
+  wanCatalogState.value = 'loading'
+  try {
+    const models = await aiAPI.listWanVideoModels(form.value.base_url, form.value.api_key)
+    if (request !== wanCatalogRequest) return
+    wanCatalog.value = models
+    wanCatalogState.value = 'ready'
+  } catch (error) {
+    if (request !== wanCatalogRequest) return
+    wanCatalog.value = []
+    wanCatalogError.value = error.message || '获取百炼模型目录失败'
+    wanCatalogState.value = 'error'
+  }
+}
+
+function onModelMenuOpen(open) {
+  if (open && wanCatalogState.value === 'idle') loadWanCatalog()
+}
+
+const wanCatalogHint = computed(() => {
+  if (!canLoadWanCatalog.value) return '填写 Base URL 和 API Key 后可查询百炼模型。'
+  if (wanCatalogState.value === 'error') return wanCatalogError.value
+  if (wanCatalogState.value === 'ready' && !wanCatalog.value.length) return '百炼目录当前没有万相视频模型。'
+  return ''
+})
+
+const defaultModelOptions = computed(() => {
+  if (!isWanVideoForm.value) return formModelList.value
+  const compatible = wanCatalog.value.filter(m => m.supported).map(m => m.id)
+  return [...new Set([...formModelList.value, ...compatible])]
+})
+
 const availableModels = computed(() => {
+  if (isWanVideoForm.value) return wanCatalog.value
   const st = form.value.service_type
   const provider = form.value.provider
   if (!st || !provider) return []
   const p = (providerConfigs[st] || []).find((x) => x.id === provider)
-  return p?.models || []
+  return (p?.models || []).map(id => ({ id, supported: true }))
 })
+
+function dashScopeBaseUrl(value) {
+  return (value || '').trim().replace(/\/+$/, '').replace(/\/(?:api|compatible-mode)\/v1$/, '')
+}
 
 /** 根据当前厂商/协议/base_url 推算实际将使用的接口地址，供用户核对 */
 const endpointPreviewInfo = computed(() => {
   const { provider, api_protocol, base_url, service_type, endpoint, query_endpoint } = form.value
   const p = String(provider || '').toLowerCase()
   const proto = api_protocol || providerProtocolMap[p] || ''
-  const base = (base_url || '').replace(/\/$/, '')
+  let base = (base_url || '').replace(/\/$/, '')
+  if (service_type === 'video' && proto === 'dashscope') base = dashScopeBaseUrl(base_url)
 
   if (service_type === 'jimeng2_character_auth') {
     const root = base || '(请填写网关 URL)'
@@ -1637,14 +1709,17 @@ const endpointPreviewInfo = computed(() => {
       submitPath = '/images/generations'  // openai 兼容：base_url 已含 /v1
     }
     } else if (service_type === 'video') {
-    if (endpoint) {
+    if (proto === 'dashscope') {
+      const model = form.value.default_model || formModelList.value[0]
+      submitPath = model === 'wan2.2-kf2v-flash'
+        ? '/api/v1/services/aigc/image2video/video-synthesis'
+        : '/api/v1/services/aigc/video-generation/video-synthesis'
+    } else if (endpoint) {
       submitPath = endpoint
     } else if (proto === 'volcengine_omni') {
       submitPath = '/contents/generations/tasks'
     } else if (proto === 'volcengine' || p === 'volces' || p === 'volcengine') {
       submitPath = '/videos/generations'
-    } else if (proto === 'dashscope' || p === 'dashscope') {
-      submitPath = '/api/v1/services/aigc/video-generation/video-synthesis'
     } else if (proto === 'gemini' || p === 'gemini') {
       const m = form.value.default_model || '{模型名}'
       return {
@@ -1691,7 +1766,7 @@ const endpointPreviewInfo = computed(() => {
     } else if (proto === 'volcengine' || p === 'volces' || p === 'volcengine') {
       queryPath = '/tasks/{taskId}/info'
     } else if (proto === 'dashscope' || p === 'dashscope') {
-      queryPath = '/api/v1/tasks/{taskId}/info'
+      queryPath = '/api/v1/tasks/{taskId}'
     } else if (proto === 'vidu' || p === 'vidu') {
       queryPath = '/ent/v2/tasks/{taskId}/creations'
     } else if (proto === 'sora') {
@@ -1725,7 +1800,9 @@ const endpointPreviewInfo = computed(() => {
   }
 
   const submitUrl = base ? (base + submitPath) : ('(未填 Base URL)' + submitPath)
-  const queryUrl = queryPath ? (base ? base + queryPath : '(未填 Base URL)' + queryPath) : null
+  const relativeDashScopeQuery = service_type === 'video' && proto === 'dashscope' && query_endpoint && !/^\/?api\/v1\//.test(query_endpoint)
+  const queryBase = relativeDashScopeQuery ? (base_url || '').replace(/\/$/, '') : base
+  const queryUrl = queryPath ? (queryBase || '(未填 Base URL)') + '/' + queryPath.replace(/^\//, '') : null
 
   if (!submitPath) return null
   return {
@@ -1802,11 +1879,12 @@ function onProviderChange(providerId) {
 
 /** 通义一键配置用 */
 const TONGYI_CONFIGS = [
-  { service_type: 'text', name: '通义千问', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', provider: 'qwen', model: ['qwen-plus'] },
-  { service_type: 'image', name: '通义万象 文本生图', base_url: 'https://dashscope.aliyuncs.com', provider: 'dashscope', model: ['wan2.6-image'] },
-  { service_type: 'image', name: '通义千问 文本生图', base_url: 'https://dashscope.aliyuncs.com', provider: 'qwen_image', model: ['qwen-image-3.0', 'qwen-image-3.0-pro'], is_default: false },
-  { service_type: 'storyboard_image', name: '通义万象 分镜图', base_url: 'https://dashscope.aliyuncs.com', provider: 'dashscope', model: ['wan2.6-image'] },
-  { service_type: 'video', name: '通义万相', base_url: 'https://dashscope.aliyuncs.com', provider: 'dashscope', model: ['wan2.2-kf2v-flash'] }
+  { service_type: 'text', name: '通义千问', provider: 'qwen', model: ['qwen-plus'] },
+  { service_type: 'image', name: '通义万象 文本生图', provider: 'dashscope', model: ['wan2.6-image'] },
+  { service_type: 'image', name: '通义千问 文本生图', provider: 'qwen_image', model: ['qwen-image-3.0', 'qwen-image-3.0-pro'], is_default: false },
+  { service_type: 'storyboard_image', name: '通义万象 分镜图', provider: 'dashscope', model: ['wan2.6-image'] },
+  { service_type: 'video', name: '通义万相', provider: 'dashscope',
+    preferredModel: 'wan2.2-kf2v-flash' }
 ]
 
 /** 低价 Seedance2 一键配置（仅视频） */
@@ -1972,6 +2050,7 @@ function openEdit(row) {
     kling_secret_key_base64,
   }
   dialogVisible.value = true
+  if (canLoadWanCatalog.value) loadWanCatalog()
 }
 
 async function submit() {
@@ -1979,6 +2058,10 @@ async function submit() {
   saving.value = true
   try {
     let modelList = parseModelText(form.value.modelText)
+    if (isWanVideoForm.value && !modelList.length) {
+      ElMessage.warning('请从百炼目录选择视频模型，或输入模型 ID')
+      return
+    }
     if (form.value.service_type === 'jimeng2_character_auth' && modelList.length === 0) {
       modelList = ['-']
     }
@@ -2192,24 +2275,33 @@ async function onBatchDelete() {
 
 function openOneKeyTongyi() {
   oneKeyTongyiKey.value = ''
+  oneKeyTongyiBase.value = getBaseUrlForProvider('dashscope')
   oneKeyTongyiVisible.value = true
 }
 
 async function submitOneKeyTongyi() {
   const apiKey = oneKeyTongyiKey.value.trim()
-  if (!apiKey) return
+  const base = dashScopeBaseUrl(oneKeyTongyiBase.value)
+  if (!apiKey || !base || oneKeyTongyiSaving.value) return
   oneKeyTongyiSaving.value = true
   try {
+    const videoConfig = TONGYI_CONFIGS.find(cfg => cfg.service_type === 'video')
+    const catalog = await aiAPI.listWanVideoModels(base, apiKey)
+    const videoModels = catalog.filter(m => m.supported).map(m => m.id)
+    if (!videoModels.length) {
+      ElMessage.warning('百炼目录没有当前分镜适配器支持的视频模型，未创建配置')
+      return
+    }
     for (const cfg of TONGYI_CONFIGS) {
-      const models = cfg.model || []
+      const models = cfg === videoConfig ? videoModels : cfg.model
       await aiAPI.create({
         service_type: cfg.service_type,
         name: cfg.name,
         provider: cfg.provider,
-        base_url: cfg.base_url,
+        base_url: cfg.service_type === 'text' ? base + '/compatible-mode/v1' : base,
         api_key: apiKey,
         model: models,
-        default_model: models[0] || null,
+        default_model: models.includes(cfg.preferredModel) ? cfg.preferredModel : models[0],
         priority: 10,
         is_default: cfg.is_default !== false
       })

@@ -6,6 +6,7 @@ import {
   isSeedance2VideoModel,
   parseAiConfigSettings,
   videoModelNameFromAiConfig,
+  wanStoryboardUsesText,
 } from '../src/utils/videoOmniSupport.js'
 
 test('videoModelNameFromAiConfig prefers default_model then first model', () => {
@@ -13,6 +14,16 @@ test('videoModelNameFromAiConfig prefers default_model then first model', () => 
   assert.equal(videoModelNameFromAiConfig({ model: ['b', 'c'] }), 'b')
   assert.equal(videoModelNameFromAiConfig({ model: 'd' }), 'd')
   assert.equal(videoModelNameFromAiConfig(null), '')
+})
+
+test('Wan storyboard text mode respects selected references and frames', () => {
+  const cfg = model => ({ provider: 'dashscope', model })
+  assert.equal(wanStoryboardUsesText(cfg('wan3.0-video'), false, [], '/static/last.png'), false)
+  assert.equal(wanStoryboardUsesText(cfg('wan3.0-video'), false, [], ''), true)
+  assert.equal(wanStoryboardUsesText(cfg('wan3.0-video'), true, ['actor.png']), false)
+  assert.equal(wanStoryboardUsesText(cfg('wan2.7-r2v'), true, []), false)
+  assert.equal(wanStoryboardUsesText(cfg('wan2.7-t2v'), true, ['actor.png']), false)
+  assert.equal(wanStoryboardUsesText(cfg('wan2.7-t2v'), false, [], 'main.png'), true)
 })
 
 test('parseAiConfigSettings handles object, JSON string and invalid JSON', () => {
@@ -67,6 +78,12 @@ test('explicit supports_universal_omni setting still enables omni', () => {
 })
 
 test('non omni-capable models without opt-in are rejected', () => {
+  for (const model of ['wan3.0-video', 'wan3.0-video-prime', 'wan2.7-r2v', 'wan2.7-r2v-2026-06-12']) {
+    assert.equal(canUseUniversalOmniVideoApi({ provider: 'dashscope', model }), true, model)
+  }
+  for (const model of ['wan2.7-i2v', 'wan2.7-t2v', 'wan2.2-kf2v-flash', 'wan3.0-unknown']) {
+    assert.equal(canUseUniversalOmniVideoApi({ api_protocol: 'dashscope', model }), false, model)
+  }
   assert.equal(canUseUniversalOmniVideoApi({ provider: 'openai', model: 'sora-2' }), false)
   assert.equal(
     canUseUniversalOmniVideoApi({

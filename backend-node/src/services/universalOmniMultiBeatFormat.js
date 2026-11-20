@@ -2,8 +2,27 @@
  * 全能模式 universal_segment_text 统一格式：多子分镜段落（与 generate/polish 接口一致）
  */
 
-const DEFAULT_LINE3 =
+const LEGACY_SCENE_REFERENCE =
   '环境、光影与陈设定性参考 @图片1。若 @图片1 为宫格或多画面拼图，禁止成片复刻其分格或并列布局，仅提取统一的室内空间与光线语义；须单镜头完整连续画面。';
+const DEFAULT_LINE3 = '环境、光影与陈设参考 @图片1。每个时刻使用完整画幅，禁止宫格或并列分屏。按剧情安排机位和切镜。';
+const ACTION_PREFIX = '本镜动作依据（在以下节拍内各演一次，以此为准）：';
+
+/** 编辑正文与系统补入的动作依据分开，避免旧动作在下次润色时又被写回。 */
+function universalDraftWithoutActionNote(text) {
+  if (!text) return text;
+  return String(text).replace(LEGACY_SCENE_REFERENCE, DEFAULT_LINE3)
+    .split(/\r?\n/).filter(line => !line.startsWith(ACTION_PREFIX)).join('\n');
+}
+
+function withStoryboardAction(text, action) {
+  const draft = universalDraftWithoutActionNote(text);
+  const source = String(action || '').replace(/\s+/g, ' ').trim();
+  if (!source || !draft?.trim() || draft.includes(source)) return draft;
+  const note = ACTION_PREFIX + source;
+  const firstBeat = draft.search(/分镜\s*1\s*[:：]\s*[\d.]+\s*秒/);
+  if (firstBeat < 0) return note + '\n' + draft;
+  return [draft.slice(0, firstBeat).trimEnd(), note, draft.slice(firstBeat)].filter(Boolean).join('\n');
+}
 
 function trim(s) {
   return s != null && String(s).trim() ? String(s).trim() : '';
@@ -100,6 +119,8 @@ function buildFallbackUniversalMultiBeatText(sb, d, styleHint) {
 
 module.exports = {
   DEFAULT_LINE3,
+  universalDraftWithoutActionNote,
+  withStoryboardAction,
   buildUniversalStyleLine,
   enforceUniversalStyleLine,
   normalizeUniversalSegmentTextNewlines,

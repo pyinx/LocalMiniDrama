@@ -5,9 +5,12 @@
       <el-alert v-else-if="state.resolved_video && state.resolved_video.id == null" title="多个候选使用同一旧片路径，请预览并手动选择版本。" type="info" :closable="false" />
       <el-select v-model="selected" placeholder="选择候选视频" aria-label="候选版本">
         <el-option v-for="v in state.candidates" :key="v.id" :value="v.id"
-          :label="`候选 #${v.id}${v.id === state.adopted_video_generation_id ? ' · 已采用' : ''}${v.reviews.length ? ' · ' + v.reviews.length + ' 条审片' : ''}`" />
+          :label="`候选 #${v.id}${v.id === state.adopted_video_generation_id ? ' · 已采用' : ''}${v.eligible_for_automatic_use === false ? ' · 质量检查未通过' : ''}${v.reviews.length ? ' · ' + v.reviews.length + ' 条审片' : ''}`" />
       </el-select>
       <template v-if="candidate">
+        <el-alert v-if="qualityIssues.length" title="质量检查发现问题。候选仍保留，可预览后手动采用。" type="warning" :closable="false" show-icon>
+          <ul class="quality-issues"><li v-for="(issue, index) in qualityIssues" :key="index">{{ issue }}</li></ul>
+        </el-alert>
         <video ref="player" :key="candidate.id" :src="videoRecordUrl(candidate)" controls preload="metadata" class="take-player" />
         <MediaMeasurement :key="candidate.id" :id="candidate.id" :board-id="board.id" @seek="seekSample" />
         <el-button size="small" :disabled="busy || candidate.id === state.adopted_video_generation_id" @click="adopt">采用此版</el-button>
@@ -41,7 +44,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storyboardsAPI } from '@/api/storyboards'
-import { videoRecordUrl } from '@/utils/storyboardMedia'
+import { mediaCheckIssueMessages, videoRecordUrl } from '@/utils/storyboardMedia'
 import MediaMeasurement from './MediaMeasurement.vue'
 const props = defineProps({ board: Object, episodeNumber: Number })
 const emit = defineEmits(['close', 'selection', 'revise', 'reshoot'])
@@ -49,6 +52,7 @@ const labels = { revise: '改稿', replace: '换候选', reshoot: '重拍本镜'
 const state = ref({ candidates: [] }), selected = ref(null), player = ref(null)
 const busy = ref(false), seconds = ref(0), note = ref(''), action = ref('revise')
 const candidate = computed(() => state.value.candidates.find(v => v.id === selected.value))
+const qualityIssues = computed(() => mediaCheckIssueMessages(candidate.value))
 watch(selected, () => { seconds.value = 0; note.value = '' })
 function seekSample(time) {
   if (player.value) player.value.currentTime = time
@@ -102,4 +106,5 @@ function follow(r) {
 .el-checkbox, .el-radio-group { margin:0 12px }
 .take-note { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--el-border-color) }
 .take-note span { overflow-wrap:anywhere }
+.quality-issues { margin: 6px 0 0; padding-left: 20px; }
 </style>

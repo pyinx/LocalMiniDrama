@@ -30,6 +30,9 @@ for (const [route, stream] of [
         });
         const request = routes[route](req, res);
         assert.equal(provider.mock.callCount(), 1);
+        if (outcome === 'legacy storyboard remains') {
+          db.prepare('UPDATE storyboards SET action=? WHERE id=?').run('助理把钢笔递给林远。', id);
+        }
         if (outcome === 'IR takes ownership') storyboardService.saveSegmentIr(db, noopLog, id, sampleIr(ids));
         if (outcome === 'storyboard is deleted') db.prepare('UPDATE storyboards SET deleted_at = ? WHERE id = ?').run(new Date().toISOString(), id);
         const readRow = () => db.prepare('SELECT * FROM storyboards WHERE id = ?').get(id);
@@ -39,6 +42,8 @@ for (const [route, stream] of [
         if (outcome === 'legacy storyboard remains') {
           const text = stream ? events.at(-1).universal_segment_text : res.body.data.universal_segment_text;
           assert.match(text, /人事推来协议/);
+          assert.match(text, /助理把钢笔递给林远/);
+          assert.doesNotMatch(text, /旧动作/);
           assert.equal(readRow().universal_segment_text, text);
           if (stream) assert.deepEqual(events.map((e) => e.type), ['delta', 'done']);
         } else {

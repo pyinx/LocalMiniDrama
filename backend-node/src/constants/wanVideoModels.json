@@ -1,0 +1,16 @@
+{
+  "wan3.0-video": "omni",
+  "wan3.0-video-prime": "omni",
+  "wan2.7-r2v": "reference",
+  "wan2.7-i2v": "image",
+  "wan2.7-t2v": "text",
+  "wan2.7-r2v-2026-06-12": "reference",
+  "wan2.7-i2v-2026-04-25": "image",
+  "wan2.7-t2v-2026-06-12": "text",
+  "wan2.7-t2v-2026-04-25": "text",
+  "wan2.6-r2v-flash": "reference",
+  "wan2.6-r2v": "reference",
+  "wan2.6-t2v": "text",
+  "wan2.6-i2v-flash": "image",
+  "wan2.6-i2v": "image"
+}

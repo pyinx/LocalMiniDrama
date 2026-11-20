@@ -3,6 +3,11 @@
  * 不依赖 Vue，便于单测；组件只负责渲染。
  */
 
+export function formatStoryboardDuration(value) {
+  const seconds = typeof value === 'string' ? Number(value) : value
+  return Number.isFinite(seconds) && seconds > 0 ? `${seconds} 秒` : '未设置'
+}
+
 export const FINDING_LEVELS = {
   block: { label: '阻断', type: 'danger', order: 0 },
   warn: { label: '提醒', type: 'warning', order: 1 },

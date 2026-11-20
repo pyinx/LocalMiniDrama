@@ -15,6 +15,23 @@ const tasks = require('../src/services/taskService');
 const drama = require('../src/services/dramaService');
 const { getFfmpegPath } = require('../src/utils/ffmpegPath');
 const { takeWorkspace } = require('./helpers/workbenchTakes');
+const { resolveBatchVideo } = require('../src/services/workbenchVideoBatch');
+
+test('automatic batch reuse skips explicitly failed completed takes', () => {
+  const failed = { id: 8, status: 'completed', video_url: '/static/bad.mp4', media_check: JSON.stringify({ status: 'failed', issues: [{ code: 'resolution_low' }] }) };
+  const good = { id: 7, status: 'completed', video_url: '/static/good.mp4' };
+  let reused;
+  const db = { prepare(sql) {
+    if (sql.includes('UPDATE video_batch_items')) return { run: id => { reused = id; } };
+    if (sql.includes('operation_key=?')) return { get: () => undefined };
+    if (sql.includes('ORDER BY id DESC')) return { all: () => [failed, good] };
+    if (sql.includes('FROM storyboards')) return { get: () => null };
+    throw new Error('Unexpected query: ' + sql);
+  } };
+  const video = resolveBatchVideo(db, { storyboard_id: 3, drama_id: 2, operation_key: 'op' }, '/tmp');
+  assert.equal(video, good);
+  assert.equal(reused, good.id);
+});
 const log = { info() {}, warn() {}, error() {} };
 
 test('filling missing shots reuses storyboard-only media even with a stale waiting slot', async t => {

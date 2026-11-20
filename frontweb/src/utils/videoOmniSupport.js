@@ -3,6 +3,24 @@
  * 从 views/FilmCreate.vue 抽离，便于 node --test 直接单测。
  */
 
+import wanVideoModels from '../../../backend-node/src/constants/wanVideoModels.json' with { type: 'json' }
+
+export function wanModeForConfig(cfg) {
+  if (String(cfg?.api_protocol || cfg?.provider).toLowerCase() !== 'dashscope') return null
+  return wanVideoModels[videoModelNameFromAiConfig(cfg)] || null
+}
+
+export function wanStoryboardUsesText(cfg, universal, refs, first) {
+  const mode = wanModeForConfig(cfg)
+  if (mode === 'text') return !universal || !refs?.length
+  return mode === 'omni' && !(universal ? refs?.length : first)
+}
+
+export function wanTextFields() {
+  return { reference_mode: 'text', image_url: undefined, first_frame_url: undefined,
+    last_frame_url: undefined, reference_image_urls: undefined }
+}
+
 export function videoModelNameFromAiConfig(cfg) {
   if (!cfg) return ''
   const dm = (cfg.default_model || '').toString().trim()
@@ -47,6 +65,9 @@ export function canUseUniversalOmniVideoApi(cfg) {
   const proto = String(cfg.api_protocol || '').toLowerCase()
   const provider = String(cfg.provider || '').toLowerCase()
   const model = videoModelNameFromAiConfig(cfg).toLowerCase()
+  if ((proto || provider) === 'dashscope') {
+    return ['reference', 'omni'].includes(wanVideoModels[model]) || model === 'wanx2.1-vace-plus'
+  }
   if (proto === 'kling_omni') return true
   // 选了 volcengine_omni 即表示走多图参考；模型名可能是 996 等网关别名（如 mingiz-sd2），勿再按 seedance 字样拦截
   if (proto === 'volcengine_omni') return true

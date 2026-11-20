@@ -62,6 +62,11 @@ function rowToItem(r) {
     provider: r.provider,
     prompt: r.prompt,
     model: r.model,
+    duration: r.duration,
+    aspect_ratio: r.aspect_ratio,
+    resolution: r.resolution,
+    media_check: parseMediaCheck(r),
+    eligible_for_automatic_use: takeEligibility(r),
     image_gen_id: r.image_gen_id,
     image_url: r.image_url,
     video_url: r.video_url,
@@ -91,6 +96,9 @@ const videoClient = require('./videoClient');
 const taskService = require('./taskService');
 const { ipv4Request, formatNetError } = require('../utils/ipv4Http');
 const storageLayout = require('./storageLayout');
+const { parseMediaCheck, takeEligibility } = require('./workbenchTakeService');
+const { inspectGeneratedTake } = require('./mediaDiagnostics');
+const { WAN_LEGACY_KEYFRAME_MODEL } = require('./modelCapabilities');
 const { getFfmpegPath, hasLocalFfmpeg } = require('../utils/ffmpegPath');
 
 /** @returns {{ dir: string, relPrefix: string }} 与图片 uploads 一致的工程子目录规则 */
@@ -229,9 +237,17 @@ function resolveStoragePath(cfg) {
     : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
 }
 
-async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, videoUrl, logLabel, aiConfig = null) {
+function compiledVideoRequest(row) {
+  try { return JSON.parse(row.compiled_json)?.request || {}; } catch { return {}; }
+}
+
+async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, output, logLabel, target) {
+  const videoUrl = output.video_url;
+  const aiConfig = target.config;
+  const nativeWanSize = target.protocol === 'dashscope' && (target.model === WAN_LEGACY_KEYFRAME_MODEL || target.caps?.wanMode);
   const now = new Date().toISOString();
   let localPath = null;
+  let mediaCheck = row.video_config_id != null ? { status: 'unavailable', issues: [], message: '原始视频未下载，无法核验规格' } : null;
   const requireAuthDownload = videoClient.isCheapSeedance2Provider(aiConfig?.provider || row?.provider);
   const downloadOpts = requireAuthDownload && aiConfig?.api_key
     ? { apiKey: aiConfig.api_key }
@@ -248,7 +264,20 @@ async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, v
       projectSubdir,
       downloadOpts
     );
-    maybeNormalizeVideoAfterDownload(storagePath, localPath, rowForAspect, videoGenId, log);
+    if (mediaCheck && localPath) {
+      mediaCheck = await inspectGeneratedTake(path.join(storagePath, localPath), {
+        duration: row.duration,
+        resolution: row.resolution,
+        aspect_ratio: row.aspect_ratio,
+        require_audio: compiledVideoRequest(row).generate_audio === true,
+        source_resolution: nativeWanSize ? output.source_resolution : undefined,
+        resolution_by_area: Boolean(nativeWanSize),
+      });
+    }
+    // Preserve native Wan dimensions and keep rejected sources available for review.
+    if (!nativeWanSize && takeEligibility({ media_check: mediaCheck })) {
+      maybeNormalizeVideoAfterDownload(storagePath, localPath, rowForAspect, videoGenId, log);
+    }
   } catch (_) {}
 
   // 低价 Seedance2：成片 URL 需鉴权，本地下载失败则不可标为可播成功
@@ -261,9 +290,11 @@ async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, v
   }
 
   try {
+    const checkSql = mediaCheck ? ', media_check = ?' : '';
+    const checkParams = mediaCheck ? [JSON.stringify(mediaCheck)] : [];
     db.prepare(
-      'UPDATE video_generations SET status = ?, video_url = ?, local_path = ?, completed_at = ?, updated_at = ? WHERE id = ?'
-    ).run('completed', videoUrl, localPath, now, now, videoGenId);
+      `UPDATE video_generations SET status = ?, video_url = ?, local_path = ?, completed_at = ?, updated_at = ?${checkSql} WHERE id = ?`
+    ).run('completed', videoUrl, localPath, now, now, ...checkParams, videoGenId);
   } catch (e) {
     if ((e.message || '').includes('completed_at')) {
       db.prepare(
@@ -276,17 +307,19 @@ async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, v
       video_generation_id: videoGenId,
       video_url: videoUrl,
       status: 'completed',
+      media_check: mediaCheck,
+      eligible_for_automatic_use: takeEligibility({ media_check: mediaCheck }),
     });
   }
   log.info('Video generation completed' + (logLabel ? ` (${logLabel})` : ''), {
     id: videoGenId,
-    video_url: videoUrl,
     local_path: localPath,
+    media_check: mediaCheck,
   });
   return { ok: true, local_path: localPath };
 }
 
-async function pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, providerTaskId, config) {
+async function pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, providerTaskId, target) {
   const cfg = require('../config').loadConfig();
   const POLL_INTERVAL_MS = 10000;
   const { resolveVideoGenerationTimeoutMinutes } = require('../config/videoGeneration');
@@ -300,19 +333,35 @@ async function pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspec
     log,
     videoGenId,
     providerTaskId,
-    config,
+    target.config,
     pollMaxAttempts,
-    POLL_INTERVAL_MS
+    POLL_INTERVAL_MS,
+    target
   );
   const now = new Date().toISOString();
   const polledVideo = resolveRemoteVideoUrl(pollResult.video_url, pollResult.error);
   if (polledVideo.ok) {
-    await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, polledVideo.video_url, 'after poll', config);
+    await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, { ...pollResult, ...polledVideo }, 'after poll', target);
   } else {
     setVideoGenFailed(db, videoGenId, polledVideo.error, now);
     if (row.task_id) taskService.updateTaskError(db, row.task_id, polledVideo.error);
     log.error('Video generation failed (after poll)', { id: videoGenId, error: polledVideo.error });
   }
+}
+
+function generationTarget(db, row) {
+  // Compatibility for records queued before the dispatch target was persisted.
+  if (row.video_config_id == null) {
+    const config = videoClient.getDefaultVideoConfig(db, row.model);
+    return videoClient.describeVideoTarget(config, row.model);
+  }
+  return videoClient.resolveStoredVideoTarget(db, row);
+}
+
+function failMissingTarget(db, row) {
+  const error = row.video_config_id != null ? '提交时的视频配置或模型已停用、删除或变更，请恢复原配置或重新生成' : '未配置视频模型';
+  setVideoGenFailed(db, row.id, error, new Date().toISOString());
+  if (row.task_id) taskService.updateTaskError(db, row.task_id, error);
 }
 
 /**
@@ -340,11 +389,9 @@ async function resumePollForVideoGeneration(db, log, videoGenId) {
     return;
   }
 
-  const config = videoClient.getDefaultVideoConfig(db, row.model);
-  if (!config) {
-    const now = new Date().toISOString();
-    setVideoGenFailed(db, videoGenId, '未配置视频模型', now);
-    if (row.task_id) taskService.updateTaskError(db, row.task_id, '未配置视频模型');
+  const target = generationTarget(db, row);
+  if (!target?.config) {
+    failMissingTarget(db, row);
     return;
   }
 
@@ -360,7 +407,7 @@ async function resumePollForVideoGeneration(db, log, videoGenId) {
       if (n) aspectForVideo = n;
     }
     const rowForAspect = { ...row, aspect_ratio: aspectForVideo || row.aspect_ratio };
-    await pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, providerTaskId, config);
+    await pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, providerTaskId, target);
   } catch (err) {
     const now = new Date().toISOString();
     setVideoGenFailed(db, videoGenId, err.message, now);
@@ -505,10 +552,9 @@ async function processVideoGeneration(db, log, videoGenId) {
     const storageLocalPath = path.isAbsolute(cfg.storage?.local_path)
       ? cfg.storage.local_path
       : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
-    const config = videoClient.getDefaultVideoConfig(db, row.model);
-    if (!config) {
-      setVideoGenFailed(db, videoGenId, '未配置视频模型', now);
-      if (row.task_id) taskService.updateTaskError(db, row.task_id, '未配置视频模型');
+    const target = generationTarget(db, row);
+    if (!target?.config) {
+      failMissingTarget(db, row);
       return;
     }
     let reference_urls = null;
@@ -520,7 +566,7 @@ async function processVideoGeneration(db, log, videoGenId) {
     }
     // 优先使用分镜自身的镜头时长（storyboard.duration），其次用 video_generations.duration
     let effectiveDuration = row.duration || null;
-    if (row.storyboard_id) {
+    if (row.video_config_id == null && row.storyboard_id) {
       const sb = db.prepare('SELECT duration FROM storyboards WHERE id = ?').get(row.storyboard_id);
       if (sb && sb.duration > 0) {
         effectiveDuration = sb.duration;
@@ -532,7 +578,7 @@ async function processVideoGeneration(db, log, videoGenId) {
       const n = videoClient.normalizeAspectRatioForApi(aspectForVideo);
       if (n) aspectForVideo = n;
     }
-    if (!aspectForVideo && row.drama_id) {
+    if (!aspectForVideo && row.video_config_id == null && row.drama_id) {
       try {
         const dramaRow = db.prepare('SELECT metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(row.drama_id);
         if (dramaRow && dramaRow.metadata) {
@@ -546,21 +592,15 @@ async function processVideoGeneration(db, log, videoGenId) {
     }
     const rowForAspect = { ...row, aspect_ratio: aspectForVideo || row.aspect_ratio };
     // 结构化分镜：路由里已编译好（提示词/参考图/首尾帧/时长），这里只取请求开关，不再二次编译
-    let compiledRequest = {};
-    if (row.compiled_json) {
-      try {
-        compiledRequest = JSON.parse(row.compiled_json).request || {};
-      } catch (_) {}
-      if (row.duration > 0) effectiveDuration = row.duration;
-    }
+    const compiledRequest = compiledVideoRequest(row);
+    if (row.compiled_json && row.duration > 0) effectiveDuration = row.duration;
     const hasOmniRefs = !!(reference_urls && reference_urls.length > 0);
     // DashScope 各模型分支读帧/读参考图互不相交（kf2v/i2v 只读帧，vace/r2v 只读参考图），
     // 传统模式下参考图列表就是分镜主图本身，不能因参考图非空而丢掉首帧/尾帧。
     // 协议判定与 videoClient.resolveVideoProtocol/inferVideoProtocol 同口径（显式 api_protocol 优先）。
-    const explicitProtocol = String(config.api_protocol || '').trim().toLowerCase();
-    const dashscopeFrames = explicitProtocol
-      ? explicitProtocol === 'dashscope'
-      : String(config.provider || '').trim().toLowerCase() === 'dashscope';
+    const dashscopeFrames = target.protocol === 'dashscope';
+    // 旧版已排队的 2.6 图生视频记录里首尾帧和参考列表重复，原请求只使用首帧。
+    const historicalFirstOnly = row.video_config_id == null && target.caps?.wan26 && target.caps.wanMode === 'image';
     if (row.task_id && hasOmniRefs) {
       taskService.updateTaskStatus(
         db,
@@ -589,14 +629,16 @@ async function processVideoGeneration(db, log, videoGenId) {
       storyboard_id: row.storyboard_id || undefined,
       image_url: (hasOmniRefs && !dashscopeFrames) ? undefined : row.image_url,
       first_frame_url: (hasOmniRefs && !dashscopeFrames) ? undefined : row.first_frame_url,
-      last_frame_url: (hasOmniRefs && !dashscopeFrames) ? undefined : row.last_frame_url,
-      reference_urls,
+      last_frame_url: (historicalFirstOnly || (hasOmniRefs && !dashscopeFrames)) ? undefined : row.last_frame_url,
+      reference_urls: historicalFirstOnly ? undefined : reference_urls,
+      reference_roles: compiledRequest.reference_roles,
+      check_frame: row.video_config_id != null,
       files_base_url: filesBaseUrl,
       storage_local_path: storageLocalPath,
       video_gen_id: videoGenId,
       generate_audio: compiledRequest.generate_audio,
       prompt_extend: compiledRequest.prompt_extend,
-    });
+    }, target);
     const now2 = new Date().toISOString();
     if (result.error) {
       if (row.dispatch_state != null && !result.task_id) {
@@ -615,14 +657,14 @@ async function processVideoGeneration(db, log, videoGenId) {
     }
     const directVideo = resolveRemoteVideoUrl(result.video_url, result.error);
     if (directVideo.ok) {
-      await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, directVideo.video_url, '', config);
+      await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, { ...result, ...directVideo }, '', target);
       return;
     }
     if (result.task_id) {
       db.prepare(
         'UPDATE video_generations SET status = ?, provider_task_id = ?, updated_at = ? WHERE id = ?'
       ).run('processing', result.task_id, now2, videoGenId);
-      await pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, result.task_id, config);
+      await pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, result.task_id, target);
       return;
     }
     if (row.dispatch_state != null) {

@@ -2,7 +2,7 @@
 const taskService = require('./taskService');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
-const { enforceUniversalStyleLine } = require('./universalOmniMultiBeatFormat');
+const { enforceUniversalStyleLine, withStoryboardAction } = require('./universalOmniMultiBeatFormat');
 const { SegmentIrOwnedError } = require('./segmentIr/project');
 const { readStoredIr } = require('./segmentIr/schema');
 const { syncStoryboardCharacters } = require('./imageService');
@@ -416,7 +416,7 @@ function deriveStoryboardFieldsFromAi(sb, style, videoRatio, opts = {}) {
   const propIds = Array.isArray(sb.props) ? sb.props.map(Number).filter(Number.isFinite) : [];
   let universalSegmentText = '';
   if (sb.universal_segment_text != null && String(sb.universal_segment_text).trim()) {
-    universalSegmentText = String(sb.universal_segment_text).trim().replace(/\r?\n/g, ' ');
+    universalSegmentText = String(sb.universal_segment_text).trim();
     universalSegmentText = enforceUniversalStyleLine(universalSegmentText, opts.universalStyleZh || style);
   }
   if (universalOmni && !universalSegmentText) {
@@ -439,7 +439,7 @@ function deriveStoryboardFieldsFromAi(sb, style, videoRatio, opts = {}) {
     );
   }
   const creationMode = universalOmni ? 'universal' : 'classic';
-  if (!universalOmni) universalSegmentText = null;
+  universalSegmentText = universalOmni ? withStoryboardAction(universalSegmentText, action) : null;
   return {
     shotNumber,
     title,

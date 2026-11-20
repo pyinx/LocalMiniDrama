@@ -1,6 +1,8 @@
 import { taskAPI } from '@/api/task'
 import { imagesAPI } from '@/api/images'
 import { videosAPI } from '@/api/videos'
+import { getActiveVideoAiConfig } from '@/api/ai'
+import { wanStoryboardUsesText, wanTextFields } from '@/utils/videoOmniSupport'
 import { dispatchBatchVideo } from '@/utils/batchVideo'
 import request from '@/utils/request'
 import { storyboardImageUrl } from '@/utils/mediaUrl'
@@ -10,7 +12,7 @@ import {
   getDramaGenerationOptions,
   toAbsoluteMediaUrl,
 } from '@/utils/canvasWorkflow'
-import { dramaUsesFirstLastFrame, sbVideoFirstLastUrls } from '@/utils/storyboardMedia'
+import { dramaUsesFirstLastFrame, isMediaCheckFailure, mediaCheckIssueMessages, omniReferenceUrls, sbVideoFirstLastUrls } from '@/utils/storyboardMedia'
 
 async function pollTaskSimple(taskId, options = {}) {
   if (!taskId) return { status: 'failed', error: '缺少 task_id' }
@@ -47,40 +49,63 @@ export async function runImageStep(drama, sb, genOpts) {
   }
 }
 
-function videoStepBody(drama, sb, genOpts) {
+function videoStepBody(drama, sb, genOpts, cfg) {
+  const base = { drama_id: drama.id, storyboard_id: sb.id, style: genOpts.style || undefined,
+    aspect_ratio: genOpts.aspectRatio, resolution: genOpts.videoResolution || undefined, duration: sb.duration || undefined }
+  const prompt = sb.video_prompt || sb.polished_prompt || sb.image_prompt || sb.description || ''
+  if (sb.creation_mode === 'universal') {
+    const ep = findStoryboardInDrama(drama, sb.id)?.episode
+    const selected = (collection, ids) => (ids || []).map(item => {
+      const id = Number(item?.id ?? item)
+      return drama[collection]?.find(asset => Number(asset.id) === id)
+        || ep?.[collection]?.find(asset => Number(asset.id) === id) || item
+    })
+    const refs = omniReferenceUrls(selected('scenes', [sb.scene_id])[0], selected('characters', sb.characters),
+      selected('props', sb.prop_ids), toAbsoluteMediaUrl)
+    return { ...base, prompt: sb.universal_segment_text?.trim() || prompt, reference_mode: 'omni', reference_image_urls: refs,
+      ...(wanStoryboardUsesText(cfg, true, refs) ? wanTextFields() : {}) }
+  }
   const useFirstLast = dramaUsesFirstLastFrame(drama)
   const imagesBySbId = genOpts?.imagesBySbId || {}
   const { first, last } = sbVideoFirstLastUrls(sb, imagesBySbId, useFirstLast)
   const imgPath = first || storyboardImageUrl(sb)
+  if (wanStoryboardUsesText(cfg, false, [], imgPath || last)) return { ...base, prompt, ...wanTextFields() }
   if (!imgPath && !sb.video_prompt && !last) {
     throw new Error(`分镜 #${sb.storyboard_number ?? sb.id} 缺少分镜图，无法生成视频`)
   }
   const absoluteFirst = toAbsoluteMediaUrl(imgPath)
   const absoluteLast = last ? toAbsoluteMediaUrl(last) : undefined
-  const prompt = sb.video_prompt || sb.polished_prompt || sb.image_prompt || sb.description || ''
   return {
-    drama_id: drama.id,
-    storyboard_id: sb.id,
+    ...base,
     prompt,
     image_url: absoluteFirst || undefined,
     first_frame_url: absoluteFirst || undefined,
     last_frame_url: absoluteLast,
-    style: genOpts.style || undefined,
-    aspect_ratio: genOpts.aspectRatio,
-    resolution: genOpts.videoResolution || undefined,
-    duration: sb.duration || undefined,
   }
 }
 
 export async function runVideoStep(drama, sb, genOpts, batchItem) {
-  const build = () => videoStepBody(drama, sb, genOpts)
+  const cfg = await getActiveVideoAiConfig()
+  const build = () => videoStepBody(drama, sb, genOpts, cfg)
   const res = batchItem
     ? await dispatchBatchVideo(batchItem, build, body => videosAPI.create(body))
     : await videosAPI.create(build())
+  if (isMediaCheckFailure(res)) throw new Error(mediaCheckIssueMessages(res).join('；'))
   if (res?.status === 'completed') return
   if (res?.task_id) {
     const polled = await pollTaskSimple(res.task_id)
     if (polled.status !== 'completed') throw new Error(polled.error || '视频生成失败')
+    if (isMediaCheckFailure(polled.result)) throw new Error(mediaCheckIssueMessages(polled.result).join('；'))
+    const videoId = res.id || res.video_id || batchItem?.video_id
+    if (videoId != null) {
+      try {
+        const rows = await videosAPI.list({ storyboard_id: sb.id, page: 1, page_size: 50 })
+        const completed = rows?.items?.find(item => item.id == videoId)
+        if (isMediaCheckFailure(completed)) throw Object.assign(new Error(mediaCheckIssueMessages(completed).join('；')), { mediaQualityFailure: true })
+      } catch (error) {
+        if (error.mediaQualityFailure) throw error
+      }
+    }
   }
 }
 
