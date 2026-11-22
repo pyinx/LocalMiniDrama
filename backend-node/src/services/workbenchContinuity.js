@@ -7,6 +7,7 @@ const { parseDramaMetadata } = require('../utils/dramaStyleMerge');
 const { catalog, creativeGuidance, directionOf, projectCast, effectiveCast, scenarioFor, readLock } = require('./workbenchCreativeMethods');
 const { resolveTake, publicMedia, localFile } = require('./workbenchTakeService');
 const { episodeStoryboardRows } = require('./episodeStoryboardRows');
+const { referenceRow } = require('./characterHeadBody');
 
 function failure(status, message) { return Object.assign(new Error(message), { status }); }
 
@@ -69,15 +70,18 @@ function visualSnapshot(shot, assets, cast) {
     }
     images.push([label, assets.imageDigests.get(reference)]);
   }
-  function add(row, parts) {
+  function add(row, parts, imageRow = row) {
     const label = parts.filter(Boolean).join(' · ');
     visual.push(label);
-    addImage(label + ' · 主图', row.local_path || row.image_url);
+    addImage(label + ' · 主图', imageRow.local_path || imageRow.image_url);
     addImage(label + ' · 四视图', row.four_view_image_url);
   }
   for (const row of cast) {
-    const appearance = row.storyboard_id == null ? activeAppearance(row, shot.episode_number) : row.appearance || row.description;
-    add(row, ['角色', row.name, appearance]);
+    const project = row.storyboard_id == null;
+    const appearance = project ? activeAppearance(row, shot.episode_number) : row.appearance || row.description;
+    // 与生视频一致：本集落在某套造型范围内时，参考图是该造型图
+    const imageRow = project ? referenceRow(row, assets.wardrobes.get(row.id) || [], shot.episode_number) : row;
+    add(row, ['角色', row.name, appearance], imageRow);
   }
   const scene = assets.scenes.get(shot.scene_id);
   if (scene) add(scene, ['地点', scene.location, scene.time, scene.prompt]);
@@ -94,7 +98,13 @@ function projectAssets(db, id, storageRoot, staticBase) {
     if (!props.has(row.storyboard_id)) props.set(row.storyboard_id, []);
     props.get(row.storyboard_id).push(row);
   }
-  return { ...projectCast(db, id), scenes, props, storageRoot, staticBase, imageDigests: new Map() };
+  const wardrobes = new Map();
+  for (const row of db.prepare(`SELECT w.* FROM character_wardrobes w JOIN characters c ON c.id = w.character_id
+    WHERE c.drama_id = ? AND w.deleted_at IS NULL AND c.deleted_at IS NULL ORDER BY w.sort_order, w.id`).all(id)) {
+    if (!wardrobes.has(row.character_id)) wardrobes.set(row.character_id, []);
+    wardrobes.get(row.character_id).push(row);
+  }
+  return { ...projectCast(db, id), scenes, props, wardrobes, storageRoot, staticBase, imageDigests: new Map() };
 }
 
 function describeShot(shot, drama, assets) {

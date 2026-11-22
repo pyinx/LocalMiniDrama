@@ -6,6 +6,7 @@ const { readStoredIr } = require('./segmentIr/schema');
 const storageLayout = require('./storageLayout');
 const { resolveStylePreset } = require('../constants/generationStylePresets');
 const seedance2AssetGuards = require('../utils/seedance2AssetGuards');
+const characterHeadBody = require('./characterHeadBody');
 
 /**
  * 清理 image_url：如果数据库中存储的是 base64 data URL，则返回 null。
@@ -116,7 +117,7 @@ function getDrama(db, dramaId, baseUrl) {
          WHERE ec.episode_id = ? AND c.deleted_at IS NULL
          ORDER BY c.sort_order ASC, c.name ASC`
       ).all(ep.id);
-      ep.characters = epChars.map((c) => rowToCharacter(c));
+      ep.characters = epChars.map((c) => ({ ...rowToCharacter(c), episode_reference: characterHeadBody.episodeReference(db, c, Number(ep.episode_number)) }));
     } catch (_) {
       ep.characters = [];
     }
@@ -430,6 +431,9 @@ function rowToCharacter(r) {
     polished_prompt: r.polished_prompt || null,
     negative_prompt: r.negative_prompt || null,
     four_view_image_url: r.four_view_image_url || null,
+    head_local_path: r.head_local_path || null,
+    body_local_path: r.body_local_path || null,
+    head_body: characterHeadBody.isHeadBody(r),
     seedance2_asset: parseJsonColumn(r.seedance2_asset),
     seedance2_voice_asset: parseJsonColumn(r.seedance2_voice_asset),
     created_at: r.created_at,
@@ -559,7 +563,13 @@ function getCharacters(db, dramaId, episodeId) {
       'SELECT * FROM characters WHERE drama_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, name ASC'
     ).all(did);
   }
-  const characters = rows.map((r) => rowToCharacter(r));
+  const episodeNumber = episodeId
+    ? Number(db.prepare('SELECT episode_number FROM episodes WHERE id = ?').get(episodeId)?.episode_number)
+    : null;
+  const characters = rows.map((r) => ({
+    ...rowToCharacter(r),
+    ...(episodeId && { episode_reference: characterHeadBody.episodeReference(db, r, episodeNumber) }),
+  }));
   for (const c of characters) {
     const img = db.prepare(
       'SELECT status, error_msg FROM image_generations WHERE character_id = ? ORDER BY created_at DESC LIMIT 1'

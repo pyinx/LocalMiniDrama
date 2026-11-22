@@ -4,13 +4,14 @@ const response = require('../response');
 const characterLibraryService = require('../services/characterLibraryService');
 const storageLayout = require('../services/storageLayout');
 const seedance2AssetGuards = require('../utils/seedance2AssetGuards');
+const characterHeadBody = require('../services/characterHeadBody');
 
 function routes(db, cfg, log, uploadService) {
   return {
     getOne: (req, res) => {
       try {
         const row = db.prepare(
-          'SELECT id, drama_id, name, role, appearance, description, personality, voice_style, image_url, local_path, polished_prompt, four_view_image_url, identity_anchors, seedance2_asset, seedance2_voice_asset, negative_prompt, updated_at FROM characters WHERE id = ? AND deleted_at IS NULL'
+          'SELECT id, drama_id, name, role, appearance, description, personality, voice_style, image_url, local_path, head_local_path, body_local_path, error_msg, polished_prompt, four_view_image_url, identity_anchors, seedance2_asset, seedance2_voice_asset, negative_prompt, updated_at FROM characters WHERE id = ? AND deleted_at IS NULL'
         ).get(Number(req.params.id));
         if (!row) return response.notFound(res, '角色不存在');
         if (row.seedance2_asset) {
@@ -31,6 +32,7 @@ function routes(db, cfg, log, uploadService) {
         } else {
           row.seedance2_voice_asset = null;
         }
+        row.head_body = characterHeadBody.isHeadBody(row);
         response.success(res, { character: row });
       } catch (err) {
         log.error('characters getOne', { error: err.message });
@@ -263,6 +265,20 @@ function routes(db, cfg, log, uploadService) {
         response.success(res, { message: '四视图生成任务已提交', image_generation: out.image_generation });
       } catch (err) {
         log.error('characters generate-four-view-image', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    generateHeadBody: (req, res) => {
+      try {
+        const body = req.body || {};
+        const out = characterHeadBody.generate(db, log, cfg, req.params.id, body.part || 'all', { model: body.model || undefined });
+        response.success(res, { message: '头身分离生成任务已提交', image_generation: out.image_generation });
+      } catch (err) {
+        if (err.code === 'not_found') return response.notFound(res, err.message);
+        if (err.code === 'bad_part') return response.badRequest(res, err.message);
+        if (err.code === 'head_missing') return response.error(res, 409, 'head_missing', err.message);
+        if (err.code === 'busy') return response.error(res, 409, 'head_body_busy', err.message);
+        log.error('characters generate-head-body', { error: err.message });
         response.internalError(res, err.message);
       }
     },

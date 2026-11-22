@@ -9,6 +9,7 @@ const { lintSegment } = require('./segmentCompile/lint');
 const { deriveStyleSentences } = require('./segmentCompile/style');
 const episodeContinuityService = require('./episodeContinuityService');
 const { toPublicUrl } = require('../utils/storagePaths');
+const characterHeadBody = require('./characterHeadBody');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 const { tailFrameEligibility } = require('./segmentCompile/continuity');
 
@@ -46,13 +47,17 @@ function byId(rows, map) {
   return Object.fromEntries(rows.map((r) => [r.id, map(r)]));
 }
 
-/** 本剧所有可被 IR 引用的资产（已软删的不在内，编译时据此阻断） */
-function loadBindings(db, cfg, dramaId, ir) {
+/**
+ * 本剧所有可被 IR 引用的资产（已软删的不在内，编译时据此阻断）。
+ * 给出集数时，未指定造型的角色用本集造型图（与全能模式、分镜图一致）；IR 里写明的造型仍以它为准。
+ */
+function loadBindings(db, cfg, dramaId, ir, episodeNumber = null) {
   const url = (r) => toPublicUrl(cfg, r.image_url, r.local_path);
+  const episodeImage = (r) => (episodeNumber == null ? r : characterHeadBody.referenceRow(r, characterHeadBody.listWardrobes(db, r.id), episodeNumber));
   const bindings = {
     characters: byId(
       db.prepare('SELECT id, name, role, voice_style, is_group, image_url, local_path FROM characters WHERE drama_id = ? AND deleted_at IS NULL').all(dramaId),
-      (r) => ({ name: r.name, role: r.role, voice_style: r.voice_style, is_group: !!r.is_group, image_url: url(r) })
+      (r) => ({ name: r.name, role: r.role, voice_style: r.voice_style, is_group: !!r.is_group, image_url: url(episodeImage(r)) })
     ),
     scenes: byId(
       db.prepare('SELECT id, location, image_url, local_path FROM scenes WHERE drama_id = ? AND deleted_at IS NULL').all(dramaId),
@@ -109,7 +114,7 @@ function loadBindings(db, cfg, dramaId, ir) {
 function compileStoryboard(db, storyboardId, opts = {}) {
   const sb = db
     .prepare(
-      `SELECT s.id, s.segment_ir, s.episode_id, s.storyboard_number, e.drama_id FROM storyboards s JOIN episodes e ON e.id = s.episode_id
+      `SELECT s.id, s.segment_ir, s.episode_id, s.storyboard_number, e.drama_id, e.episode_number FROM storyboards s JOIN episodes e ON e.id = s.episode_id
        WHERE s.id = ? AND s.deleted_at IS NULL AND e.deleted_at IS NULL`
     )
     .get(Number(storyboardId));
@@ -126,7 +131,7 @@ function compileStoryboard(db, storyboardId, opts = {}) {
   const target = opts.target || videoClient.resolveVideoTarget(db, opts.model);
   const continuity = (episodeContinuityService.getContinuity(db, sb.episode_id) || {})[String(ir.scene.scene_id)] || {};
 
-  const bindings = loadBindings(db, cfg, sb.drama_id, ir);
+  const bindings = loadBindings(db, cfg, sb.drama_id, ir, Number(sb.episode_number));
   const tail = opts.tailFrame ? { tailFrame: opts.tailFrame, findings: [] } : checkTailFrame(db, sb, ir, bindings);
   const compiled = compileSegment(ir, {
     caps: target.caps,

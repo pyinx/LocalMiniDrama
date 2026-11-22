@@ -217,6 +217,8 @@ function ensureAllColumns(database) {
     { name: 'seedance2_asset', type: 'TEXT' },   // JSON: 即梦/Seedance2 素材库认证 hub_asset_id / asset_url 等
     { name: 'seedance2_voice_asset', type: 'TEXT' }, // JSON: Seedance 2.0 音色参考音频（仅 SD2 模型有效）
     { name: 'negative_prompt', type: 'TEXT' },
+    { name: 'head_local_path',   type: 'TEXT' },   // 头身分离：头像（身份），主图 = 头 + 基础身体的拼合
+    { name: 'body_local_path',   type: 'TEXT' },   // 头身分离：基础造型的无头身体
     { name: 'created_at',        type: 'TEXT' },
     { name: 'updated_at',        type: 'TEXT' },
     { name: 'deleted_at',        type: 'TEXT' },
@@ -441,6 +443,8 @@ function ensureAllColumns(database) {
     { name: 'style_tokens',      type: 'TEXT' },   // 风格词 token 列表
     { name: 'color_palette',     type: 'TEXT' },   // JSON: Hex 色值数组
     { name: 'four_view_image_url', type: 'TEXT' }, // 四视图参考图 URL（分镜图生图参考用）
+    { name: 'head_local_path',   type: 'TEXT' },   // 头身分离角色入库时一并保存
+    { name: 'body_local_path',   type: 'TEXT' },
     { name: 'created_at',        type: 'TEXT' },
     { name: 'updated_at',        type: 'TEXT' },
     { name: 'deleted_at',        type: 'TEXT' },
@@ -545,6 +549,8 @@ function ensureAllColumns(database) {
       updated_at    TEXT,
       deleted_at    TEXT
     )`);
+    // 头身分离：造型图 = 角色的头 + 这套无头身体的拼合
+    ensureColumns(database, 'character_wardrobes', [{ name: 'body_local_path', type: 'TEXT' }]);
     migrateCharacterStagesToWardrobes(database);
   } catch (e) {
     console.warn('character_wardrobes init failed:', e.message);

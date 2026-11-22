@@ -176,6 +176,11 @@ function generateImage(db, log, kind, id, opts = {}) {
   const parent = loadParent(db, k, row[k.parentCol]);
   if (!parent) throw codedError('not_found', `${k.parentLabel}已不存在`);
   const cfg = cfgNow();
+  if (kind === 'wardrobe') {
+    // 头身分离的角色只生成这套身体，造型图由头和身体拼合
+    const headBody = require('./characterHeadBody').generateWardrobeBody(db, log, cfg, row, opts);
+    if (headBody) return headBody;
+  }
   const baseUrl = k.baseImage ? k.baseImage(db, cfg, parent, row) : toPublicUrl(cfg, parent.image_url, parent.local_path);
   if (!baseUrl) throw codedError('base_image_missing', `请先为${k.parentLabel}「${parent.name || parent.location}」生成主图，变体要以它为参考`);
   const drama = db.prepare('SELECT style, metadata FROM dramas WHERE id = ?').get(parent.drama_id);
@@ -194,6 +199,8 @@ function generateImage(db, log, kind, id, opts = {}) {
     on_completed: ({ image_url, local_path }) => {
       db.prepare(`UPDATE ${k.table} SET image_url = ?, local_path = ?, updated_at = ? WHERE id = ?`)
         .run(image_url, local_path, new Date().toISOString(), row.id);
+      // 整张造型图取代了此前的头身拼合，旧身体不再参与重拼
+      if (kind === 'wardrobe') db.prepare('UPDATE character_wardrobes SET body_local_path = NULL WHERE id = ?').run(row.id);
     },
   });
   return { image_generation: imageGen, prompt };

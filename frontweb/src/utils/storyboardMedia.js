@@ -1,8 +1,13 @@
 import { assetImageUrl } from './mediaUrl.js'
 import { parseDramaMetadata } from './canvasLayout.js'
 
+/** 角色在本集实际使用的参考图：本集造型（后端按集数范围给出），否则角色主图 */
+export function characterReference(character) {
+  return character?.episode_reference || character
+}
+
 export function omniReferenceUrls(scene, characters, props, absolute) {
-  const urls = [scene, ...characters, ...props].map(assetImageUrl).filter(Boolean).map(absolute)
+  const urls = [scene, ...characters.map(characterReference), ...props].map(assetImageUrl).filter(Boolean).map(absolute)
   return [...new Set(urls.filter(Boolean))]
 }
 

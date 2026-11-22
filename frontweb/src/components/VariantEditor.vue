@@ -38,7 +38,7 @@ const props = defineProps({
 const emit = defineEmits(['changed'])
 
 const CONFIG = {
-  wardrobe: { hint: '造型以角色主图为身份参考派生；处境（淋雨、受伤）不算造型，写进分镜动作。', phraseField: 'change_phrase', phrasePlaceholder: '只写变了的部分，如：深灰西装、白衬衫', addLabel: '造型' },
+  wardrobe: { hint: '造型以角色主图为身份参考派生，头身分离的角色只换身体；设了起止集的造型在这些集里自动用于生视频和分镜图。处境（淋雨、受伤）不算造型，写进分镜动作。', phraseField: 'change_phrase', phrasePlaceholder: '只写变了的部分，如：深灰西装、白衬衫', addLabel: '造型' },
   scene_state: { hint: '状态版本、竖屏主机位、反打都以场景主图（母版）为空间参考。', phraseField: 'state_phrase', phrasePlaceholder: '这个版本的不同之处，如：夜晚，台灯亮着', addLabel: '场景版本' },
   prop_state: { hint: '道具状态以道具初始图为外观参考。', phraseField: 'state_phrase', phrasePlaceholder: '现在的状态，如：屏幕碎裂', addLabel: '道具状态' },
 }

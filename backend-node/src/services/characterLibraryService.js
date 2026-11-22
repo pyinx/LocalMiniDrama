@@ -10,6 +10,7 @@ const jimengMaterialHubService = require('./jimengMaterialHubService');
 const modelArkAssetConfigService = require('./modelArkAssetConfigService');
 const uploadService = require('./uploadService');
 const seedance2AssetGuards = require('../utils/seedance2AssetGuards');
+const characterHeadBody = require('./characterHeadBody');
 const { cascadeDeletedParents } = require('./assetCascade');
 const assetPhrases = require('./segmentCompile/rules/assetPhrases');
 const {
@@ -209,6 +210,11 @@ function applyLibraryItemToCharacter(db, log, characterId, libraryItemId) {
     now,
     Number(characterId)
   );
+  // 头身分离的库条目：一并带回头和身体，角色随之处于头身模式
+  if (characterHeadBody.isHeadBody(item)) {
+    db.prepare('UPDATE characters SET head_local_path = ?, body_local_path = ? WHERE id = ?')
+      .run(item.head_local_path, item.body_local_path, Number(characterId));
+  }
   log.info('Library item applied to character', { character_id: characterId, library_item_id: libraryItemId });
   return { ok: true };
 }
@@ -237,6 +243,15 @@ function resolveImageUrl(image_url, local_path) {
 }
 
 // 加入本剧资源库（带 drama_id）
+/**
+ * 入库时：主图是头身拼合图才带上头和身体。其余情况不写这两列（旧库可能没有这两列）；
+ * 条目里留下的旧头身不会生效，因为头身模式要求条目主图正是它们的拼合图。
+ */
+function headBodyFields(charRow) {
+  if (!characterHeadBody.isHeadBody(charRow)) return {};
+  return { head_local_path: charRow.head_local_path, body_local_path: charRow.body_local_path };
+}
+
 function addCharacterToLibrary(db, log, characterId, category) {
   const charRow = db.prepare('SELECT * FROM characters WHERE id = ? AND deleted_at IS NULL').get(Number(characterId));
   if (!charRow) return { ok: false, error: 'character not found' };
@@ -251,6 +266,7 @@ function addCharacterToLibrary(db, log, characterId, category) {
     category: category ?? null,
     image_url: imageUrl,
     local_path: charRow.local_path || null,
+    ...headBodyFields(charRow),
     description: charRow.description || null,
     source_type: 'character',
     source_id: normalizeSourceId(charRow.id),
@@ -285,6 +301,7 @@ function addCharacterToMaterialLibrary(db, log, characterId) {
     name: charRow.name,
     image_url: imageUrl,
     local_path: charRow.local_path || null,
+    ...headBodyFields(charRow),
     description: charRow.description || null,
     source_type: 'character',
     source_id: normalizeSourceId(charRow.id),
@@ -392,6 +409,8 @@ function rowToItem(r) {
     category: r.category,
     image_url: r.image_url,
     local_path: r.local_path,
+    head_local_path: r.head_local_path || null,
+    body_local_path: r.body_local_path || null,
     description: r.description,
     tags: r.tags,
     source_type: r.source_type || 'generated',

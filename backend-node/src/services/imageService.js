@@ -56,6 +56,7 @@ function getById(db, id) {
 const path = require('path');
 const fs = require('fs');
 const imageClient = require('./imageClient');
+const characterHeadBody = require('./characterHeadBody');
 const taskService = require('./taskService');
 const uploadService = require('./uploadService');
 const storageLayout = require('./storageLayout');
@@ -817,6 +818,9 @@ async function processImageGeneration(db, log, imageGenId) {
             }
           }
         }
+        // 人物参考按本集造型取图（未设造型或本集不在范围内时就是角色主图）
+        const sbEpisodeNumber = characterHeadBody.episodeNumberOfStoryboard(db, row.storyboard_id);
+        const characterRefRow = (id, c) => characterHeadBody.referenceRow(c, characterHeadBody.listWardrobes(db, id), sbEpisodeNumber);
         /** 分镜 characters 列：null=未配置走兼容逻辑；数组=显式勾选（含空数组=不要任何角色参考） */
         let explicitDramaCharIds = null;
         let charListParsed = null;
@@ -841,7 +845,8 @@ async function processImageGeneration(db, log, imageGenId) {
             const c = db.prepare('SELECT image_url, local_path, name FROM characters WHERE id = ? AND deleted_at IS NULL').get(Number(cid));
             if (!c) continue;
             // 优先使用 characters 表当前主图（image_url / local_path），只有当前字段为空才降级使用历史 quad_panel_1 面板
-            let charRef = c.local_path || c.image_url;
+            const cRef = characterRefRow(cid, c);
+            let charRef = cRef.local_path || cRef.image_url;
             let isPanel = false;
             if (!charRef) {
               const charPanel = db.prepare(
@@ -965,7 +970,8 @@ async function processImageGeneration(db, log, imageGenId) {
                 'SELECT image_url, local_path FROM characters WHERE id = ? AND deleted_at IS NULL'
               ).get(Number(dChar.id));
               // 优先使用 characters 表当前主图（image_url / local_path），只有当前字段为空才降级使用历史 quad_panel_1 面板
-              let charRef = dCharRow?.local_path || dCharRow?.image_url;
+              const dRef = dCharRow ? characterRefRow(dChar.id, dCharRow) : null;
+              let charRef = dRef?.local_path || dRef?.image_url;
               let isPanel = false;
               if (!charRef) {
                 const charPanel = db.prepare(

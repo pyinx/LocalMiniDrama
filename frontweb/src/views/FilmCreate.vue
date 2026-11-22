@@ -499,6 +499,9 @@
                         {{ sd2ActionLabel(char) }}
                       </el-button>
                     </div>
+                    <div v-if="char.seedance2_asset?.status === 'active' && char.episode_reference" class="sd2-wardrobe-hint" style="margin-top:4px;font-size:11px;color:#e6a23c">
+                      本集使用造型「{{ char.episode_reference.wardrobe_name }}」，Seedance 2 认证只覆盖主图；真人项目需为该造型另行认证
+                    </div>
 
                     <!-- Seedance 2.0 音色参考（仅该模型有效，其他模型不生效） -->
                     <div class="sd2-voice-row" style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -1119,12 +1122,12 @@
                       v-for="c in getSbSelectedCharacters(sb.id)"
                       :key="c.id"
                       class="sb-thumb-item sb-thumb-avatar"
-                      :class="{ 'sb-thumb-clickable': hasAssetImage(c) }"
-                      :title="c.name"
+                      :class="{ 'sb-thumb-clickable': hasAssetImage(characterReference(c)) }"
+                      :title="c.episode_reference ? `${c.name} · ${c.episode_reference.wardrobe_name}` : c.name"
                       role="button"
-                      @click="hasAssetImage(c) && openImagePreview(assetImageUrl(c))"
+                      @click="hasAssetImage(characterReference(c)) && openImagePreview(assetImageUrl(characterReference(c)))"
                     >
-                      <img v-if="hasAssetImage(c)" :src="assetImageUrl(c)" alt="" />
+                      <img v-if="hasAssetImage(characterReference(c))" :src="assetImageUrl(characterReference(c))" alt="" />
                       <span v-else class="sb-thumb-placeholder">{{ (c.name || '')[0] }}</span>
                     </div>
                     <el-dropdown trigger="click" @command="(cmd) => onSbAddCharacterCommand(sb.id, cmd)">
@@ -1899,8 +1902,11 @@
         <el-form-item v-if="editCharacterForm.id" label="配音音色 ID">
           <el-input v-model="editCharacterForm.tts_voice" placeholder="不原生出人声的视频模型用逐句配音时使用；留空用配音配置的默认音色" />
         </el-form-item>
+        <el-form-item v-if="editCharacterForm.id" label="头身分离">
+          <CharacterHeadBody :character-id="editCharacterForm.id" @changed="loadDrama" />
+        </el-form-item>
         <el-form-item v-if="editCharacterForm.id" label="造型">
-          <VariantEditor kind="wardrobe" :parent-id="editCharacterForm.id" />
+          <VariantEditor kind="wardrobe" :parent-id="editCharacterForm.id" @changed="loadDrama" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2692,7 +2698,7 @@
 
 <script setup>
 import { previousStoryboard, previousTakeUrl } from '@/utils/mediaUrl'
-import { isAutomaticallyUsableVideo, isMediaCheckFailure, mediaCheckIssueMessages, omniReferenceUrls } from '@/utils/storyboardMedia'
+import { characterReference, isAutomaticallyUsableVideo, isMediaCheckFailure, mediaCheckIssueMessages, omniReferenceUrls } from '@/utils/storyboardMedia'
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
 import DeliveryLoudness from '@/components/DeliveryLoudness.vue'
 import EpisodeSeamEditor from '@/components/EpisodeSeamEditor.vue'
@@ -2737,6 +2743,7 @@ import { pipelineClipRange, storyboardTiming } from '@/utils/storyboardTiming'
 import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
 import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
 import VariantEditor from '@/components/VariantEditor.vue'
+import CharacterHeadBody from '@/components/CharacterHeadBody.vue'
 import JimengConfirmDialog from '@/components/JimengConfirmDialog.vue'
 import ScriptReviewDialog from '@/components/ScriptReviewDialog.vue'
 import { jimengOptionState } from '@/utils/segmentUi'
@@ -6169,12 +6176,13 @@ function getSbUniversalOmniRefSlots(sb) {
     })
   }
   for (const c of getSbSelectedCharacters(sb.id)) {
-    if (hasAssetImage(c)) {
+    const ref = characterReference(c)
+    if (hasAssetImage(ref)) {
       out.push({
         index: idx++,
         kind: 'character',
         name: (c.name || '角色').toString(),
-        thumbUrl: assetImageUrl(c),
+        thumbUrl: assetImageUrl(ref),
       })
     }
   }

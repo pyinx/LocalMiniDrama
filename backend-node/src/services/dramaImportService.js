@@ -5,6 +5,7 @@ const AdmZip = require('adm-zip');
 const takeArchive = require('./workbenchTakeArchive');
 const { randomUUID } = require('crypto');
 const storageLayout = require('./storageLayout');
+const characterHeadBody = require('./characterHeadBody');
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -80,6 +81,14 @@ function saveMediaFile(storagePath, projectDir, category, files, zipPath, prefix
   const abs = path.join(categoryPath, name);
   fs.writeFileSync(abs, buf);
   return `${projectDir}/${category}/${name}`.replace(/\\/g, '/');
+}
+
+/** 头身分离：把已落盘的拼合图挪到由头和身体路径决定的位置，导入后仍处于头身模式 */
+function moveToComposite(storagePath, savedRel, headRel, bodyRel) {
+  const target = characterHeadBody.composedPath(headRel, bodyRel);
+  if (!savedRel || !target) return savedRel;
+  fs.renameSync(path.join(storagePath, savedRel), path.join(storagePath, target));
+  return target;
 }
 
 /**
@@ -257,20 +266,32 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
   for (let i = 0; i < (data.characters || []).length; i++) {
     const c = data.characters[i];
     if (!c.name && !indexedAssets) { charNewIds.push(null); continue; }
-    const localPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.image_file, 'char_imp');
+    let localPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.image_file, 'char_imp');
+    const headPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.head_file, 'char_head_imp');
+    const bodyPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.body_file, 'char_body_imp');
+    if (headPath && bodyPath) localPath = moveToComposite(storagePath, localPath, headPath, bodyPath);
     const extraImagesJson = saveExtraImages(storagePath, projectDir, 'characters', files, c.extra_image_files, 'char_extra_imp');
     const info = db.prepare(
-      `INSERT INTO characters (drama_id, name, role, description, personality, appearance, stages, voice_style, polished_prompt, local_path, image_url, extra_images, sort_order, is_group, tts_voice, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO characters (drama_id, name, role, description, personality, appearance, stages, voice_style, polished_prompt, local_path, image_url, head_local_path, body_local_path, extra_images, sort_order, is_group, tts_voice, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(dramaId, c.name ?? '', c.role || null, c.description || null, c.personality || null, c.appearance || null,
       typeof c.stages === 'string' ? c.stages : (c.stages == null ? null : JSON.stringify(c.stages)),
-      c.voice_style || null, c.polished_prompt || null, localPath, c.image_url ?? null, extraImagesJson, i, c.is_group ? 1 : 0, c.tts_voice || null, now, now);
+      c.voice_style || null, c.polished_prompt || null, localPath, c.image_url ?? null, headPath, bodyPath, extraImagesJson, i, c.is_group ? 1 : 0, c.tts_voice || null, now, now);
     charNewIds.push(info.lastInsertRowid);
     if (c.original_id != null) idMaps.characters.set(Number(c.original_id), Number(info.lastInsertRowid));
-    for (const [o, n] of importVariants(db, storagePath, projectDir, files, c.wardrobes, {
+    const wardrobeIds = importVariants(db, storagePath, projectDir, files, c.wardrobes, {
       table: 'character_wardrobes', parentCol: 'character_id', parentId: info.lastInsertRowid, category: 'characters', prefix: 'wardrobe_imp',
       fields: ['name', 'change_phrase', 'prompt', 'episode_range', 'sort_order'],
-    }, now)) idMaps.wardrobes.set(o, n);
+    }, now);
+    for (const [o, n] of wardrobeIds) idMaps.wardrobes.set(o, n);
+    for (const w of headPath && bodyPath && Array.isArray(c.wardrobes) ? c.wardrobes : []) {
+      const id = wardrobeIds.get(Number(w.original_id));
+      const body = id && saveMediaFile(storagePath, projectDir, 'characters', files, w.body_file, 'wardrobe_body_imp');
+      if (!body) continue;
+      const saved = db.prepare('SELECT local_path FROM character_wardrobes WHERE id = ?').get(id).local_path;
+      const composite = moveToComposite(storagePath, saved, headPath, body);
+      db.prepare('UPDATE character_wardrobes SET body_local_path = ?, local_path = ?, image_url = NULL WHERE id = ?').run(body, composite, id);
+    }
   }
 
   // 旧镜引用的素材在新库归属于本次导入的项目，避免用名字绑定到其他项目。

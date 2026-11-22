@@ -1735,7 +1735,12 @@ function createAndGenerateImage(db, log, opts) {
     reference_image_urls,  // 可选：参考图（造型/状态变体以基础图为参考）
     storage_category,      // 可选：落盘目录（不传则按 character/scene 推断）
     on_completed,          // 可选：({ image_url, local_path, image_gen_id }) => void，结果写回调用方自己的表
+    on_failed,             // 可选：({ error, image_gen_id }) => void，失败时通知调用方
   } = opts;
+  const notifyFailed = (error) => {
+    if (typeof on_failed !== 'function') return;
+    try { on_failed({ error, image_gen_id: imageGenId }); } catch (e) { log.error('Image generation on_failed error', { error: e.message }); }
+  };
   const negRow = (user_negative_prompt && String(user_negative_prompt).trim()) || null;
   const queuedStyle = opts.project_style ?? readProjectStyle(db, drama_id);
   const now = new Date().toISOString();
@@ -1825,6 +1830,7 @@ function createAndGenerateImage(db, log, opts) {
           } catch (_) {}
         }
         log.error('Image generation failed', { image_gen_id: imageGenId, error: result.error });
+        notifyFailed(result.error);
         return;
       }
       let localPath = null;
@@ -1948,6 +1954,7 @@ function createAndGenerateImage(db, log, opts) {
         } catch (_) {}
       }
       log.error('Image generation error', { image_gen_id: imageGenId, task_id: taskId, error: err.message });
+      notifyFailed(errMsg);
     }
   });
 

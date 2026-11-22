@@ -233,6 +233,7 @@ function setupRouter(cfg, db, log) {
   r.post('/characters/:id/generate-image', characters.generateImage);
   r.post('/characters/:id/generate-four-view-image', characters.generateFourViewImage);
   r.post('/characters/:id/generate-prompt', characters.generatePrompt);
+  r.post('/characters/:id/head-body', characters.generateHeadBody);
   r.post('/characters/:id/upload-image', uploadModule.multerSingle, characters.uploadImage);
   r.put('/characters/:id/image', characters.putImage);
   r.put('/characters/:id/image-from-library', characters.imageFromLibrary);

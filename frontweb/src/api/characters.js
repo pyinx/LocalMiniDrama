@@ -9,6 +9,10 @@ export const characterAPI = {
     await checkStyleModel('character', characterId, model)
     return request.post(`/characters/${characterId}/generate-image`, { model, style })
   },
+  /** 头身分离：part = all（转为头身分离）| head | body */
+  generateHeadBody(characterId, part) {
+    return request.post(`/characters/${characterId}/head-body`, { part })
+  },
   generatePrompt(characterId, model, style) {
     return request.post(`/characters/${characterId}/generate-prompt`, { model, style })
   },

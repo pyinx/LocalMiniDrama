@@ -6,6 +6,7 @@ const AdmZip = require('adm-zip');
 const takeArchive = require('./workbenchTakeArchive');
 const { localFile } = require('./workbenchTakeService');
 const { assetImageReference } = require('./assetImageReference');
+const characterHeadBody = require('./characterHeadBody');
 const { parseDramaCharacterIds } = require('./storyboardService');
 const EXPORT_VERSION = '1.6'; // 分集角色名单、场景身份和角色阶段；保留旧字段。
 
@@ -381,6 +382,15 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
       };
     }),
     characters: characters.map((c, idx) => {
+      // 头身分离：主图是拼合图时一并带上头和身体
+      const headBody = characterHeadBody.isHeadBody(c);
+      const headBodyFiles = {};
+      if (headBody) {
+        for (const [key, rel] of [['head_file', c.head_local_path], ['body_file', c.body_local_path]]) {
+          headBodyFiles[key] = `media/characters/char_${c.id}_${key.replace('_file', '')}${extOf(rel)}`;
+          variantFilesToPack.push({ localRelPath: rel, zipPath: headBodyFiles[key] });
+        }
+      }
       // 收集 extra_images 文件
       const extras = parseExtraImages(c.extra_images);
       const extraFiles = extras.map((relPath, i) => {
@@ -392,9 +402,15 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         original_id: c.id,
         is_group: !!c.is_group,
         tts_voice: c.tts_voice || null,
-        wardrobes: variantsOf('character_wardrobes', 'character_id', [c.id]).map((w) =>
-          exportVariant(w, 'characters', 'wardrobe', ['name', 'change_phrase', 'prompt', 'episode_range', 'sort_order'])
-        ),
+        wardrobes: variantsOf('character_wardrobes', 'character_id', [c.id]).map((w) => {
+          const out = exportVariant(w, 'characters', 'wardrobe', ['name', 'change_phrase', 'prompt', 'episode_range', 'sort_order']);
+          // 头身角色的造型带上身体，导入后造型图仍是头 + 身体的拼合
+          if (headBody && w.body_local_path && w.local_path === characterHeadBody.composedPath(c.head_local_path, w.body_local_path)) {
+            out.body_file = `media/characters/wardrobe_body_${w.id}${extOf(w.body_local_path)}`;
+            variantFilesToPack.push({ localRelPath: w.body_local_path, zipPath: out.body_file });
+          }
+          return out;
+        }),
         name: c.name,
         role: c.role,
         description: c.description,
@@ -404,6 +420,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         voice_style: c.voice_style,
         polished_prompt: c.polished_prompt || null,
         ...packPrimaryImage(c, `media/characters/char_${c.id}`),
+        ...headBodyFiles,
         extra_image_files: extraFiles,
       };
     }),
