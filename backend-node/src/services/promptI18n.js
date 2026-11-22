@@ -102,7 +102,7 @@ function storyboardSystemInstructions(cfg) {
 [Task] Break down the novel script into storyboard shots based on **independent action units**.
 
 [Shot Breakdown Principles]
-1. **Action Unit Division**: Each storyboard shot corresponds to a **narrative beat**, and may contain 1-4 rapid internal cuts (described in the style of "Shot 1 ... Cut to Shot 2 ...") to fully utilize AI video clips of 5-15 seconds, avoiding excessive short clips caused by the old "one action per shot" rule that wastes generation time.
+1. **Action Unit Division**: Each storyboard shot corresponds to a **narrative beat**, and may contain 1-4 rapid internal cuts (described in the style of "Shot 1 ... Cut to Shot 2 ...") to fully utilize the available duration of each clip, avoiding excessive short clips caused by the old "one action per shot" rule that wastes generation time.
    - Ideal for merging character power awakening, quick reactions, or continuous actions into one storyboard entry connected by internal cuts
    - Only split into separate shots when there are clear pauses, scene changes, or narrative reasons for independent presentation
    - Traditional storyboard prompt style (with multi-shot cut descriptions) is fully supported
@@ -193,7 +193,7 @@ function storyboardSystemInstructions(cfg) {
 【任务】将小说剧本按**独立动作单元**拆解为分镜头方案。
 
 【分镜拆解原则】
-1. **动作单元划分**：每个分镜对应一个**叙事节拍**，允许包含1-4个快速连续的内部切镜（使用“镜头1 ... 切镜到镜头2 ...”风格描述），以充分利用AI视频至少5秒、最长可达15秒的时长，避免因“一个镜头一个动作”导致产生过多短时长片段造成时间浪费。
+1. **动作单元划分**：每个分镜对应一个**叙事节拍**，允许包含1-4个快速连续的内部切镜（使用“镜头1 ... 切镜到镜头2 ...”风格描述），以充分利用单镜可用时长，避免因“一个镜头一个动作”导致产生过多短时长片段造成时间浪费。
    - 适合将角色能量觉醒、快速反应、连续动作等合并在一个分镜内，用内部切镜串联
    - 仅当动作间有明显停顿、场景切换或叙事需要独立呈现时，才拆分为多个分镜
    - 传统分镜风格的提示词（含多镜头切镜描述）同样支持
@@ -405,7 +405,7 @@ function formatUserPrompt(cfg, key, ...args) {
       shot_type_label: 'Shot type: %s',
       angle_label: 'Angle: %s',
       movement_label: 'Movement: %s',
-      storyboard_count_constraint: '**Constraint**: Total shot count must be around %s (allow ±20%). Please merge or split actions to meet this requirement.',
+      storyboard_count_constraint: '**Constraint**: Total shot count must be exactly %s. Please merge or split actions to meet this requirement.',
       video_duration_constraint: '**Constraint**: Total video duration must be around %s seconds (allow ±10%). Please adjust shot count and duration to meet this requirement.',
     },
     zh: {
@@ -433,7 +433,7 @@ function formatUserPrompt(cfg, key, ...args) {
       shot_type_label: '景别: %s',
       angle_label: '角度: %s',
       movement_label: '运镜: %s',
-      storyboard_count_constraint: '**重要约束**：总分镜数量必须控制在 %s 个左右（允许 ±20% 的偏差）。请务必合并或拆分动作以满足此数量要求。',
+      storyboard_count_constraint: '**重要约束**：总分镜数量必须为 %s 个。请务必合并或拆分动作以满足此数量要求。',
       video_duration_constraint: '**重要约束**：视频总时长必须控制在 %s 秒左右（允许 ±10% 的偏差）。请调整分镜数量和单镜时长以满足此要求。',
     },
   };
@@ -446,24 +446,17 @@ function formatUserPrompt(cfg, key, ...args) {
 
 /** 分镜用户提示词后缀：详细输出格式与要求
  * @param {object} cfg - 配置对象
- * @param {number|null} shotDuration - 单镜建议时长（秒），由后端从项目配置或总时长/数量推算后注入
  */
-function getStoryboardUserPromptSuffix(cfg, shotDuration) {
+function getStoryboardUserPromptSuffix(cfg) {
   const lang = isEnglish(cfg) ? 'en' : 'zh';
-  const durationHint = shotDuration && Number.isFinite(Number(shotDuration)) && Number(shotDuration) > 0
-    ? Number(shotDuration)
-    : null;
   if (lang === 'en') {
-    const durationInstruction = durationHint
-      ? `approximately ${durationHint}s per shot (project setting), adjust ±1s based on dialogue length and action complexity`
-      : 'estimate per shot from dialogue length, action complexity, and emotion';
     return `
 
 **dialogue field**: "Character: \"line\"". Multiple: "A: \"...\" B: \"...\"". Monologue: "(Monologue) content". No dialogue: "".
 
 **scene_id**: Select the most matching background ID from the scene list above, or null if none suitable.
 
-**duration (seconds)**: ${durationInstruction}.
+**duration (seconds)**: estimate per shot from dialogue length, action complexity, and emotion.
 
 **Audio rule**: bgm_prompt MUST be an empty string or "No BGM". Do not design background music per shot. Put only diegetic ambience, foley, and voice/timbre details in sound_effect, so audio remains consistent across clips.
 
@@ -474,9 +467,6 @@ function getStoryboardUserPromptSuffix(cfg, shotDuration) {
   if (_sbUserOverride) {
     return '\n\n' + _sbUserOverride + _sbUserLocked;
   }
-  const durationInstruction = durationHint
-    ? `每镜头约${durationHint}秒（项目配置），综合对话、动作、情绪可适当调整±1秒`
-    : '综合对话、动作、情绪估算每镜时长（秒）';
   return `
 
 【分镜要素】每个分镜聚焦一个叙事节拍（可包含内部多切镜序列），描述要详尽具体：
@@ -504,7 +494,7 @@ function getStoryboardUserPromptSuffix(cfg, shotDuration) {
 
 **dialogue字段说明**：角色名："台词内容"。无对话时填空字符串""。
 **scene_id**：从上方场景列表中选择最匹配的背景ID，如无合适背景则填null。
-**duration时长**：${durationInstruction}。
+**duration时长**：综合对话、动作、情绪估算每镜时长（秒）。
 **声音一致性**：所有镜头默认无BGM；若有对白/旁白，sound_effect 必须补充音色与情绪强度，并与动作节奏、环境声保持一致。
 
 【输出格式】请以JSON格式输出，包含 "storyboards" 数组。每个镜头包含：shot_number, segment_index, segment_title, title, shot_type, angle, time, location, scene_id, movement, action, dialogue, result, atmosphere, emotion, duration, bgm_prompt, sound_effect, characters（角色ID数组）, props（道具ID数组）, is_primary。**必须只返回纯JSON，不要markdown。**`;

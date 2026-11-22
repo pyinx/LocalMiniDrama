@@ -123,15 +123,41 @@ test('asset, storyboard and video adapters use the adopted prompts captured at s
   await once(provider, 'listening');
   t.after(() => new Promise(resolve => provider.close(resolve)));
   ws.db.prepare(`INSERT INTO ai_service_configs(service_type,provider,model,base_url,api_key,api_protocol)
-    VALUES('video','dashscope','["wan2.6-t2v"]',?,'local','dashscope')`).run('http://127.0.0.1:' + provider.address().port);
+    VALUES('video','dashscope','["wan3.0-video","wan3.0-video-prime","wan2.6-t2v","wan-future"]',?,'local','dashscope')`).run('http://127.0.0.1:' + provider.address().port);
   t.mock.method(require('../src/services/videoService'), 'processVideoGeneration', () => {});
-  await ws.request('POST', '/videos', { drama_id: id, storyboard_id: shot, prompt: '举杯' });
-  const recorded = ws.db.prepare('SELECT * FROM video_generations ORDER BY id DESC LIMIT 1').get();
+  const preflight = '/style-library/preflight?kind=video&id=' + id;
+  assert.equal((await ws.request('GET', preflight + '&model=wan-future')).warn, true);
+  const tooLong = await fetch(ws.url('/videos'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ drama_id: id, storyboard_id: shot, prompt: positive.padEnd(20000, '风') }),
+  });
+  assert.equal(tooLong.status, 422);
+  assert.match((await tooLong.json()).error.message, /20000/);
+  assert.equal(ws.db.prepare('SELECT COUNT(*) AS n FROM video_generations').get().n, 0);
+  const recorded = [];
+  for (const model of [undefined, 'wan3.0-video-prime', 'wan2.6-t2v']) {
+    const check = await ws.request('GET', preflight + (model ? '&model=' + model : ''));
+    assert.equal(check.model, model || 'wan3.0-video');
+    assert.equal(check.warn, false);
+    const take = await ws.request('POST', '/videos', { drama_id: id, storyboard_id: shot, prompt: '举杯', model });
+    recorded.push(ws.db.prepare('SELECT * FROM video_generations WHERE id=?').get(take.id));
+  }
   await ws.request('PUT', '/dramas/'+id+'/outline', { style: 'realistic' });
-  const video = await require('../src/services/videoClient').callVideoApi(ws.db, log, recorded);
-  assert.ifError(video.error);
-  assert.equal(videoRequests[0].input.negative_prompt, '反光, 光滑');
-  assert.match(videoRequests[0].input.prompt, /硬纸纤维/);
+  for (const row of recorded) {
+    const video = await require('../src/services/videoClient').callVideoApi(ws.db, log, row);
+    assert.ifError(video.error);
+    const { model, input } = videoRequests.at(-1);
+    assert.equal(model, row.model);
+    assert.match(input.prompt, /举杯/);
+    assert.match(input.prompt, /硬纸纤维/);
+    if (model === 'wan2.6-t2v') {
+      assert.equal(input.negative_prompt, '反光, 光滑');
+      assert.doesNotMatch(input.prompt, /反光/);
+    } else {
+      assert.equal(Object.hasOwn(input, 'negative_prompt'), false);
+      assert.match(input.prompt, /负向清单（避免出现）：反光, 光滑$/);
+    }
+  }
   await client.callImageApi(ws.db, log, { drama_id: id, prompt: '车窗', storyboard_id: shot, project_style: queued });
   assert.match(imageCalls.at(-1).input.messages[0].content[0].text, /硬纸纤维/);
   assert.equal(imageCalls.at(-1).parameters.negative_prompt, '反光, 光滑');

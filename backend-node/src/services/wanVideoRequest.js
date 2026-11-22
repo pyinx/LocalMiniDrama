@@ -49,11 +49,15 @@ function prepareWanVideo(caps, opts) {
   if (mode === 'image' && !first) return fail('图生视频需要首帧');
   if (mode === 'reference' && !refs.length) return fail('参考生视频至少需要一张参考图');
   if (first && refs.length && (omni || caps.wan26 || caps.vace)) return fail('不能同时指定首尾帧和多图参考');
-  const prompt = String(opts.prompt || '').replace(/@图片(\d+)/g, (_, n) => caps.refToken + n);
+  let prompt = String(opts.prompt || '').replace(/@图片(\d+)/g, (_, n) => caps.refToken + n);
   if (!prompt.trim() && (mode === 'text' || mode === 'reference' || (omni && !first && !refs.length))) return fail('需要提示词');
+  const negative = String(opts.style_negative || '').trim();
+  if (negative && caps.styleNegativeMode === 'prompt') {
+    prompt = [prompt, '负向清单（避免出现）：' + negative].filter(Boolean).join('\n\n');
+  }
   if (promptChars(prompt) > caps.maxPromptChars) return fail(`提示词超过 ${caps.maxPromptChars} 字`);
   const input = prompt ? { prompt } : {};
-  if (!omni && !caps.vace && opts.style_negative) input.negative_prompt = opts.style_negative;
+  if (negative && caps.styleNegativeMode === 'field') input.negative_prompt = negative;
   const parameters = { duration };
   if (caps.vace) {
     const roles = opts.reference_roles ?? refs.map(() => 'obj');

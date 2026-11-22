@@ -7,15 +7,14 @@ export const videosAPI = {
     return request.get('/videos', { params: params || {} })
   },
   /** 创建单条分镜视频生成任务，body: { drama_id, storyboard_id, prompt, image_url?, model?, ... } */
-  async create(body) {
-    if (body.storyboard_id) await checkStyleModel('video', body.drama_id, body.model)
-    if (body.operation_key) return request.post('/videos', body)
-    if (!body.storyboard_id) return request.post('/videos', body)
+  async create(body, config) {
+    if (body.storyboard_id) await checkStyleModel('video', body.drama_id, body.model, config)
+    if (body.operation_key || !body.storyboard_id) return request.post('/videos', body, config)
     const slot = 'video-submit:' + body.drama_id + ':' + body.storyboard_id
     const key = localStorage.getItem(slot) || Array.from(crypto.getRandomValues(new Uint32Array(4)), x => x.toString(16).padStart(8, '0')).join('')
     localStorage.setItem(slot, key)
     try {
-      const item = await request.post('/videos', { ...body, operation_key: key })
+      const item = await request.post('/videos', { ...body, operation_key: key }, config)
       if (localStorage.getItem(slot) === key) localStorage.removeItem(slot)
       return item
     } catch (err) {

@@ -274,7 +274,8 @@ function generateStoryboard(db, log, episodeId, options) {
     duration,
     aspect_ratio,
     include_narration,
-    universal_omni_storyboard
+    universal_omni_storyboard,
+    options?.clip_duration_range
   );
 }
 

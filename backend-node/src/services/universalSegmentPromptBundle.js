@@ -293,14 +293,6 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
   const charCount = charNamesOrdered.length;
   const propCount = propNames.length;
 
-  let projectClipSec = 5;
-  if (dramaRow?.metadata) {
-    try {
-      const m = typeof dramaRow.metadata === 'string' ? JSON.parse(dramaRow.metadata) : dramaRow.metadata;
-      const v = Number(m?.video_clip_duration);
-      if (Number.isFinite(v) && v > 0) projectClipSec = Math.min(120, Math.max(1, v));
-    } catch (_) {}
-  }
   const body = bodyIn;
   const bodyDurRaw = body.duration != null && body.duration !== '' ? Number(body.duration) : NaN;
   const sbDurRaw = sb.duration != null ? Number(sb.duration) : NaN;
@@ -308,7 +300,7 @@ function buildUniversalSegmentUserPromptBundle(db, sbId, reqBody, opts = {}) {
     ? Math.min(120, Math.max(1, bodyDurRaw))
     : Number.isFinite(sbDurRaw) && sbDurRaw > 0
       ? Math.min(120, Math.max(1, sbDurRaw))
-      : projectClipSec;
+      : 5;
   const durationLabel = Number.isInteger(durationSec) ? String(durationSec) : String(Math.round(durationSec * 10) / 10);
 
   const genreHint = (dramaRow?.genre && String(dramaRow.genre).trim()) || '';

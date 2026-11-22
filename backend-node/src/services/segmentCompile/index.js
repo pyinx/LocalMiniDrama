@@ -10,8 +10,8 @@ const { promptChars } = require('../modelCapabilities');
 const PRIORITY = { scene: 0, lead: 1, character: 2, crowd: 3, prop: 4, tail_frame: 5 };
 const EMIT = { character: 0, crowd: 0, scene: 1, prop: 2, tail_frame: 3 };
 
-function envelopeOk(d, { min, max, step }) {
-  return d >= min && d <= max && (d - min) % step === 0;
+function envelopeOk(d, { min, max, step, values }) {
+  return values ? values.includes(d) : d >= min && d <= max && (d - min) % step === 0;
 }
 
 /**

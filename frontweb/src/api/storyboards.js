@@ -123,8 +123,8 @@ export const storyboardsAPI = {
   create(data) {
     return request.post('/storyboards', data)
   },
-  update(id, data) {
-    return request.put(`/storyboards/${id}`, data)
+  update(id, data, config) {
+    return request.put(`/storyboards/${id}`, data, config)
   },
   delete(id) {
     return request.delete(`/storyboards/${id}`)

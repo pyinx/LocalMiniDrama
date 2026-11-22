@@ -144,6 +144,7 @@ function alignToEnvelope(ir, caps) {
   const { min, max, step } = caps.duration;
   let target = Math.max(ir.duration_s, min);
   target = min + Math.ceil((target - min) / step) * step;
+  if (caps.duration.values) target = caps.duration.values.find(value => value >= target) ?? target;
   if (target > max) target = ir.duration_s > max ? ir.duration_s : max;
   const pad = target - ir.duration_s;
   if (pad > 0) {

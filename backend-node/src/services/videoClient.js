@@ -1,7 +1,10 @@
 // ? Go pkg/video + VideoGenerationService ????????? API??????(????)
 const fs = require('fs');
 const { createHash } = require('node:crypto');
-const { getVideoCaps, clampDuration, isSeedance2FamilyModel, WAN_LEGACY_KEYFRAME_MODEL, promptChars } = require('./modelCapabilities');
+const {
+  getVideoCaps, clampDuration, isSeedance2FamilyModel, isCheapSeedance2FlexibleDurationModel, promptChars,
+  WAN_LEGACY_KEYFRAME_MODEL, AGNES_ALLOWED_NUM_FRAMES, AGNES_FRAME_RATE,
+} = require('./modelCapabilities');
 const { buildWanVideoBody, localImagePath: resolveDashScopeLocalImage, dashScopeBaseUrl } = require('./wanVideoRequest');
 const path = require('path');
 const { toLocalPath } = require('../utils/storagePaths');
@@ -65,15 +68,6 @@ function configSupportsUniversalOmni(config) {
     s = {};
   }
   return s.supports_universal_omni === true || s.supports_universal_omni === 1 || s.supports_universal_omni === 'true';
-}
-
-/** ohmybb 按次/按秒模型：4–15 秒逐秒可选，默认 5 秒 */
-function isCheapSeedance2FlexibleDurationModel(model) {
-  const m = String(model || '').toLowerCase();
-  return m === 'yk-seedance-mini'
-    || m === 'yk-seedance2.0-fast'
-    || m === 'yk-seedance2.0'
-    || m === 'minimax-h3-1080p-15s';
 }
 
 /**
@@ -1011,7 +1005,7 @@ function describeVideoTarget(config, preferredModel) {
   if (!config) return { config: null, model: null, protocol: null, caps: getVideoCaps({}) };
   const model = normalizeVolcModel(getModelFromConfig(config, preferredModel), config);
   const protocol = resolveVideoProtocol(config, model);
-  return { config, model, protocol, caps: getVideoCaps({ protocol, model }) };
+  return { config, model, protocol, caps: getVideoCaps({ protocol, model, provider: config.provider }) };
 }
 
 function resolveStoredVideoTarget(db, row) {
@@ -1659,15 +1653,8 @@ const DASHSCOPE_IMAGE2VIDEO = '/api/v1/services/aigc/image2video/video-synthesis
  * - wan2.6-r2v-flash: video-generation, reference_urls??? 5 ??
  */
 function styleVideoCapabilities(db, preferredModel) {
-  const config = getDefaultVideoConfig(db, preferredModel);
-  if (!config) return { model: '', negative: false };
-  const model = getModelFromConfig(config, preferredModel);
-  return { model, negative: resolveVideoProtocol(config, preferredModel) === 'dashscope' && supportsVideoStyleNegative(model) };
-}
-
-function supportsVideoStyleNegative(model) {
-  const { wanMode, vace } = getVideoCaps({ protocol: 'dashscope', model });
-  return Boolean(wanMode && wanMode !== 'omni' && !vace);
+  const { model, caps } = resolveVideoTarget(db, preferredModel);
+  return { model: model || '', negative: Boolean(caps.styleNegativeMode) };
 }
 
 async function prepareWanKeyframeInput(caps, opts) {
@@ -1839,8 +1826,7 @@ async function callGeminiVideoApi(config, log, opts) {
   const base = (config.base_url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
   const modelName = model || 'veo-3.0-generate-preview';
 
-  // durationSeconds ??? 5-8 ?
-  const durationSec = Math.min(8, Math.max(5, Math.round(Number(duration) || 8)));
+  const durationSec = clampDuration(getVideoCaps({ protocol: 'gemini', model: modelName }), Number(duration) || 8);
   const ratio = clampToGeminiImageAspectRatio(aspect_ratio || '16:9');
 
   const instance = { prompt: prompt || '' };
@@ -2518,7 +2504,6 @@ async function callVeo3VideoApi(config, log, opts) {
 }
 
 /** Agnes Video V2.0：POST /videos JSON，轮询 GET /videos/{task_id} */
-const AGNES_ALLOWED_NUM_FRAMES = [81, 121, 161, 241, 441];
 const AGNES_VIDEO_25_RATIO_VALUES = [
   ['21:9', 21 / 9],
   ['16:9', 16 / 9],
@@ -2685,7 +2670,7 @@ function agnesDimensionsFromAspectRatio(ratio) {
   return map[ratio] || map['16:9'];
 }
 
-function agnesSnapNumFrames(durationSec, frameRate = 24) {
+function agnesSnapNumFrames(durationSec, frameRate = AGNES_FRAME_RATE) {
   const target = Math.round((Number(durationSec) || 5) * frameRate);
   let best = AGNES_ALLOWED_NUM_FRAMES[0];
   for (const v of AGNES_ALLOWED_NUM_FRAMES) {
@@ -2809,7 +2794,7 @@ async function callAgnesVideoApi(db, config, log, opts) {
     body = built.body;
     imageStrategy = built.strategy;
   } else {
-    const frameRate = 24;
+    const frameRate = AGNES_FRAME_RATE;
     const dims = agnesDimensionsFromAspectRatio(aspect_ratio || '16:9');
     const numFrames = agnesSnapNumFrames(duration, frameRate);
     body = {

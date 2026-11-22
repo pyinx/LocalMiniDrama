@@ -5,6 +5,7 @@
 const aiClient = require('./aiClient');
 const taskService = require('./taskService');
 const videoClient = require('./videoClient');
+const { storyboardPlanningCaps } = require('./modelCapabilities');
 const storyboardService = require('./storyboardService');
 const episodeContinuityService = require('./episodeContinuityService');
 const { parseSegmentIr } = require('./segmentIr/schema');
@@ -36,9 +37,12 @@ async function runStructuredStoryboardGeneration(db, log, episodeId, opts = {}) 
   const characters = db.prepare('SELECT id, name, role FROM characters WHERE drama_id = ? AND deleted_at IS NULL ORDER BY id').all(ep.drama_id);
   const scenes = db.prepare('SELECT id, location, time FROM scenes WHERE drama_id = ? AND deleted_at IS NULL ORDER BY id').all(ep.drama_id);
   const props = db.prepare('SELECT id, name FROM props WHERE drama_id = ? AND deleted_at IS NULL ORDER BY id').all(ep.drama_id);
-  const { caps } = videoClient.resolveVideoTarget(db, opts.videoModel);
+  const target = videoClient.resolveVideoTarget(db, opts.videoModel);
+  const caps = storyboardPlanningCaps(target.caps, opts.clipRange);
 
-  const text = await aiClient.generateText(db, log, 'text', rules.userPrompt({ script, characters, scenes, props, caps }), rules.systemPrompt(caps), {
+  const text = await aiClient.generateText(db, log, 'text', rules.userPrompt({
+    script, characters, scenes, props, caps, storyboardCount: opts.storyboardCount, videoDuration: opts.videoDuration,
+  }), rules.systemPrompt(caps), {
     scene_key: 'storyboard_extraction',
     model: opts.model || undefined,
     temperature: 0.4,
@@ -69,8 +73,14 @@ async function runStructuredStoryboardGeneration(db, log, episodeId, opts = {}) 
   });
   if (errors.length) throw new Error('结构化分镜生成失败，模型输出未通过校验：' + errors.slice(0, 6).join('；'));
 
-  const plan = planSegments(irs, caps, { episode: true });
+  const plan = planSegments(irs, caps, { episode: !opts.storyboardCount });
+  const blocked = plan.findings.find(f => f.level === 'block');
+  if (blocked) throw new Error(blocked.msg);
+  if (opts.storyboardCount && plan.segments.length !== Number(opts.storyboardCount)) {
+    throw new Error(`要求生成 ${opts.storyboardCount} 镜，本次规划得到 ${plan.segments.length} 镜，请重试或调整镜数。`);
+  }
   const now = new Date().toISOString();
+  const totalDuration = plan.segments.reduce((sum, seg) => sum + seg.ir.duration_s, 0);
   const ids = [];
   db.transaction(() => {
     db.prepare('UPDATE storyboards SET deleted_at = ? WHERE episode_id = ? AND deleted_at IS NULL').run(now, ep.id);
@@ -84,12 +94,13 @@ async function runStructuredStoryboardGeneration(db, log, episodeId, opts = {}) 
       storyboardService.saveSegmentIr(db, log, id, seg.ir);
       ids.push(id);
     });
+    db.prepare('UPDATE episodes SET duration=?, updated_at=? WHERE id=?').run(Math.ceil(totalDuration / 60), now, ep.id);
   })();
   const segments = plan.segments.map((s, i) => ({ storyboard_id: ids[i], ir: s.ir }));
   const continuity = episodeContinuityService.getContinuity(db, ep.id) || {};
   const findings = [...plan.findings, ...lintEpisode(segments, { continuity }), ...lintDialogueFidelity(segments, script)];
   log.info('Structured storyboards generated', { episode_id: ep.id, segments: ids.length, findings: findings.length });
-  return { storyboard_ids: ids, findings };
+  return { storyboard_ids: ids, findings, total_duration: totalDuration };
 }
 
 /** 路由入口：建任务后台执行 */

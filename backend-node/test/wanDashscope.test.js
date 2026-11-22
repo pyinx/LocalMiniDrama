@@ -171,11 +171,28 @@ describe('Wan DashScope size follows aspect ratio (AC22)', () => {
     await call('wan3.0-video', { prompt: '', first_frame_url: '/static/a.png', duration: -1, seed: -1,
       generate_audio: false, aspect_ratio: 'adaptive', style_negative: '水印' });
     assert.match(sentBody.input.media[0].url, /^data:image\/png;base64,/);
-    assert.deepEqual(Object.keys(sentBody.input), ['media']);
+    assert.equal(sentBody.input.prompt, '负向清单（避免出现）：水印');
+    assert.equal(Object.hasOwn(sentBody.input, 'negative_prompt'), false);
     assert.deepEqual(sentBody.parameters, { duration: -1, seed: -1, ratio: 'adaptive', resolution: '1080P', audio: false });
     await call('wan3.0-video', { duration: 30, aspect_ratio: '21:9', resolution: '480P' });
     assert.deepEqual(sentBody.input, { prompt: 'p' });
     assert.equal(sentBody.parameters.ratio, '21:9');
+  });
+  it('Wan 3 includes the style exclusion list in the prompt within its character budget', async () => {
+    const negative = '写实摄影、多余手指';
+    const suffix = '\n\n负向清单（避免出现）：' + negative;
+    const prompt = '🌿'.repeat(20000 - Array.from(suffix).length);
+    for (const model of ['wan3.0-video', 'wan3.0-video-prime']) {
+      const valid = await call(model, { prompt, style_negative: negative });
+      assert.equal(valid.task_id, 't1', valid.error);
+      assert.deepEqual(sentBody.input, { prompt: prompt + suffix });
+      const callsBefore = fetchCalls;
+      const tooLong = await call(model, { prompt: prompt + '🌿', style_negative: negative });
+      assert.match(tooLong.error, /20000/);
+      assert.equal(fetchCalls, callsBefore);
+      await call(model, { prompt: '向海边走去', style_negative: '  ' });
+      assert.deepEqual(sentBody.input, { prompt: '向海边走去' });
+    }
   });
   it('rejects unrepresentable requests before touching the network', async () => {
     const ref = 'https://cdn.example.com/ref.jpg';

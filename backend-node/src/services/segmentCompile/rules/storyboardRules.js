@@ -4,6 +4,7 @@
  */
 
 const { beatContinuity } = require('../../storyboardContinuity');
+const { durationChoices } = require('../../modelCapabilities');
 
 function systemPrompt(caps) {
   const { min, max } = caps.duration;
@@ -48,9 +49,11 @@ function systemPrompt(caps) {
 ${beatContinuity}`;
 }
 
-function userPrompt({ script, characters, scenes, props, caps }) {
+function userPrompt({ script, characters, scenes, props, caps, storyboardCount, videoDuration }) {
   return [
-    `目标视频模型：每段 ${caps.duration.min}–${caps.duration.max} 秒。`,
+    `按每段的对白、动作和停顿选择秒数：${durationChoices(caps.duration)}。`,
+    ...(storyboardCount ? [`整集恰好 ${storyboardCount} 段，每段对应一个分镜。`] : []),
+    ...(videoDuration ? [`整集目标总时长约 ${videoDuration} 秒，分配给各段。`] : []),
     `角色列表：${JSON.stringify(characters)}`,
     `场景列表：${JSON.stringify(scenes)}`,
     `道具列表：${JSON.stringify(props)}`,

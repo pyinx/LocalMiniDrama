@@ -97,7 +97,7 @@ function routes(db, log, cfg) {
             return response.error(res, 409, 'storyboard_draft_changed', '提交正文、动作或结果与已保存的分拍版本不同，请核对当前稿后重新润色或保存修订');
           }
           if (!board.universal_beat_signature && [board.action, board.result].some(s => s?.trim() && !prompt.includes(s.trim()))) {
-            return response.error(res, 409, 'storyboard_review_needed', '旧稿的分拍正文与动作、结果尚未核对。可润色核对，或在「全能提示词」中选择「采用当前分拍」。',
+            return response.error(res, 409, 'storyboard_review_needed', '请先查看本镜的「片段描述」，确认动作和最后的画面符合预期。可以直接修改描述。要使用现有描述，请点「全能提示词」→「采用当前分拍」，再生成视频。',
               { action: board.action, result: board.result, draft: prompt });
           }
         }
@@ -198,7 +198,7 @@ function routes(db, log, cfg) {
               roles = refs.map(url => background?.includes(identity(url)) ? 'bg' : 'obj');
             }
           }
-          const plan = prepareWanVideo(wanCaps, { model, prompt, duration, resolution, seed,
+          const plan = prepareWanVideo(wanCaps, { model, prompt, style_negative: styleNegative, duration, resolution, seed,
             aspect_ratio: aspectRatio, first_frame_url: firstFrameUrl, last_frame_url: lastFrameUrl,
             image_url: imageUrl, reference_urls: refs, reference_roles: roles, reference_mode: mode, generate_audio: audio });
           incompatibility = invalidAspect ? `${model} 不支持画面比例 ${body.aspect_ratio}` : plan.error;

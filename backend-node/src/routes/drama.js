@@ -270,12 +270,16 @@ function generateStoryboard(db, log) {
         return response.success(res, structured.startStructuredStoryboardGeneration(db, log, req.params.episode_id, {
           model,
           videoModel: body.video_model || undefined,
+          clipRange: body.clip_duration_range,
+          storyboardCount: body.storyboard_count,
+          videoDuration: body.video_duration,
         }));
       }
       const resData = await dramaService.generateStoryboard(db, log, req.params.episode_id, {
         model: model,
         style: body.style,
         storyboard_count: body.storyboard_count,
+        clip_duration_range: body.clip_duration_range,
         video_duration: body.video_duration,
         aspect_ratio: body.aspect_ratio,
         include_narration: body.include_narration,
@@ -284,6 +288,7 @@ function generateStoryboard(db, log) {
       response.success(res, resData);
     } catch (err) {
       log.error('Generate storyboard failed', { error: err.message });
+      if (err.status === 400) return response.badRequest(res, err.message);
       if (err.status === 409) return response.error(res, 409, 'storyboard_locked', err.message);
       response.internalError(res, err.message || '生成分镜失败');
     }

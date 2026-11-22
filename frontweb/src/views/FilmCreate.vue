@@ -368,14 +368,15 @@
             <el-option label="4:3" value="4:3" />
             <el-option label="21:9 宽银幕" value="21:9" />
           </el-select>
-          <el-select v-model="videoClipDuration" style="width: 105px" @change="() => saveProjectSettings()">
-            <el-option label="4秒/段" :value="4" />
-            <el-option label="5秒/段" :value="5" />
-            <el-option label="8秒/段" :value="8" />
-            <el-option label="10秒/段" :value="10" />
-            <el-option label="12秒/段" :value="12" />
-            <el-option label="15秒/段" :value="15" />
-          </el-select>
+          <div class="pipeline-duration-range" role="group" aria-label="一键流程单镜时长范围" title="一键生成分镜时，AI 按每镜内容在此范围内选择时长">
+            <span>每镜</span>
+            <el-input-number :model-value="clipRange.min" :min="1" :max="clipRange.max" :precision="0" :value-on-clear="clipRange.min"
+              :controls="false" aria-label="最短秒数" @change="value => setClipBound('min', value)" />
+            <span>至</span>
+            <el-input-number :model-value="clipRange.max" :min="clipRange.min" :max="120" :precision="0" :value-on-clear="clipRange.max"
+              :controls="false" aria-label="最长秒数" @change="value => setClipBound('max', value)" />
+            <span>秒</span>
+          </div>
           <el-select v-model="scriptLanguage" placeholder="分镜语言" clearable style="width: 105px">
             <el-option label="中文" value="zh" />
             <el-option label="英文" value="en" />
@@ -813,14 +814,14 @@
         <div class="sb-config-row">
           <label class="sb-config-item">
             <span class="sb-config-label">分镜数量</span>
-            <el-input-number v-model="storyboardCount" :min="1" :max="200" :step="5" placeholder="自动" class="sb-config-input" />
-            <span class="sb-config-hint sb-config-hint--estimate" :title="scriptEstimateStoryboardTitle">留空由 AI 决定{{ scriptEstimateStoryboardHint }}</span>
+            <el-input-number v-model="storyboardCount" :min="1" :max="200" :precision="0" placeholder="自动" class="sb-config-input" />
+            <span class="sb-config-hint sb-config-hint--estimate">留空由 AI 决定</span>
           </label>
           <span class="sb-config-divider">｜</span>
           <label class="sb-config-item">
             <span class="sb-config-label">视频总时长(秒)</span>
-            <el-input-number v-model="videoDuration" :min="10" :max="600" :step="5" placeholder="自动" class="sb-config-input" />
-            <span class="sb-config-hint sb-config-hint--estimate" :title="scriptEstimateVideoDurationTitle">留空由 AI 决定{{ scriptEstimateVideoDurationHint }}</span>
+            <el-input-number v-model="videoDuration" :min="10" :max="600" :precision="0" :step="5" placeholder="自动" class="sb-config-input" />
+            <span class="sb-config-hint sb-config-hint--estimate">留空由 AI 逐镜安排{{ scriptEstimateVideoDurationHint }}</span>
           </label>
           <span class="sb-config-divider">｜</span>
           <label class="sb-config-item">
@@ -2696,7 +2697,7 @@ import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
 import DeliveryLoudness from '@/components/DeliveryLoudness.vue'
 import EpisodeSeamEditor from '@/components/EpisodeSeamEditor.vue'
 import CreativeReviewPanel from '@/components/CreativeReviewPanel.vue'
-import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick, h } from 'vue'
 const creativeReviewPanel = ref(null)
 import { useAgentContext } from '@/stores/agentContext'
 import { useRoute, useRouter } from 'vue-router'
@@ -2730,6 +2731,9 @@ import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
 import StylePickerButton from '@/components/StylePickerButton.vue'
 import AIConfigContent from '@/components/AIConfigContent.vue'
 import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEditor.vue'
+import StoryboardDraftReview from '@/components/StoryboardDraftReview.vue'
+import { submitStoryboardVideo } from '@/utils/submitStoryboardVideo'
+import { pipelineClipRange, storyboardTiming } from '@/utils/storyboardTiming'
 import SegmentIrPanel from '@/components/SegmentIrPanel.vue'
 import EpisodeSegmentTools from '@/components/EpisodeSegmentTools.vue'
 import VariantEditor from '@/components/VariantEditor.vue'
@@ -2818,7 +2822,13 @@ const generationStyle = ref('')
 const customStylePrompt = ref('')
 const customStyleSnapshot = ref(null)
 const projectAspectRatio = ref('16:9')
-const videoClipDuration = ref(5)
+const clipRange = ref(pipelineClipRange())
+
+function setClipBound(bound, value) {
+  if (!Number.isInteger(value)) return
+  clipRange.value = { ...clipRange.value, [bound]: value }
+  saveProjectSettings()
+}
 
 function getSelectedStylePrompt() {
   const meta = projectStylePromptMetadata()
@@ -3415,101 +3425,12 @@ const exportingStoryboardSheet = ref(false)
 const lastFrameUseFirstLayoutLock = ref(true)
 const gridMode = ref('single') // 序列图模式：single / quad_grid / nine_grid
 
-// ── 剧本长度 → 估算总时长；自动分镜数与项目「每段秒数」(videoClipDuration) 对齐 ──
-
-/** 用于估算的每段时长（秒），与一键成片处「X秒/段」一致 */
-function clipSecondsForStoryboardEstimate() {
-  const c = Number(videoClipDuration.value)
-  return Math.max(2, Math.min(60, Number.isFinite(c) && c > 0 ? c : 5))
-}
-
-/** 由估算总时长与每段秒数得镜数中枢与宽松参考区间（±1 镜） */
-function shotCountEstimateFromDurationSec(sec) {
-  const s = Math.max(10, Math.min(600, Math.round(Number(sec) || 0)))
-  const clip = clipSecondsForStoryboardEstimate()
-  const ideal = s / clip
-  const locked = Math.max(1, Math.min(200, Math.round(ideal)))
-  const minR = Math.max(1, locked - 1)
-  const maxR = Math.min(200, locked + 1)
-  const range = minR >= maxR ? { min: locked, max: locked } : { min: minR, max: maxR }
-  return { locked, range, clip }
-}
-
-/** 由剧本字符数粗估成片总时长（短剧偏长镜）：秒数 = round(10 + (字数/600)×60)，夹在 10–600s */
-function estimateVideoDurationSecFromCharLen(charLen) {
-  const len = Math.max(0, Math.floor(Number(charLen) || 0))
-  if (len < 1) return null
-  const raw = Math.round(10 + (len / 600) * 60)
-  return Math.min(600, Math.max(10, raw))
-}
-
-/** 当前剧本下的估算：总秒数、镜数中枢、镜数区间、采用的每段秒数 */
-const scriptStoryboardEstimate = computed(() => {
-  const script = (scriptContent.value || '').toString().trim()
-  const len = script.length
-  if (!len) return null
-  const sec = estimateVideoDurationSecFromCharLen(len)
-  if (sec == null) return null
-  const { locked, range, clip } = shotCountEstimateFromDurationSec(sec)
-  return { sec, locked, range, clip, len }
-})
-
 const scriptEstimateVideoDurationHint = computed(() => {
-  const e = scriptStoryboardEstimate.value
-  if (!e) return ''
-  return `（约 ${e.sec}s）`
+  const length = (scriptContent.value || '').trim().length
+  if (!length || videoDuration.value > 0) return ''
+  const seconds = Math.min(600, Math.round(10 + length / 10))
+  return `（剧本粗估 ${seconds}s）`
 })
-
-const scriptEstimateVideoDurationTitle = computed(() => {
-  const e = scriptStoryboardEstimate.value
-  if (!e) return ''
-  return `按当前剧本文本约 ${e.len} 个字符（含标点；常见汉字在浏览器里一字一算，并非按 UTF-8 字节翻倍）、短剧公式 round(10+(字符/600)×60) 粗估总时长约 ${e.sec} 秒；未填输入框时该值会作为约束传给生成接口。仅供参考`
-})
-
-const scriptEstimateStoryboardHint = computed(() => {
-  const e = scriptStoryboardEstimate.value
-  if (!e) return ''
-  if (e.range && e.range.min !== e.range.max) {
-    return `（约 ${e.locked} 镜，参考 ${e.range.min}–${e.range.max}）`
-  }
-  return `（约 ${e.locked} 镜）`
-})
-
-const scriptEstimateStoryboardTitle = computed(() => {
-  const e = scriptStoryboardEstimate.value
-  if (!e) return ''
-  return `按估算时长 ${e.sec}s ÷ 项目「每段 ${e.clip} 秒」四舍五入粗估约 ${e.locked} 镜；旁注区间为 ±1 镜供参考。切换「X秒/段」会同步改变本估算。`
-})
-
-function scriptTextTrimmedForEstimate() {
-  return (scriptContent.value || '').toString().trim()
-}
-
-function userFilledStoryboardCount() {
-  const v = storyboardCount.value
-  return v != null && Number.isFinite(Number(v)) && Number(v) >= 1
-}
-
-function userFilledVideoDuration() {
-  const v = videoDuration.value
-  return v != null && Number.isFinite(Number(v)) && Number(v) >= 10
-}
-
-/** 请求后端的视频总时长：仅未手动填时传剧本估算 */
-function getVideoDurationForApi() {
-  if (userFilledVideoDuration()) return Math.round(Number(videoDuration.value))
-  const len = scriptTextTrimmedForEstimate().length
-  if (len < 1) return undefined
-  return estimateVideoDurationSecFromCharLen(len) ?? undefined
-}
-
-/** 请求后端的分镜数量：仅未手动填时按「估算总时长 ÷ 每段秒数」推算，与项目 X秒/段 一致 */
-function getStoryboardCountForApi() {
-  if (userFilledStoryboardCount()) return Math.round(Number(storyboardCount.value))
-  const sec = getVideoDurationForApi()
-  if (sec == null || !Number.isFinite(sec)) return undefined
-  return shotCountEstimateFromDurationSec(sec).locked
-}
 
 function getFirstImageFile(dataTransfer) {
   if (!dataTransfer?.files?.length) return null
@@ -4733,7 +4654,7 @@ async function loadDrama() {
       customStylePrompt.value = ''
     }
     projectAspectRatio.value = (d.metadata && d.metadata.aspect_ratio) ? d.metadata.aspect_ratio : '16:9'
-    videoClipDuration.value = (d.metadata && d.metadata.video_clip_duration) ? Number(d.metadata.video_clip_duration) : 5
+    clipRange.value = pipelineClipRange(d.metadata)
     storyboardIncludeNarration.value = !!(d.metadata && d.metadata.storyboard_include_narration)
     storyboardUniversalOmni.value = !!(d.metadata && d.metadata.storyboard_universal_omni)
     storyboardStructured.value = !!(d.metadata && d.metadata.storyboard_structured)
@@ -5038,6 +4959,7 @@ async function saveScriptToBackend(content) {
       style: generationStyle.value || undefined,
       metadata: {
         ...projectStylePromptMetadata(),
+        pipeline_clip_range: { ...clipRange.value },
         story_style: storyStyle.value || undefined,
         aspect_ratio: projectAspectRatio.value || '16:9',
       },
@@ -5128,7 +5050,7 @@ async function saveProjectSettings() {
   const metadata = {
     story_style: storyStyle.value || undefined,
     aspect_ratio: projectAspectRatio.value || '16:9',
-    video_clip_duration: videoClipDuration.value || 5,
+    pipeline_clip_range: { ...clipRange.value },
     storyboard_include_narration: !!storyboardIncludeNarration.value,
     storyboard_structured: !!storyboardStructured.value,
     storyboard_universal_omni: !!storyboardUniversalOmni.value,
@@ -5153,7 +5075,7 @@ async function onGenerateStory() {
     generationStyle: generationStyle.value,
     customStylePrompt: customStylePrompt.value,
     customStyleSnapshot: customStyleSnapshot.value,
-    projectStyleMetadata: projectStylePromptMetadata(),
+    projectStyleMetadata: { ...projectStylePromptMetadata(), pipeline_clip_range: { ...clipRange.value } },
     projectAspectRatio: projectAspectRatio.value,
     store,
     router,
@@ -5927,22 +5849,17 @@ async function onSaveUniversalSegmentField(sb) {
 function universalSegmentDurationSecForSb(sb) {
   const dUi = Number(sbDuration.value[sb?.id])
   const dRow = Number(sb?.duration)
-  const dProj = Number(videoClipDuration.value)
   return Number.isFinite(dUi) && dUi > 0
     ? dUi
     : Number.isFinite(dRow) && dRow > 0
       ? dRow
-      : Number.isFinite(dProj) && dProj > 0
-        ? dProj
-        : 5
+      : 5
 }
 
-/** 提交视频 API 时使用的时长：优先本分镜配置，其次项目「每段秒数」 */
+/** 视频提交使用当前分镜的时长。 */
 function getSbVideoDurationForApi(sb) {
   const perSb = Number(sbDuration.value[sb?.id] ?? sb?.duration)
   if (Number.isFinite(perSb) && perSb > 0) return perSb
-  const clip = Number(videoClipDuration.value)
-  if (Number.isFinite(clip) && clip > 0) return clip
   return undefined
 }
 
@@ -5992,14 +5909,39 @@ function onUniversalSegmentToGrokVideoTags(sb) {
   ElMessage.success('已改为 Grok 视频占位符格式（<IMAGE_N>）')
 }
 
+async function adoptUniversalDraft(sb, draft, expected) {
+  const editing = sbUniversalSegmentTrimmed(sb)
+  const row = await storyboardsAPI.update(sb.id, {
+    universal_segment_text: draft,
+    confirm_universal_draft: true,
+    expected_universal_segment_text: expected.universal_segment_text ?? null,
+    expected_action: expected.action ?? null,
+    expected_result: expected.result ?? null,
+  }, { showErrorMessage: false })
+  if (sbUniversalSegmentTrimmed(sb) === editing) sbUniversalSegmentText.value[sb.id] = row.universal_segment_text
+  sb.universal_segment_text = row.universal_segment_text
+  return row.universal_segment_text
+}
+
+async function reviewVideoDraft(sb, details) {
+  const label = sb.title || `第 ${sb.storyboard_number} 镜`
+  try {
+    await ElMessageBox.confirm(h(StoryboardDraftReview, details), `确认「${label}」的画面`, {
+      confirmButtonText: '使用这段描述生成', cancelButtonText: '返回修改',
+      distinguishCancelAndClose: true, closeOnClickModal: false,
+    })
+    return true
+  } catch (reason) {
+    if (reason !== 'cancel' && reason !== 'close') throw reason
+    if (reason === 'cancel') document.getElementById(`sb-${sb.id}`)?.querySelector('[contenteditable="true"]')?.focus()
+    return false
+  }
+}
+
 async function onUniversalSegmentPromptMenu(sb, cmd) {
   if (cmd === 'adopt') {
     try {
-      const row = await storyboardsAPI.update(sb.id, { universal_segment_text: sbUniversalSegmentTrimmed(sb),
-        confirm_universal_draft: true, expected_universal_segment_text: sb.universal_segment_text ?? null,
-        expected_action: sb.action ?? null, expected_result: sb.result ?? null })
-      sb.universal_segment_text = row.universal_segment_text
-      sbUniversalSegmentText.value[sb.id] = row.universal_segment_text
+      await adoptUniversalDraft(sb, sbUniversalSegmentTrimmed(sb), sb)
       ElMessage.success('已采用当前分拍')
     } catch (e) { ElMessage.error(e.message || '采用分拍失败') }
     return
@@ -6605,6 +6547,7 @@ async function onGenerateSbVideo(sb) {
       return
     }
   }
+  if (isSbVideoGenerating(sb.id)) return
   generatingSbVideoIds.add(sb.id)
   const meta = buildSbGenMeta(sb, GEN_RESOURCE.SB_VIDEO, '分镜视频')
   genStore.markRunning(meta)
@@ -6633,7 +6576,7 @@ async function onGenerateSbVideo(sb) {
     if (!universalOmniApi && vLast && referenceUrls && !referenceUrls.includes(vLast)) {
       referenceUrls = [...referenceUrls, vLast]
     }
-    const res = await videosAPI.create({
+    const body = {
       drama_id: dramaId.value,
       storyboard_id: sb.id,
       prompt: buildSbVideoPromptForApi(sb),
@@ -6647,7 +6590,16 @@ async function onGenerateSbVideo(sb) {
       aspect_ratio: projectAspectRatio.value || '16:9',
       resolution: videoResolution.value || undefined,
       duration: getSbVideoDurationForApi(sb),
+    }
+    const res = await submitStoryboardVideo(body, sb.universal_segment_text ?? null, {
+      create: data => videosAPI.create(data, { showErrorMessage: false }),
+      review: details => reviewVideoDraft(sb, details),
+      adopt: (draft, expected) => {
+        if (buildSbVideoPromptForApi(sb) !== body.prompt) throw new Error('片段描述刚刚改过，请查看最新内容，再点生成。')
+        return adoptUniversalDraft(sb, draft, expected)
+      },
     })
+    if (!res) return
     if (res?.task_id) {
       const pollRes = await pollTask(res.task_id, () => loadSingleStoryboardMedia(sb.id), meta)
       if (pollRes?.status === 'failed') {
@@ -6853,8 +6805,7 @@ async function onGenerateStoryboard() {
     const res = await dramaAPI.generateStoryboard(epId, {
       model: undefined,
       style: getSelectedStyle(),
-      storyboard_count: getStoryboardCountForApi(),
-      video_duration: getVideoDurationForApi(),
+      ...storyboardTiming(storyboardCount.value, videoDuration.value),
       aspect_ratio: projectAspectRatio.value || '16:9',
       include_narration: !!storyboardIncludeNarration.value,
       universal_omni_storyboard: !!storyboardUniversalOmni.value,
@@ -7556,11 +7507,10 @@ async function runOneClickPipeline(textOnly = false) {
         const res = await dramaAPI.generateStoryboard(episodeId, {
           style,
           aspect_ratio: projectAspectRatio.value || '16:9',
-          storyboard_count: getStoryboardCountForApi(),
-          video_duration: getVideoDurationForApi(),
+          ...storyboardTiming(storyboardCount.value, videoDuration.value, clipRange.value),
           include_narration: !!storyboardIncludeNarration.value,
           universal_omni_storyboard: !!storyboardUniversalOmni.value,
-      structured: !!storyboardStructured.value,
+          structured: !!storyboardStructured.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {
@@ -8065,11 +8015,10 @@ async function runRepairPipeline() {
       try {
         const res = await dramaAPI.generateStoryboard(episodeId, {
           aspect_ratio: projectAspectRatio.value || '16:9',
-          storyboard_count: getStoryboardCountForApi(),
-          video_duration: getVideoDurationForApi(),
+          ...storyboardTiming(storyboardCount.value, videoDuration.value, clipRange.value),
           include_narration: !!storyboardIncludeNarration.value,
           universal_omni_storyboard: !!storyboardUniversalOmni.value,
-      structured: !!storyboardStructured.value,
+          structured: !!storyboardStructured.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {
@@ -8246,6 +8195,7 @@ function applyRouteToStore() {
     storyType.value = ''
     scriptLanguage.value = 'zh'
     scriptStoryboardStyle.value = ''
+    clipRange.value = pipelineClipRange()
     generationStyle.value = ''
     customStylePrompt.value = ''
     customStyleSnapshot.value = null
@@ -8977,6 +8927,15 @@ html.light .card:hover {
 html.light .section-title { color: #1e1b4b; }
 .pipeline-section {
   padding: 12px 16px !important;
+}
+.pipeline-duration-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.pipeline-duration-range .el-input-number {
+  width: 56px;
 }
 .one-click-actions {
   display: flex;

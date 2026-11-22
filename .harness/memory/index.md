@@ -6,3 +6,6 @@ One line per page. Read a page with your file reader when a task touches it; do 
 the whole directory.
 
 - [short-drama-workbench-goal](pages/short-drama-workbench-goal.md) — project | 产品目标 短剧生成 | 产品目标是完整、通用、稳定的短剧制作工作台，贯穿剧本、资产图、分镜、视频、声音、审片和交付。以多部作品和跨集制作检验可控性、自然度与返工量。单条样片用来发现问题并建立回归用例。外部项目的方法按通用价值筛选，再适配现有架构。
+- [storyboard-camera-continuity](pages/storyboard-camera-continuity.md) — project | 短剧分镜 机位 运镜 接镜 | 为同一场戏先选能交代人物关系和关键动作的主机位。演员在画内走动、递物、停顿和反应，都可以由同一个镜头承担。跨到下一个生成片段时，可以继续沿用上一段末帧的机位、景别和方向。
+- [storyboard-segment-length](pages/storyboard-segment-length.md) — project | 短剧分镜 视频生成 分段 | 先核对所选模型的单次生成时长上限，段内各镜秒数相加须在上限内。把连续动作、对白和反应留在同一片段，通常用 1–3 镜讲完；在动作收住、人物目的改变或时空转换处再分段。合并时保留资产引用，核对切点两侧的人、物和动作状态。
+- [video-reference-image-size](pages/video-reference-image-size.md) — project | 视频生成 参考图 素材尺寸 | 生成前逐张检查分镜实际引用图的宽和高，裁切图按裁后尺寸核对平台门槛（即梦本次要求两边各至少 300 像素）。尺寸不足时，优先从原图或原帧扩大取景，保留关键特征。替换后重开所有共用片段，确认都已引用合格的新图。

@@ -4,9 +4,9 @@ import { ElMessageBox } from 'element-plus'
 const accepted = new Set()
 const pending = new Map()
 
-export async function checkStyleModel(kind, id, model) {
+export async function checkStyleModel(kind, id, model, config) {
   if (!Number(id)) return
-  const result = await request.get('/style-library/preflight', { params: { kind, id, model } })
+  const result = await request.get('/style-library/preflight', { ...config, params: { kind, id, model } })
   if (!result.warn) return
   const key = JSON.stringify([result.project, result.style, result.version, result.negative, result.model])
   if (accepted.has(key)) return
