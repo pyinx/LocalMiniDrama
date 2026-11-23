@@ -957,10 +957,7 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
         require('./workbenchContinuity').checkEpisodeReplacement(db, episodeIdNum);
         // Keep the shot identity, its authored cut and reviews together. Never attach the media
         // to newly generated, possibly unrelated action just because the shot number coincides.
-        preserved = db.prepare(`SELECT s.id, s.storyboard_number FROM storyboards s
-          WHERE s.episode_id=? AND s.deleted_at IS NULL AND (s.adopted_video_generation_id IS NOT NULL
-          OR EXISTS (SELECT 1 FROM video_generations v WHERE v.storyboard_id=s.id AND v.deleted_at IS NULL
-            AND (v.keep_in_archive=1 OR EXISTS (SELECT 1 FROM video_take_reviews r WHERE r.video_generation_id=v.id))))`).all(episodeIdNum);
+        preserved = require('./storyboardService').protectedStoryboards(db, episodeIdNum);
         const keepIds = new Set(preserved.map(s => s.id));
         const keepNumbers = new Set(episodeStoryboardRows(db, episodeIdNum).filter(s => keepIds.has(s.id)).map(s => s.storyboard_number));
         const remove = db.prepare('UPDATE storyboards SET deleted_at=? WHERE id=?');

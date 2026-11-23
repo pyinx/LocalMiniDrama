@@ -62,6 +62,7 @@ export function useCanvasEpisodeGenerate(deps) {
       aspect_ratio: gen.aspectRatio,
       include_narration: !!meta.storyboard_include_narration,
       universal_omni_storyboard: !!meta.storyboard_universal_omni,
+      structured: !!meta.storyboard_structured,
     }
   }
 

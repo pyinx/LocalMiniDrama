@@ -124,9 +124,11 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
   });
 
   it('trims to max length', () => {
-    const ir = irOf({ tone: '冷白顶光压在长桌上，空气凝滞，窗外车流声很远' });
+    // 「光线与时段」只在场景状态图已给出光线时才可省略（只有母版时超长会阻断，见 shotPackageStandard.test.js）
+    const ir = irOf({ tone: '冷白顶光压在长桌上，空气凝滞，窗外车流声很远', scene: { scene_id: IDS.sceneId, state_id: 7, setting: '会议室，长桌靠窗' } });
     ir.shots.forEach((s) => { s.action += '，' + '他的指节一点点发白'.repeat(8); s.sfx = ['空调低鸣', '远处打印机']; });
     const ctx = ctxFor(TARGETS.seedance);
+    ctx.bindings.sceneStates = { 7: { name: '午后', image_url: 'http://h/room-noon.png' } };
     const full = compileSegment(ir, ctx).prompt;
     ctx.caps = { ...ctx.caps, maxPromptChars: full.length - 10 };
     const out = compileSegment(ir, ctx);

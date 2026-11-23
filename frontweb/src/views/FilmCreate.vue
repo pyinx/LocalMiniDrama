@@ -718,6 +718,8 @@
                 </el-button>
                 <el-button size="small" :disabled="!dramaId" @click="openAddScene">添加场景</el-button>
                 <el-button size="small" @click="showSceneLibrary = true">本剧场景库</el-button>
+                <el-button size="small" :disabled="!currentEpisodeId" @click="showStateProposal = true">按本集剧本提议状态</el-button>
+                <AssetStateProposalDialog v-model="showStateProposal" :episode-id="currentEpisodeId" @done="loadDrama" />
               </div>
               <div class="scene-gen-mode" style="margin: 8px 0; font-size: 13px;">
                 <el-checkbox v-model="sceneUseQuadGrid">生成四宫格场景（默认单图）</el-checkbox>
@@ -862,7 +864,7 @@
             全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
           </el-checkbox>
           <el-checkbox v-model="storyboardStructured" @change="() => saveProjectSettings()">
-            结构化分镜（新链路：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图）
+            结构化分镜（推荐：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图，提交前可预览检查）
           </el-checkbox>
           <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
             生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
@@ -907,6 +909,16 @@
             </ElButton>
             <ElButton plain size="large" :disabled="!currentEpisodeId" @click="scriptReviewVisible = true">
             剧本体检
+            </ElButton>
+            <ElButton
+              v-if="storyboards.some((sb) => sb && !sb.segment_ir)"
+              plain
+              size="large"
+              :loading="convertingStructured"
+              :disabled="!currentEpisodeId || convertingStructured || storyboardGenerating || universalOmniPolishRunning || pipelineRunning"
+              @click="onConvertStructured"
+            >
+            转为结构化分镜
             </ElButton>
             <ScriptReviewDialog v-if="currentEpisodeId" v-model="scriptReviewVisible" :episode-id="currentEpisodeId" />
           </div>
@@ -2746,6 +2758,9 @@ import VariantEditor from '@/components/VariantEditor.vue'
 import CharacterHeadBody from '@/components/CharacterHeadBody.vue'
 import JimengConfirmDialog from '@/components/JimengConfirmDialog.vue'
 import ScriptReviewDialog from '@/components/ScriptReviewDialog.vue'
+import AssetStateProposalDialog from '@/components/AssetStateProposalDialog.vue'
+import { variantsAPI } from '@/api/variants'
+import { createStateProposals, listVariantsWithoutImage, startVariantImages } from '@/utils/assetStates'
 import { jimengOptionState } from '@/utils/segmentUi'
 import FindingList from '@/components/FindingList.vue'
 import { videoMergesAPI } from '@/api/videoMerges'
@@ -3395,6 +3410,8 @@ const videoDuration = ref(null) // 视频总长度
 const storyboardIncludeNarration = ref(false)
 /** 结构化分镜（新链路）：生成分镜时输出 SegmentIR，视频请求由后端按模型编译 */
 const storyboardStructured = ref(false)
+const showStateProposal = ref(false)
+const convertingStructured = ref(false)
 /** 当前默认视频配置是否为即梦 CLI（可选后端：先报价确认再提交） */
 const jimengActive = ref(false)
 const jimengOption = ref(jimengOptionState(null))
@@ -6856,6 +6873,47 @@ async function onGenerateStoryboard() {
   }
 }
 
+/** 本集旧分镜原地转为结构化分镜：镜号不变，受保护的镜头不动；转换后项目默认用结构化分镜 */
+async function onConvertStructured() {
+  const epId = currentEpisodeId.value
+  if (!epId || convertingStructured.value) return
+  const legacy = (storyboards.value || []).filter((sb) => sb && !sb.segment_ir)
+  try {
+    await ElMessageBox.confirm(
+      `本集有 ${legacy.length} 条旧分镜。其中有采用片、留档候选或审片记录的原样保留，其余逐条改写为结构化分镜，镜号不变。转换后本项目默认使用结构化分镜。`,
+      '转为结构化分镜',
+      { confirmButtonText: '开始转换', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  convertingStructured.value = true
+  const meta = buildExtractTaskMeta(store, dramaId.value, epId, GEN_RESOURCE.GENERATE_STORYBOARD, '转为结构化分镜')
+  genStore.markRunning(meta)
+  try {
+    const res = await dramaAPI.convertStructured(epId)
+    const taskId = res?.task_id
+    if (!taskId) return
+    const pollRes = await pollTask(taskId, () => loadDrama(), meta)
+    if (pollRes?.status !== 'completed') return
+    const r = pollRes.result || {}
+    if (!r.converted_ids?.length) {
+      ElMessage.info(`没有可转换的分镜：剩下的 ${r.skipped_protected_ids?.length || 0} 条旧分镜都是受保护镜头，保留原样`)
+      return
+    }
+    const notes = (r.findings || []).filter((f) => f.level !== 'info').length
+    ElMessage.success(
+      `已转换 ${r.converted_ids?.length || 0} 条，保留 ${r.skipped_protected_ids?.length || 0} 条受保护镜头` +
+        (notes ? `；有 ${notes} 条提示，请在各镜的「编译预览」中查看` : '')
+    )
+  } catch (e) {
+    if (!e.response) ElMessage.error(e.message || '转换失败')
+  } finally {
+    convertingStructured.value = false
+    genStore.markDone(meta)
+  }
+}
+
 async function onAddSingleStoryboard(){
   if (!currentEpisodeId.value) {
     ElMessage.warning('请先选择集')
@@ -7502,6 +7560,20 @@ async function runOneClickPipeline(textOnly = false) {
       setPipelineStep(3, `已有 ${propList.length} 个道具，跳过提取`)
     }
 
+    // 结构化分镜：生成分镜前按剧本提议场景状态与造型并全部采纳，分镜才能选用它们；图在场景图之后补
+    if (storyboardStructured.value && !(store.storyboards || []).length) {
+      await checkPause()
+      setPipelineStep(3, '按剧本提议场景状态与造型...')
+      try {
+        const proposal = await variantsAPI.propose(episodeId)
+        const { errors } = await createStateProposals(variantsAPI, proposal)
+        errors.forEach((msg) => addPipelineError('采纳状态提议', msg))
+        await loadDrama()
+      } catch (e) {
+        addPipelineError('提议场景状态与造型', e.message || String(e))
+      }
+    }
+
     // 步骤 4：生成分镜脚本
     await checkPause()
     await loadStoryboardMedia()
@@ -7697,6 +7769,34 @@ async function runOneClickPipeline(textOnly = false) {
     // ════════════════════════════════════════════════════════
     // 阶段三：分镜图生成（较高消耗）
     // ════════════════════════════════════════════════════════
+
+    // 结构化分镜：补齐本集场景状态与造型的图（分别以场景、角色主图为参考）
+    if (storyboardStructured.value) {
+      await checkPause()
+      const concurrency = pipelineConcurrency.value
+      let pending = []
+      try {
+        pending = await listVariantsWithoutImage(variantsAPI, { scenes: sceneList, characters: chars, episodeNumber: store.currentEpisode?.episode_number })
+      } catch (e) {
+        addPipelineError('读取场景状态与造型', e.message || String(e))
+      }
+      setPipelineStep(7, `生成场景状态与造型图（${pending.length} 个，并发 ${concurrency}）...`)
+      const { paused } = await runConcurrently(pending, concurrency, async (v) => {
+        await checkPause()
+        const ok = await pipelineWithRetry(v.label, async () => {
+          const { started, errors } = await startVariantImages(variantsAPI, [v])
+          if (errors.length) throw new Error(errors[0])
+          const taskId = started[0]?.task_id
+          if (taskId) {
+            const result = await pollTaskWithPause(taskId, () => loadDrama())
+            if (result?.paused) return { paused: true }
+            if (result?.error) throw new Error(result.error)
+          }
+        })
+        if (ok && typeof ok === 'object' && ok.paused) return { paused: true }
+      }, { getLabel: (v) => v.label })
+      if (paused) { await waitForResume() }
+    }
 
     // 步骤 8：生成分镜图
     {

@@ -238,6 +238,17 @@ function saveSegmentIr(db, log, id, irInput, opts = {}) {
   return planFindings ? { ...dto, plan_findings: planFindings } : dto;
 }
 
+/**
+ * 受保护的镜头：有采用片、留档候选或审片记录。整集重生或转换时原样保留，不改内容也不删除。
+ * 经典与结构化链路共用这一条规则。
+ */
+function protectedStoryboards(db, episodeId) {
+  return db.prepare(`SELECT s.id, s.storyboard_number FROM storyboards s
+    WHERE s.episode_id=? AND s.deleted_at IS NULL AND (s.adopted_video_generation_id IS NOT NULL
+    OR EXISTS (SELECT 1 FROM video_generations v WHERE v.storyboard_id=s.id AND v.deleted_at IS NULL
+      AND (v.keep_in_archive=1 OR EXISTS (SELECT 1 FROM video_take_reviews r WHERE r.video_generation_id=v.id))))`).all(Number(episodeId));
+}
+
 function deleteStoryboard(db, log, id) {
   const now = new Date().toISOString();
   const result = db.prepare('UPDATE storyboards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, Number(id));
@@ -375,6 +386,7 @@ module.exports = {
   assertNotSegmentIr,
   saveGeneratedDraft,
   saveSegmentIr,
+  protectedStoryboards,
   createStoryboard,
   insertBeforeStoryboard,
   updateStoryboard,

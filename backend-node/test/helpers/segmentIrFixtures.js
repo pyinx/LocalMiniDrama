@@ -30,7 +30,7 @@ function sampleIr(ids, overrides = {}) {
     duration_s: 8,
     scene: { scene_id: ids.sceneId, state_id: null, setting: '会议室，长桌靠窗' },
     main_move: '缓推',
-    tone: '冷白顶光，压抑',
+    tone: '午后，冷白顶光',
     continuity: { mode: 'refs' },
     cast: [
       { character_id: ids.linId, wardrobe_id: null, alias: '林远' },

@@ -53,7 +53,9 @@ function compileSegment(ir, ctx) {
     if (c.wardrobe_id != null) {
       const w = b.wardrobes[c.wardrobe_id];
       if (!w) return add('block', 'asset_missing', `「${c.alias}」的造型已不存在`, { alias: c.alias });
-      url = w.image_url || null;
+      // 没出图时保留本集参考图（本集默认造型或角色主图）；首尾帧模式不发角色参考图，无需提示
+      if (w.image_url) url = w.image_url;
+      else if (!firstLast) add('warn', 'wardrobe_image_missing', `「${c.alias}」的造型「${w.name}」还没有出图，改用本集参考图`, { alias: c.alias });
     }
     const crowd = !!(ch.is_group || c.group);
     const kind = crowd ? 'crowd' : 'character';
@@ -65,14 +67,19 @@ function compileSegment(ir, ctx) {
   const sceneName = (scene && scene.name) || '场景';
   const sceneAlias = names[sceneName] ? `${sceneName}·场景` : sceneName;
   names[sceneAlias] = sceneName;
+  // 状态图是此刻的样子，格局和光线都照它；母版只代表格局，光线交给文字
   let sceneUrl = scene ? scene.image_url || null : null;
+  let sceneState = false;
   if (!scene) add('block', 'asset_missing', '场景已不存在');
   if (ir.scene.state_id != null) {
     const st = b.sceneStates[ir.scene.state_id];
     if (!st) add('block', 'asset_missing', '场景状态已不存在');
-    else sceneUrl = st.image_url || null;
+    else if (st.image_url) {
+      sceneUrl = st.image_url;
+      sceneState = true;
+    } else add('warn', 'state_image_missing', `场景状态「${st.name}」还没有出图，改用场景母版，只取格局与摆设`);
   }
-  if (sceneUrl) candidates.push({ alias: sceneAlias, name: sceneName, kind: 'scene', url: sceneUrl, priority: PRIORITY.scene, order: 0 });
+  if (sceneUrl) candidates.push({ alias: sceneAlias, name: sceneName, kind: 'scene', state: sceneState, url: sceneUrl, priority: PRIORITY.scene, order: 0 });
 
   ir.prop_refs.forEach((p, order) => {
     const pr = b.props[p.prop_id];
@@ -114,7 +121,7 @@ function compileSegment(ir, ctx) {
   const refLines = refs.map((r) => {
     if (r.kind === 'character') return P.refCharacter(r.token, r.name);
     if (r.kind === 'crowd') return P.refCrowd(r.token, r.name);
-    if (r.kind === 'scene') return P.refScene(r.token, r.name);
+    if (r.kind === 'scene') return (r.state ? P.refScene : P.refSceneLayout)(r.token, r.name);
     if (r.kind === 'prop') return P.refProp(r.token, r.name);
     return P.refTailFrame(r.token);
   });
@@ -169,10 +176,13 @@ function compileSegment(ir, ctx) {
     return lines.join('\n');
   }
 
+  // 超长时只在图已给出光线的情况下省略「光线与时段」：首尾帧模式看首帧，参考图模式看场景状态图；
+  // 只有母版或没有场景图时，它是唯一的光线信息
   let prompt = assemble(true);
-  if (ir.tone && promptChars(prompt) > caps.maxPromptChars) {
+  const lightFromImage = firstLast ? !!frames.first_frame_url : refs.some((r) => r.kind === 'scene' && r.state);
+  if (ir.tone && lightFromImage && promptChars(prompt) > caps.maxPromptChars) {
     prompt = assemble(false);
-    add('info', 'prompt_trimmed', `提示词超过模型上限 ${caps.maxPromptChars} 字，已省略整段基调`);
+    add('info', 'prompt_trimmed', `提示词超过模型上限 ${caps.maxPromptChars} 字，${firstLast ? '首帧' : '场景状态图'}已给出光线，已省略「光线与时段」`);
   }
   if (promptChars(prompt) > caps.maxPromptChars) {
     const sizes = shotLines.map(promptChars);

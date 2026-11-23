@@ -280,6 +280,8 @@ function setupRouter(cfg, db, log) {
   // 注意：drama.generateStoryboard 已处理所有逻辑（包括参数解析），这里统一使用 drama 模块的实现
   // 之前可能有部分路由指向了 storyboards.episodeStoryboardsGenerate，这可能导致参数解析不一致
   r.post('/episodes/:episode_id/storyboards', drama.generateStoryboard);
+  r.post('/episodes/:episode_id/storyboards/convert-structured', drama.convertStructured);
+  r.post('/episodes/:episode_id/asset-states/propose', drama.proposeAssetStates);
   r.post('/episodes/:episode_id/props/extract', prop.extractProps);
   r.post('/episodes/:episode_id/characters/extract', stub.episodeCharactersExtract);
   r.get('/episodes/:episode_id/storyboards', storyboards.episodeStoryboardsGet);

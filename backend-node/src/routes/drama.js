@@ -289,8 +289,48 @@ function generateStoryboard(db, log) {
     } catch (err) {
       log.error('Generate storyboard failed', { error: err.message });
       if (err.status === 400) return response.badRequest(res, err.message);
+      if (err.status === 404) return response.notFound(res, err.message);
       if (err.status === 409) return response.error(res, 409, 'storyboard_locked', err.message);
       response.internalError(res, err.message || '生成分镜失败');
+    }
+  };
+}
+
+/** 本集旧分镜原地转为结构化分镜（后台任务）；受保护的镜头不动 */
+function convertStructured(db, log) {
+  return (req, res) => {
+    const body = req.body || {};
+    try {
+      const model = (body.model && String(body.model).trim()) ? body.model : undefined;
+      const structured = require('../services/structuredStoryboardService');
+      response.success(res, structured.startStructuredConversion(db, log, req.params.episode_id, {
+        model,
+        videoModel: body.video_model || undefined,
+        clipRange: body.clip_duration_range,
+      }));
+    } catch (err) {
+      log.error('Convert storyboards to structured failed', { error: err.message });
+      if (err.status === 404) return response.notFound(res, err.message);
+      if (err.status === 409) return response.error(res, 409, 'storyboard_locked', err.message);
+      if (err.status === 400) return response.badRequest(res, err.message);
+      response.internalError(res, err.message || '转换失败');
+    }
+  };
+}
+
+/** 按本集剧本提议场景状态与造型；只返回提议，不写库 */
+function proposeAssetStates(db, log) {
+  return async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await require('../services/assetStateProposalService').proposeForEpisode(db, log, req.params.episode_id, { model: body.model || undefined });
+      response.success(res, out);
+    } catch (err) {
+      log.error('Propose asset states failed', { error: err.message });
+      if (err.code === 'not_found') return response.notFound(res, err.message);
+      if (err.code === 'script_empty') return response.badRequest(res, err.message);
+      if (err.code === 'proposal_invalid') return response.error(res, 422, 'proposal_invalid', err.message);
+      response.internalError(res, err.message || '状态提议失败');
     }
   };
 }
@@ -313,6 +353,8 @@ module.exports = function dramaRoutes(db, cfg, log) {
     finalizeEpisode: finalizeEpisode(db, log, cfg),
     downloadEpisodeVideo: downloadEpisodeVideo(db),
     generateStoryboard: generateStoryboard(db, log),
+    convertStructured: convertStructured(db, log),
+    proposeAssetStates: proposeAssetStates(db, log),
     exportDrama: exportDrama(db, cfg, log),
     importDrama: importDrama(db, cfg, log),
     listExamples: listExamples(log),

@@ -53,6 +53,8 @@ function createDrama(db, log, req) {
     }
   }
   validateProjectStyle(db, req.style, meta);
+  // 新项目默认用结构化分镜（镜头包）生成；创建时明确传了开关就按传入的
+  if (meta.storyboard_structured === undefined) meta.storyboard_structured = true;
   if (!meta.storage_folder_label) {
     meta.storage_folder_label = storageLayout.sanitizeFolderLabel(req.title || '');
   }

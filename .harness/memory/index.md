@@ -7,6 +7,7 @@ the whole directory.
 
 - [character-head-body-reference](pages/character-head-body-reference.md) — project | 角色设定 造型 参考图 视频生成 | 角色的头只生成一次，用来锁定身份，表情中性，不画熬夜、受伤这类一时的状态。身体按造型生成，每套造型一张。交给视频和分镜的参考图是程序拼出的「头 + 当前身体」，每个角色只占一张参考图，所有造型里的脸像素一致。不要让生图模型重画整张头身图，否则每换一套衣服脸都会漂。
 - [short-drama-workbench-goal](pages/short-drama-workbench-goal.md) — project | 产品目标 短剧生成 | 产品目标是完整、通用、稳定的短剧制作工作台，贯穿剧本、资产图、分镜、视频、声音、审片和交付。以多部作品和跨集制作检验可控性、自然度与返工量。单条样片用来发现问题并建立回归用例。外部项目的方法按通用价值筛选，再适配现有架构。
+- [shot-package-standard](pages/shot-package-standard.md) — project | 结构化分镜 视频生成 场景状态 造型 去AI味 | 每一镜交给视频模型的输入以结构化分镜（SegmentIR）为准，新项目默认开启，全能与经典模式保留为可选。不另建镜头包数据结构。生成分镜前，先按本集剧本提议场景状态（时段、光线、环境）与换装造型，作者确认后创建；分镜绑定它们时会校验归属，场景状态只用时段光线版本，造型只用适用于…
 - [storyboard-camera-continuity](pages/storyboard-camera-continuity.md) — project | 短剧分镜 机位 运镜 接镜 | 为同一场戏先选能交代人物关系和关键动作的主机位。演员在画内走动、递物、停顿和反应，都可以由同一个镜头承担。跨到下一个生成片段时，可以继续沿用上一段末帧的机位、景别和方向。
 - [storyboard-segment-length](pages/storyboard-segment-length.md) — project | 短剧分镜 视频生成 分段 | 先核对所选模型的单次生成时长上限，段内各镜秒数相加须在上限内。把连续动作、对白和反应留在同一片段，通常用 1–3 镜讲完；在动作收住、人物目的改变或时空转换处再分段。合并时保留资产引用，核对切点两侧的人、物和动作状态。
 - [video-reference-image-size](pages/video-reference-image-size.md) — project | 视频生成 参考图 素材尺寸 | 生成前逐张检查分镜实际引用图的宽和高，裁切图按裁后尺寸核对平台门槛（即梦本次要求两边各至少 300 像素）。尺寸不足时，优先从原图或原帧扩大取景，保留关键特征。替换后重开所有共用片段，确认都已引用合格的新图。

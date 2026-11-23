@@ -23,4 +23,8 @@ export const variantsAPI = {
   generateImage(kind, id, body = {}) {
     return request.post(`${PATHS[kind].item(id)}/generate-image`, body)
   },
+  /** 按本集剧本提议场景状态与造型（只返回提议，不创建） */
+  propose(episodeId) {
+    return request.post(`/episodes/${episodeId}/asset-states/propose`, {})
+  },
 }

@@ -15,6 +15,11 @@ const TEXT_RULES = [
   { code: 'image_quality_words', re: /8K|4K|UE5|masterpiece|RAW原片|超清|高清画质/gi, msg: '图像质量词对视频无效，删掉' },
   { code: 'fraction_ratio', re: /\d+\s*\/\s*\d+|[一二三四五]分之[一二三四]/g, msg: '分数式占比不会被兑现，改用景别和身体截取' },
   { code: 'negation', re: /不要|没有|禁止|别让|不能出现|不出现/g, msg: '否定句会把被否定的东西召回画面，改写成实际看到的样子' },
+  {
+    code: 'emotion_label',
+    re: /悲伤|伤心|难过|痛苦|绝望|愤怒|恼怒|焦虑|不安|恐惧|害怕|惊恐|震惊|疲惫|倦意|孤独|孤寂|落寞|失落|颓废|压抑|释然|欣慰|喜悦|兴奋|无奈|委屈|眼神空洞|若有所思|神情|神态|表情/g,
+    msg: '情绪词会被画成脸上一成不变的表情，改写成拍得到的动作：手在做什么、看向哪里、停顿多久',
+  },
 ];
 
 function freeTextFields(ir) {
@@ -112,7 +117,7 @@ function parseScriptLines(script) {
  * @param {{ storyboard_id?: number, ir: object }[]} segments 本集按顺序的 IR 段
  * @param {string} script 本集剧本
  */
-function lintDialogueFidelity(segments, script) {
+function lintDialogueFidelity(segments, script, opts = {}) {
   const parsed = parseScriptLines(script);
   const findings = [];
   const fuzzy = parsed.mode === 'fuzzy';
@@ -139,7 +144,14 @@ function lintDialogueFidelity(segments, script) {
     }));
   });
   if (!fuzzy) {
-    pool.filter((p) => !p.used).forEach((p) => findings.push({ level: 'warn', code: 'line_missing', where: { fuzzy }, msg: `剧本台词「${p.text}」（${p.speaker || '旁白'}）没有出现在分镜里` }));
+    // 保留下来的旧分镜（没有 IR）里出现过的台词不算缺失：逐行去掉「人名：」后整句相同即覆盖；
+    // 4 个字以上的台词也接受包含，短台词不能因为碰巧含同一个字就算覆盖
+    const covered = (opts.coveredText || [])
+      .flatMap((t) => String(t).split(/\r?\n/))
+      .map((line) => normalizeLine(line.replace(/^\s*[^：:\n]{1,12}[：:]/, '')))
+      .filter(Boolean);
+    const isCovered = (norm) => !!norm && covered.some((c) => c === norm || (norm.length >= 4 && c.includes(norm)));
+    pool.filter((p) => !p.used && !isCovered(p.norm)).forEach((p) => findings.push({ level: 'warn', code: 'line_missing', where: { fuzzy }, msg: `剧本台词「${p.text}」（${p.speaker || '旁白'}）没有出现在分镜里` }));
   }
   return findings;
 }

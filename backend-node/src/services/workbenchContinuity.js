@@ -17,14 +17,16 @@ function project(db, id) {
   return row;
 }
 
-function checkEpisodeReplacement(db, episodeId) {
-  const rows = db.prepare(`SELECT storyboard_number, creative_review_lock FROM storyboards
+/** 整集重建（或只改写 opts.ids 指定的镜头）前确认没有锁定的对白或画面 */
+function checkEpisodeReplacement(db, episodeId, opts = {}) {
+  const rows = db.prepare(`SELECT id, storyboard_number, creative_review_lock FROM storyboards
     WHERE episode_id = ? AND deleted_at IS NULL AND creative_review_lock IS NOT NULL ORDER BY storyboard_number`).all(Number(episodeId));
   const locked = rows.filter(row => {
+    if (opts.ids && !opts.ids.has(row.id)) return false;
     const lock = readLock(row.creative_review_lock);
     return Object.hasOwn(lock, 'dialogue') || Object.hasOwn(lock, 'visual');
   });
-  if (locked.length) throw failure(409, '整集重建会替换锁定镜头 ' + locked.map(s => s.storyboard_number).join('、') + '。请在跨集复核中解除这些锁定，或只修改目标镜头。');
+  if (locked.length) throw failure(409, (opts.verb || '整集重建会替换') + '锁定镜头 ' + locked.map(s => s.storyboard_number).join('、') + '。请在跨集复核中解除这些锁定，或只修改目标镜头。');
 }
 
 function updateDirection(db, id, body) {

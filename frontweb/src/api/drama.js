@@ -63,6 +63,10 @@ export const dramaAPI = {
     }
     return request.post(`/episodes/${episodeId}/storyboards`, body)
   },
+  /** 本集旧分镜原地转为结构化分镜（后台任务，受保护镜头不动） */
+  convertStructured(episodeId, body) {
+    return request.post(`/episodes/${episodeId}/storyboards/convert-structured`, body || {})
+  },
   finalizeEpisode(episodeId, data) {
     return request.post(`/episodes/${episodeId}/finalize`, data || {})
   },
