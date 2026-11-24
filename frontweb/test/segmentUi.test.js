@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { groupFindings, findingTag, findingWhere, formatStoryboardDuration, irToForm, formToIr, newShotForm } from '../src/utils/segmentUi.js'
+import { groupFindings, findingTag, findingWhere, formatStoryboardDuration, savedCreationMode, irToForm, formToIr, newShotForm } from '../src/utils/segmentUi.js'
 
 test('planned storyboard duration preserves seconds and identifies unset values', () => {
   assert.equal(formatStoryboardDuration(6), '6 秒')
@@ -9,6 +9,17 @@ test('planned storyboard duration preserves seconds and identifies unset values'
   for (const value of [null, undefined, 0, -1, '', '未知', Infinity]) {
     assert.equal(formatStoryboardDuration(value), '未设置')
   }
+})
+
+test('structured storyboard keeps server creation_mode; legacy follows local choice', () => {
+  // 结构化镜头：服务器是 classic，即使本地残留 universal 也必须保住 classic（只读）
+  assert.equal(savedCreationMode({ segment_ir: {}, creation_mode: 'classic' }, 'universal'), 'classic')
+  assert.equal(savedCreationMode({ segment_ir: {}, creation_mode: 'universal' }, 'classic'), 'universal')
+  assert.equal(savedCreationMode({ segment_ir: {} }, 'universal'), 'classic')
+  // 旧镜头：本地单选决定写到服务器的模式
+  assert.equal(savedCreationMode({ creation_mode: 'classic' }, 'universal'), 'universal')
+  assert.equal(savedCreationMode({ creation_mode: 'universal' }, 'classic'), 'classic')
+  assert.equal(savedCreationMode({}, undefined), 'classic')
 })
 
 const IR = {

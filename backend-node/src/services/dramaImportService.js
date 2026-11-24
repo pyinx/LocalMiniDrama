@@ -6,6 +6,13 @@ const takeArchive = require('./workbenchTakeArchive');
 const { randomUUID } = require('crypto');
 const storageLayout = require('./storageLayout');
 const characterHeadBody = require('./characterHeadBody');
+const videoSettings = require('./videoSettings');
+
+/** 导入包里的分集覆盖：只保留合法项；没有则不写（跟随项目） */
+function importedVideoSettings(raw) {
+  const kept = videoSettings.sanitize(raw);
+  return Object.keys(kept).length ? JSON.stringify(kept) : null;
+}
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -309,9 +316,9 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log, in
   const episodeIdList = []; // 按顺序保存新集 id
   for (const ep of (data.episodes || [])) {
     const epInfo = db.prepare(
-      `INSERT INTO episodes (drama_id, episode_number, title, description, script_content, novel_source, duration, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(dramaId, ep.episode_number || 1, ep.title || `第${ep.episode_number || 1}集`, ep.description || null, ep.script_content || null, ep.novel_source?.text ? JSON.stringify(ep.novel_source) : null, ep.duration || 0, now, now);
+      `INSERT INTO episodes (drama_id, episode_number, title, description, script_content, novel_source, duration, video_settings, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(dramaId, ep.episode_number || 1, ep.title || `第${ep.episode_number || 1}集`, ep.description || null, ep.script_content || null, ep.novel_source?.text ? JSON.stringify(ep.novel_source) : null, ep.duration || 0, importedVideoSettings(ep.video_settings), now, now);
     episodeIdList.push(epInfo.lastInsertRowid);
   }
 

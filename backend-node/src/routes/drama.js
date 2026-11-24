@@ -1,6 +1,7 @@
 const dramaService = require('../services/dramaService');
 const propService = require('../services/propService');
 const response = require('../response');
+const videoSettings = require('../services/videoSettings');
 const dramaExportService = require('../services/dramaExportService');
 const dramaImportService = require('../services/dramaImportService');
 
@@ -84,6 +85,20 @@ function saveOutline(db, log) {
     const ok = dramaService.saveOutline(db, log, req.params.id, req.body || {});
     if (!ok) return response.notFound(res, '剧本不存在');
     response.success(res, { message: '保存成功' });
+  };
+}
+
+function videoSettingsHandler(save, idParam, notFoundMessage, db, log) {
+  return (req, res) => {
+    try {
+      const result = save(db, log, req.params[idParam], req.body);
+      if (!result) return response.notFound(res, notFoundMessage);
+      response.success(res, result);
+    } catch (err) {
+      if (err.status === 400) return response.badRequest(res, err.message);
+      log.errorw('Save video settings failed', { error: err.message });
+      response.internalError(res, '保存视频配置失败');
+    }
   };
 }
 
@@ -344,6 +359,8 @@ module.exports = function dramaRoutes(db, cfg, log) {
     deleteDrama: deleteDrama(db, log),
     getDramaStats: getDramaStats(db, log),
     saveOutline: saveOutline(db, log),
+    saveProjectVideoSettings: videoSettingsHandler(videoSettings.saveProject, 'id', '剧本不存在', db, log),
+    saveEpisodeVideoSettings: videoSettingsHandler(videoSettings.saveEpisode, 'episode_id', '分集不存在', db, log),
     getCharacters: getCharacters(db),
     saveCharacters: saveCharacters(db, log),
     saveEpisodes: saveEpisodes(db, log),

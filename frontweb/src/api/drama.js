@@ -67,6 +67,14 @@ export const dramaAPI = {
   convertStructured(episodeId, body) {
     return request.post(`/episodes/${episodeId}/storyboards/convert-structured`, body || {})
   },
+  /** 项目默认的视频配置补丁；值为 null 清除该项 */
+  saveVideoSettings(id, patch) {
+    return request.put(`/dramas/${id}/video-settings`, patch)
+  },
+  /** 本集对视频配置的覆盖补丁；值为 null 恢复随项目 */
+  saveEpisodeVideoSettings(episodeId, patch) {
+    return request.put(`/episodes/${episodeId}/video-settings`, patch)
+  },
   finalizeEpisode(episodeId, data) {
     return request.post(`/episodes/${episodeId}/finalize`, data || {})
   },

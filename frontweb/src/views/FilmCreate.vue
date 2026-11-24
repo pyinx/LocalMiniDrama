@@ -186,6 +186,118 @@
         style="display: none"
         @change="onSbImageFileChange"
       />
+      <!-- 基础配置：画面比例、风格与视频配置，作为分镜视频的基础 -->
+      <section id="anchor-base-config" class="section card base-config-section">
+        <h2 class="section-title">基础配置</h2>
+        <div class="base-config-fixed">
+          <span class="base-config-item">
+            <span class="base-config-label">画面比例</span>
+            <el-tag effect="plain">{{ aspectRatioLabel(projectAspectRatio || '16:9') }}</el-tag>
+          </span>
+          <span class="base-config-item">
+            <span class="base-config-label">风格</span>
+            <StylePickerButton
+              readonly
+              :model-value="generationStyle"
+              :custom-snapshot="customStyleSnapshot"
+              :custom-prompt="customStylePrompt"
+              :options="generationStyleOptions"
+              placeholder="未设置"
+            />
+          </span>
+          <span class="video-option-hint">画面比例与风格是全剧基调，只能在<el-link type="primary" underline="never" :disabled="!dramaId" @click="goProjectDetail">项目详情</el-link>里修改。</span>
+        </div>
+        <p class="base-config-hint">视频配置默认随项目；在这里修改只对本集生效，项目默认请到项目详情页设置。</p>
+        <el-form v-if="currentVideoSettings" label-position="left" label-width="90px">
+          <VideoSettingsForm
+            :settings="currentVideoSettings"
+            :keys="baseConfigKeys"
+            :scopes="baseConfigScopes"
+            :disabled="savingEpisodeVideoSettings"
+            @change="onEpisodeSettingChange"
+            @reset="key => onEpisodeSettingChange(key, null)"
+          />
+        </el-form>
+        <div v-else class="empty-tip">选择或创建一集后，可调整本集的视频配置</div>
+        <p class="config-tip">文本/图片/视频使用的模型以「<el-link type="primary" underline="never" @click="showAiConfigDialog = true">AI 配置</el-link>」中设为默认的为准。</p>
+      </section>
+
+      <!-- 一键全流程生成 -->
+      <section class="section card pipeline-section">
+        <div class="one-click-actions">
+          <span class="one-click-label">🚀 一键全流程</span>
+          <div class="pipeline-duration-range" role="group" aria-label="一键流程单镜时长范围" title="一键生成分镜时，AI 按每镜内容在此范围内选择时长">
+            <span>每镜</span>
+            <el-input-number :model-value="clipRange.min" :min="1" :max="clipRange.max" :precision="0" :value-on-clear="clipRange.min"
+              :controls="false" aria-label="最短秒数" @change="value => setClipBound('min', value)" />
+            <span>至</span>
+            <el-input-number :model-value="clipRange.max" :min="clipRange.min" :max="120" :precision="0" :value-on-clear="clipRange.max"
+              :controls="false" aria-label="最长秒数" @change="value => setClipBound('max', value)" />
+            <span>秒</span>
+          </div>
+          <el-select v-model="scriptLanguage" placeholder="分镜语言" clearable style="width: 105px">
+            <el-option label="中文" value="zh" />
+            <el-option label="英文" value="en" />
+          </el-select>
+          <el-button
+            type="primary"
+            :loading="pipelineRunning && !pipelinePaused"
+            :disabled="!currentEpisodeId || pipelineRunning"
+            @click="startOneClickPipeline"
+          >
+            一键成片带图片视频
+          </el-button>
+          <el-button
+            :loading="pipelineRunning && !pipelinePaused"
+            :disabled="!currentEpisodeId || pipelineRunning"
+            title="仅提取角色、场景、道具与生成分镜文本，不生成图片与视频"
+            @click="startTextFrameworkPipeline"
+          >
+            生成文本框架
+          </el-button>
+          <template v-if="pipelineRunning">
+            <el-button v-if="!pipelinePaused" type="warning" @click="pipelinePaused = true">⏸ 暂停</el-button>
+            <el-button v-else type="success" @click="onPipelineResume">▶ 继续</el-button>
+          </template>
+        </div>
+        <div v-if="pipelineRunning || pipelineErrorLog.length > 0" class="pipeline-status">
+          <div v-if="pipelineCurrentStep" class="pipeline-current-step">
+            <span v-if="pipelineStepIndex > 0" class="pipeline-step-badge">{{ pipelineStepIndex }}/{{ pipelineStepTotal }}</span>
+            {{ pipelineCurrentStep.replace(/^\[步骤 \d+\/\d+\] /, '') }}
+          </div>
+          <!-- 阶段间倒计时 -->
+          <div v-if="pipelineCountdown > 0" class="pipeline-countdown">
+            <div class="pipeline-countdown-ring">
+              <span class="pipeline-countdown-num">{{ pipelineCountdown }}</span>
+              <span class="pipeline-countdown-unit">秒</span>
+            </div>
+            <div class="pipeline-countdown-body">
+              <p class="pipeline-countdown-msg">{{ pipelineCountdownMsg }}</p>
+              <div class="pipeline-countdown-actions">
+                <el-button size="small" type="success" @click="skipPipelineCountdown">⚡ 立即开始下一阶段</el-button>
+                <el-button v-if="!pipelinePaused" size="small" type="warning" @click="pipelinePaused = true">⏸ 暂停倒计时</el-button>
+                <span v-else class="pipeline-countdown-paused">已暂停 — 点击右上角"继续"恢复</span>
+              </div>
+            </div>
+          </div>
+          <div v-if="pipelineActiveTasks.size > 0" class="pipeline-active-tasks">
+            <span
+              v-for="label in Array.from(pipelineActiveTasks)"
+              :key="label"
+              class="pipeline-task-chip"
+            >
+              <span class="pipeline-task-dot" />{{ label }}
+            </span>
+          </div>
+          <div v-if="pipelineErrorLog.length > 0" class="pipeline-error-log">
+            <div class="pipeline-error-title">执行过程中的错误：</div>
+            <div v-for="(entry, idx) in pipelineErrorLog" :key="idx" class="pipeline-error-line">
+              [{{ entry.step }}] {{ entry.message }}
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- 剧本工作台：单卡片 + 选项卡（创作 / 选择） -->
       <section class="section card script-workbench-unified">
         <el-tabs v-model="scriptWorkbenchMode" class="script-workbench-tabs">
@@ -355,97 +467,6 @@
           <div v-else-if="!selectScriptLoading && selectableScriptDramas.length === 0" class="select-script-empty">没有可导入的其他剧本</div>
         </div>
       </el-dialog>
-
-      <!-- 一键全流程生成 -->
-      <section class="section card pipeline-section">
-        <div class="one-click-actions">
-          <span class="one-click-label">🚀 一键全流程</span>
-          <el-select v-model="projectAspectRatio" style="width: 130px" @change="() => saveProjectSettings()">
-            <el-option label="16:9 横屏" value="16:9" />
-            <el-option label="9:16 竖屏" value="9:16" />
-            <el-option label="3:4 竖版" value="3:4" />
-            <el-option label="1:1 方形" value="1:1" />
-            <el-option label="4:3" value="4:3" />
-            <el-option label="21:9 宽银幕" value="21:9" />
-          </el-select>
-          <div class="pipeline-duration-range" role="group" aria-label="一键流程单镜时长范围" title="一键生成分镜时，AI 按每镜内容在此范围内选择时长">
-            <span>每镜</span>
-            <el-input-number :model-value="clipRange.min" :min="1" :max="clipRange.max" :precision="0" :value-on-clear="clipRange.min"
-              :controls="false" aria-label="最短秒数" @change="value => setClipBound('min', value)" />
-            <span>至</span>
-            <el-input-number :model-value="clipRange.max" :min="clipRange.min" :max="120" :precision="0" :value-on-clear="clipRange.max"
-              :controls="false" aria-label="最长秒数" @change="value => setClipBound('max', value)" />
-            <span>秒</span>
-          </div>
-          <el-select v-model="scriptLanguage" placeholder="分镜语言" clearable style="width: 105px">
-            <el-option label="中文" value="zh" />
-            <el-option label="英文" value="en" />
-          </el-select>
-          <StylePickerButton
-            v-model="generationStyle"
-            v-model:custom-prompt="customStylePrompt"
-            v-model:custom-snapshot="customStyleSnapshot"
-            :options="generationStyleOptions"
-            :adopt="adoptProjectStyle"
-          />
-          <el-button
-            type="primary"
-            :loading="pipelineRunning && !pipelinePaused"
-            :disabled="!currentEpisodeId || pipelineRunning"
-            @click="startOneClickPipeline"
-          >
-            一键成片带图片视频
-          </el-button>
-          <el-button
-            :loading="pipelineRunning && !pipelinePaused"
-            :disabled="!currentEpisodeId || pipelineRunning"
-            title="仅提取角色、场景、道具与生成分镜文本，不生成图片与视频"
-            @click="startTextFrameworkPipeline"
-          >
-            生成文本框架
-          </el-button>
-          <template v-if="pipelineRunning">
-            <el-button v-if="!pipelinePaused" type="warning" @click="pipelinePaused = true">⏸ 暂停</el-button>
-            <el-button v-else type="success" @click="onPipelineResume">▶ 继续</el-button>
-          </template>
-        </div>
-        <div v-if="pipelineRunning || pipelineErrorLog.length > 0" class="pipeline-status">
-          <div v-if="pipelineCurrentStep" class="pipeline-current-step">
-            <span v-if="pipelineStepIndex > 0" class="pipeline-step-badge">{{ pipelineStepIndex }}/{{ pipelineStepTotal }}</span>
-            {{ pipelineCurrentStep.replace(/^\[步骤 \d+\/\d+\] /, '') }}
-          </div>
-          <!-- 阶段间倒计时 -->
-          <div v-if="pipelineCountdown > 0" class="pipeline-countdown">
-            <div class="pipeline-countdown-ring">
-              <span class="pipeline-countdown-num">{{ pipelineCountdown }}</span>
-              <span class="pipeline-countdown-unit">秒</span>
-            </div>
-            <div class="pipeline-countdown-body">
-              <p class="pipeline-countdown-msg">{{ pipelineCountdownMsg }}</p>
-              <div class="pipeline-countdown-actions">
-                <el-button size="small" type="success" @click="skipPipelineCountdown">⚡ 立即开始下一阶段</el-button>
-                <el-button v-if="!pipelinePaused" size="small" type="warning" @click="pipelinePaused = true">⏸ 暂停倒计时</el-button>
-                <span v-else class="pipeline-countdown-paused">已暂停 — 点击右上角"继续"恢复</span>
-              </div>
-            </div>
-          </div>
-          <div v-if="pipelineActiveTasks.size > 0" class="pipeline-active-tasks">
-            <span
-              v-for="label in Array.from(pipelineActiveTasks)"
-              :key="label"
-              class="pipeline-task-chip"
-            >
-              <span class="pipeline-task-dot" />{{ label }}
-            </span>
-          </div>
-          <div v-if="pipelineErrorLog.length > 0" class="pipeline-error-log">
-            <div class="pipeline-error-title">执行过程中的错误：</div>
-            <div v-for="(entry, idx) in pipelineErrorLog" :key="idx" class="pipeline-error-line">
-              [{{ entry.step }}] {{ entry.message }}
-            </div>
-          </div>
-        </div>
-      </section>
 
       <!-- 资源管理：角色 / 道具 / 场景 -->
       <section class="section card resource-panel">
@@ -856,42 +877,44 @@
             @submitted="() => refreshStoryboardsForEpisode(currentEpisodeId)"
           />
         </div>
-        <div class="sb-config-row sb-narration-export-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:12px">
-          <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
-            首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
-          </el-checkbox>
-          <el-checkbox v-model="storyboardUniversalOmni" :disabled="storyboardStructured" @change="(v) => onStoryboardModeChange('omni', v)">
-            全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
-          </el-checkbox>
-          <el-checkbox v-model="storyboardStructured" :disabled="storyboardUniversalOmni" @change="(v) => onStoryboardModeChange('structured', v)">
-            结构化分镜（推荐：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图，提交前可预览检查）
-          </el-checkbox>
-          <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
-            生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
-          </el-checkbox>
-          <el-button
-            v-if="storyboards.length > 0"
-            class="sb-export-srt-btn"
-            size="small"
-            plain
-            type="primary"
-            :disabled="!currentEpisodeId"
-            :loading="exportingStoryboardSheet"
-            @click="onExportStoryboardSheet"
-          >
-            导出分镜表excel
-          </el-button>
-          <el-button
-            v-if="storyboards.length > 0"
-            class="sb-export-srt-btn"
-            size="small"
-            plain
-            type="primary"
-            :disabled="!currentEpisodeId"
-            @click="onExportNarrationSrt"
-          >
-            导出解说 SRT
-          </el-button>
+        <div class="sb-config-row sb-narration-export-row sb-mode-row">
+          <div class="sb-mode-options">
+            <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
+              首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
+            </el-checkbox>
+            <el-checkbox v-model="storyboardUniversalOmni" :disabled="storyboardStructured" @change="(v) => onStoryboardModeChange('omni', v)">
+              全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
+            </el-checkbox>
+            <el-checkbox v-model="storyboardStructured" :disabled="storyboardUniversalOmni" @change="(v) => onStoryboardModeChange('structured', v)">
+              结构化分镜（推荐：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图，提交前可预览检查）
+            </el-checkbox>
+            <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
+              生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
+            </el-checkbox>
+          </div>
+          <div v-if="storyboards.length > 0" class="sb-export-actions">
+            <el-button
+              class="sb-export-srt-btn"
+              size="small"
+              plain
+              type="primary"
+              :disabled="!currentEpisodeId"
+              :loading="exportingStoryboardSheet"
+              @click="onExportStoryboardSheet"
+            >
+              导出分镜表excel
+            </el-button>
+            <el-button
+              class="sb-export-srt-btn"
+              size="small"
+              plain
+              type="primary"
+              :disabled="!currentEpisodeId"
+              @click="onExportNarrationSrt"
+            >
+              导出解说 SRT
+            </el-button>
+          </div>
         </div>
         <div class="asset-actions sb-batch-actions">
           <div class="flex">
@@ -946,21 +969,21 @@
               </el-button>
               <el-button v-if="batchImageRunning" size="large" type="danger" plain @click="batchImageStopping = true">停止图片</el-button>
               <el-button v-if="batchVideoRunning" size="large" type="danger" plain @click="batchVideoStopping = true">停止视频</el-button>
+              <div class="batch-video-options">
+                <el-checkbox v-model="videoFrameContiguity" size="small" :disabled="batchVideoRunning">
+                  连贯帧模式（自动衔接相邻视频帧）
+                </el-checkbox>
+                <el-tooltip placement="top" :show-after="100">
+                  <template #content>
+                    <div style="max-width:320px">经典分镜按镜序生成，用紧邻上镜当前视频的尾帧作为首帧。首镜或上镜缺片时沿用本镜主图。请选择支持首帧参考的模型。</div>
+                  </template>
+                  <el-icon style="color:#9ca3af;cursor:help"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
             </div>
             <p v-for="item in batchItems.filter(i => i.dispatch_state === 'unknown')" :key="item.operation_key">
               第 {{ item.storyboard_number }} 镜厂商接单结果待核实，请在厂商后台查单后决定是否重拍。
             </p>
-            <div class="batch-video-options">
-              <el-checkbox v-model="videoFrameContiguity" size="small" :disabled="batchVideoRunning">
-                连贯帧模式（自动衔接相邻视频帧）
-              </el-checkbox>
-              <el-tooltip placement="top" :show-after="100">
-                <template #content>
-                  <div style="max-width:320px">经典分镜按镜序生成，用紧邻上镜当前视频的尾帧作为首帧。首镜或上镜缺片时沿用本镜主图。请选择支持首帧参考的模型。</div>
-                </template>
-                <el-icon style="color:#9ca3af;cursor:help"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </div>
           </template>
         </div>
         <!-- 批量生成进度 -->
@@ -1026,7 +1049,16 @@
             <span class="sb-ctrl-duration">计划时长 {{ formatStoryboardDuration(sb.duration) }}</span>
             <el-tag v-if="sb.movement" size="small" effect="plain" type="info" class="sb-movement-tag">{{ getMovementLabel(sb.movement) }}</el-tag>
             <el-button size="small" plain class="sb-ctrl-btn sb-ctrl-config-btn" @click="onOpenVideoParamsDialog(sb)">⚙ 分镜配置</el-button>
+            <el-tag
+              v-if="sb.segment_ir"
+              size="small"
+              effect="plain"
+              type="info"
+              class="sb-ctrl-tag"
+              title="本镜使用结构化分镜：按子镜头生成，生视频时编译提示词与参考图"
+            >结构化模式</el-tag>
             <el-button
+              v-else
               size="small"
               plain
               class="sb-ctrl-btn sb-ctrl-mode-btn"
@@ -1623,92 +1655,6 @@
           <span v-else class="sb-gen-text">分镜持续生成中，客官稍等片刻…</span>
         </div>
         <div v-else-if="storyboards.length === 0" class="empty-tip">请先生成分镜</div>
-      </section>
-
-      <!-- 7. 视频配置 + AI 模型配置 -->
-      <section class="section card">
-        <h2 class="section-title">视频配置</h2>
-        <div class="config-grid">
-          <el-form-item label="分辨率">
-            <el-select v-model="videoResolution" style="width: 160px">
-              <el-option label="480p" value="480p" />
-              <el-option label="720p" value="720p" />
-              <el-option label="1080p" value="1080p" />
-            </el-select>
-          </el-form-item>
-          <!--
-          <el-form-item label="配乐">
-            <el-select v-model="videoMusic" placeholder="无" clearable style="width: 160px">
-              <el-option label="无" value="" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="音效">
-            <el-select v-model="videoSfx" placeholder="无" clearable style="width: 160px">
-              <el-option label="无" value="" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="画质">
-            <el-select v-model="videoQuality" style="width: 120px">
-              <el-option label="高" value="high" />
-              <el-option label="中" value="medium" />
-            </el-select>
-          </el-form-item>
-          -->
-          <el-form-item label="字幕">
-            <div class="video-option-row">
-              <el-switch v-model="videoSubtitle" />
-              <span v-if="videoSubtitle" class="video-option-hint">开启后，合成整集时会检测解说旁白：若有文案则自动生成 SRT、按分镜时长合成旁白语音（过长加速 / 过短补静音）、与成片对齐后烧录字幕并混音。</span>
-            </div>
-          </el-form-item>
-          <el-form-item label="对白烧录">
-            <div class="video-option-row">
-              <el-switch v-model="videoBurnDialogue" />
-              <span v-if="videoBurnDialogue" class="video-option-hint">跟随整集的镜头使用已有配音，其余保留原声。单镜选择优先，旁白可独立叠加。</span>
-            </div>
-          </el-form-item>
-          <template v-if="hasStructuredStoryboards">
-            <el-form-item label="台词字幕">
-              <div class="video-option-row">
-                <el-switch v-model="videoDialogueSubtitles" />
-                <span class="video-option-hint">结构化分镜：按镜头时间生成台词字幕（每行 ≤12 字，内心独白/旁白斜体）。本机 ffmpeg 不能烧录时自动改为软字幕。</span>
-              </div>
-            </el-form-item>
-            <el-form-item label="字卡">
-              <div class="video-option-row">
-                <el-switch v-model="videoCards" />
-                <span class="video-option-hint">把分镜里的关键文字以画面上方字卡叠加，不交给视频模型画。</span>
-              </div>
-            </el-form-item>
-            <el-form-item label="背景音乐">
-              <div class="video-option-row">
-                <el-input v-model="videoBgmUrl" placeholder="音乐文件地址（/static/… 或 http）" clearable class="video-watermark-input" />
-                <el-input-number v-model="videoBgmVolumeDb" :min="-40" :max="-6" :step="1" size="small" />
-                <span class="video-option-hint">dB，压在台词下面（默认 -18）</span>
-              </div>
-            </el-form-item>
-            <el-form-item label="审片拼图">
-              <div class="video-option-row">
-                <el-switch v-model="videoReviewSheets" />
-                <span class="video-option-hint">额外输出片段接缝拼图与每秒抽帧拼图，方便检查跳变。</span>
-              </div>
-            </el-form-item>
-          </template>
-          <el-form-item label="水印">
-            <div class="video-option-row">
-              <el-switch v-model="videoWatermark" />
-              <el-input
-                v-if="videoWatermark"
-                v-model="videoWatermarkText"
-                placeholder="右下角水印文字"
-                maxlength="200"
-                show-word-limit
-                clearable
-                class="video-watermark-input"
-              />
-            </div>
-          </el-form-item>
-        </div>
-        <p class="config-tip">文本/图片/视频使用的模型以「<el-link type="primary" underline="never" @click="showAiConfigDialog = true">AI 配置</el-link>」中设为默认的为准。</p>
       </section>
 
       <!-- 8. 合成视频 -->
@@ -2470,16 +2416,26 @@
       @close="onVideoParamsDialogClosed"
     >
       <el-form v-if="videoParamsTarget" label-width="115px" size="small" class="vp-dialog-form">
-        <el-form-item label="创作模式">
-          <el-radio-group
-            :model-value="sbCreationMode[videoParamsTarget.id] === 'universal' ? 'universal' : 'classic'"
+        <el-form-item :label="videoParamsTarget?.segment_ir ? '分镜模式' : '创作模式'">
+          <el-tag
+            v-if="videoParamsTarget?.segment_ir"
             size="small"
-            @change="(v) => setSbCreationModeId(videoParamsTarget.id, v)"
-          >
-            <el-radio-button value="classic">经典分镜</el-radio-button>
-            <el-radio-button value="universal">全能模式</el-radio-button>
-          </el-radio-group>
-          <div class="vp-mode-hint">全能模式：中间为片段描述；生视频时使用 <strong>AI 配置里当前启用的视频</strong>（接口规范 <code>kling_omni</code> / <code>volcengine_omni</code>、万相 2.7 R2V / 3.0，或「低价 Seedance2」，或勾选「确认支持全能模式」）并合并场景/角色/道具等参考图（不含经典分镜主图）。经典字段保留，可随时切回。</div>
+            effect="plain"
+            type="info"
+            title="结构化分镜由镜头包驱动，创作模式只读；需要切换请在项目设置中调整后重新生成分镜"
+          >结构化模式</el-tag>
+          <template v-else>
+            <el-radio-group
+              :model-value="sbCreationMode[videoParamsTarget.id] === 'universal' ? 'universal' : 'classic'"
+              size="small"
+              @change="(v) => setSbCreationModeId(videoParamsTarget.id, v)"
+            >
+              <el-radio-button value="classic">经典分镜</el-radio-button>
+              <el-radio-button value="universal">全能模式</el-radio-button>
+            </el-radio-group>
+            <div class="vp-mode-hint">全能模式：中间为片段描述；生视频时使用 <strong>AI 配置里当前启用的视频</strong>（接口规范 <code>kling_omni</code> / <code>volcengine_omni</code>、万相 2.7 R2V / 3.0，或「低价 Seedance2」，或勾选「确认支持全能模式」）并合并场景/角色/道具等参考图（不含经典分镜主图）。经典字段保留，可随时切回。</div>
+          </template>
+          <div v-if="videoParamsTarget?.segment_ir" class="vp-mode-hint">结构化分镜由镜头包驱动生视频；创作模式只读，保存不会更改它。需要切换请调整项目设置后重新生成分镜。</div>
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
@@ -2720,7 +2676,6 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick, h
 const creativeReviewPanel = ref(null)
 import { useAgentContext } from '@/stores/agentContext'
 import { useRoute, useRouter } from 'vue-router'
-import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh, ZoomIn, QuestionFilled, DocumentAdd, Expand, Fold, VideoPlay, Grid, Close } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
@@ -2747,7 +2702,10 @@ import NovelImportDialog from '@/components/NovelImportDialog.vue'
 import StoryProposalReview from '@/components/StoryProposalReview.vue'
 import { canUseUniversalOmniVideoApi, videoModelNameFromAiConfig, wanModeForConfig, wanStoryboardUsesText, wanTextFields } from '@/utils/videoOmniSupport'
 import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
+import VideoSettingsForm from '@/components/VideoSettingsForm.vue'
 import StylePickerButton from '@/components/StylePickerButton.vue'
+import { aspectRatioLabel } from '@/constants/aspectRatios'
+import { visibleKeys, scopeOf, resolutionOf, mergeOptionsFromSettings, saveEpisodeSetting } from '@/utils/videoSettings'
 import AIConfigContent from '@/components/AIConfigContent.vue'
 import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEditor.vue'
 import StoryboardDraftReview from '@/components/StoryboardDraftReview.vue'
@@ -2765,7 +2723,7 @@ import { createStateProposals, listVariantsWithoutImage, startVariantImages } fr
 import { jimengOptionState } from '@/utils/segmentUi'
 import FindingList from '@/components/FindingList.vue'
 import { videoMergesAPI } from '@/api/videoMerges'
-import { groupFindings, findingWhere, formatStoryboardDuration } from '@/utils/segmentUi'
+import { groupFindings, findingWhere, formatStoryboardDuration, savedCreationMode } from '@/utils/segmentUi'
 import {
   generationStyleOptions,
   getStylePromptEn,
@@ -2785,7 +2743,6 @@ const router = useRouter()
 const store = useFilmStore()
 const genStore = useGenerationTaskStore()
 const { isDark, toggle: toggleTheme } = useTheme()
-const { videoResolution: storeVideoResolution } = storeToRefs(store)
 
 // ── Composable: Navigation ─────────────────────────────
 const { navCollapsed, storyboardMenuExpanded, toggleNav, scrollToTop, scrollToAnchor } = useNavigation()
@@ -2863,16 +2820,6 @@ function getSelectedStylePromptZh() {
   return meta.style_prompt_zh || meta.style_prompt_en || undefined
 }
 
-async function adoptProjectStyle(value, positive, snapshot) {
-  if (!store.dramaId) return
-  const metadata = stylePromptMetadataForSave(value, positive, snapshot)
-  await dramaAPI.saveOutline(store.dramaId, { style: value, metadata })
-  if (store.drama) {
-    store.drama.style = value
-    store.drama.metadata = { ...store.drama.metadata, ...metadata, custom_style: snapshot }
-  }
-}
-
 function projectStylePromptMetadata() {
   return stylePromptMetadataForSave(generationStyle.value, customStylePrompt.value, customStyleSnapshot.value, store.drama)
 }
@@ -2881,21 +2828,6 @@ const scriptContent = computed({
   get: () => store.scriptContent,
   set: (v) => store.setScriptContent(v)
 })
-const videoResolution = storeVideoResolution
-const videoMusic = ref('')
-const videoSfx = ref('')
-const videoQuality = ref('high')
-const videoSubtitle = ref(false)
-/** 合成整集时把各镜对白 TTS（audio_local_path）按分镜时长对齐并混入成片 */
-const videoBurnDialogue = ref(false)
-const videoDialogueSubtitles = ref(true)
-const videoCards = ref(true)
-const videoBgmUrl = ref('')
-const videoBgmVolumeDb = ref(-18)
-const videoReviewSheets = ref(true)
-const videoWatermark = ref(false)
-/** 水印开启时烧录到成片右下角 */
-const videoWatermarkText = ref('')
 
 const dramaId = computed(() => store.dramaId)
 const characters = computed(() => store.characters)
@@ -3442,6 +3374,35 @@ async function openJimengDialog(ids) {
   jimengDialogVisible.value = true
 }
 const hasStructuredStoryboards = computed(() => (store.storyboards || []).some((sb) => sb && sb.segment_ir))
+
+// ---- 基础配置：画面比例/风格只读（项目级），视频配置为本集有效设置，修改只写本集覆盖 ----
+const currentVideoSettings = computed(() => currentEpisode.value?.video_settings?.effective || null)
+const baseConfigKeys = computed(() => visibleKeys({ structured: hasStructuredStoryboards.value }))
+const baseConfigScopes = computed(() => Object.fromEntries(baseConfigKeys.value.map((k) => [k, scopeOf(currentEpisode.value, k)])))
+const savingEpisodeVideoSettings = ref(false)
+
+function goProjectDetail() {
+  if (dramaId.value) router.push('/drama/' + dramaId.value)
+}
+
+/** value 为 null 表示恢复随项目 */
+async function onEpisodeSettingChange(key, value) {
+  const episode = currentEpisode.value
+  if (!episode?.id || savingEpisodeVideoSettings.value) return
+  savingEpisodeVideoSettings.value = true
+  try {
+    const result = await saveEpisodeSetting(dramaAPI, episode.id, key, value)
+    // 保存期间若已切集，结果只写回发起保存的那一集
+    episode.video_settings = result
+    const listed = (store.drama?.episodes || []).find((e) => e.id === episode.id)
+    if (listed && listed !== episode) listed.video_settings = result
+    ElMessage.success(key in (result?.overrides || {}) ? '已保存，仅对本集生效' : '已恢复随项目')
+  } catch (e) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    savingEpisodeVideoSettings.value = false
+  }
+}
 /** 分镜生成是否使用全能模式（universal_segment_text，对接 Seedance / 可灵 Omni） */
 const storyboardUniversalOmni = ref(false)
 const storyboardUseFirstLastFrame = ref(false)
@@ -4657,6 +4618,7 @@ function syncStoryboardStateFromEpisode(ep) {
 
 function onEpisodeSelect(epId) {
   if (epId == null) {
+    selectedEpisodeId.value = null
     store.setCurrentEpisode(null)
     store.setScriptContent('')
     scriptTitle.value = ''
@@ -4666,6 +4628,7 @@ function onEpisodeSelect(epId) {
   const list = store.drama?.episodes || []
   const ep = list.find((e) => Number(e.id) === Number(epId))
   if (!ep) return
+  selectedEpisodeId.value = ep.id
   store.setCurrentEpisode(ep)
   store.setScriptContent(ep.script_content || '')
   scriptTitle.value = ep.title || '第' + (ep.episode_number || 0) + '集'
@@ -6383,7 +6346,8 @@ async function onSaveSbVideoFields(sb) {
       depth_of_field: sbDof.value[sb.id] || null,
       shot_type: (sbShotType.value[sb.id] || '').toString().trim() || null,
       layout_description: (sbLayoutDescription.value[sb.id] || '').toString().trim() || null,
-      creation_mode: sbCreationMode.value[sb.id] === 'universal' ? 'universal' : 'classic',
+      // 结构化分镜由 segment_ir 驱动，创作模式只读；保存时保留服务器原值，不受本地单选残留影响
+      creation_mode: savedCreationMode(sb, sbCreationMode.value[sb.id]),
       universal_segment_text: (sbUniversalSegmentText.value[sb.id] || '').toString().trim() || null,
     })
     const rebuilt = await storyboardsAPI.rebuildVideoPrompt(sb.id)
@@ -6526,6 +6490,7 @@ async function onRegenerateLayoutDescription(sb) {
 }
 
 async function onGenerateSbVideo(sb) {
+  const videoSettings = currentVideoSettings.value
   if (!dramaId.value || !sb?.id || !sbCanSubmitVideo(sb)) return
   if (sb.segment_ir) {
     await refreshJimengActive()
@@ -6631,7 +6596,7 @@ async function onGenerateSbVideo(sb) {
       ...(textOnly ? wanTextFields() : {}),
       style: getSelectedStyle(),
       aspect_ratio: projectAspectRatio.value || '16:9',
-      resolution: videoResolution.value || undefined,
+      resolution: resolutionOf(videoSettings),
       duration: getSbVideoDurationForApi(sb),
     }
     const res = await submitStoryboardVideo(body, sb.universal_segment_text ?? null, {
@@ -7063,6 +7028,8 @@ async function startBatchImageGeneration() {
 async function startBatchVideoGeneration() {
   if (!currentEpisodeId.value || batchVideoRunning.value || pipelineRunning.value) return
   const episode = currentEpisodeId.value
+  // 分辨率按发起时的这一集固定，运行中切集不影响
+  const videoSettings = currentVideoSettings.value
   batchVideoErrors.value = []
   batchVideoStopping.value = false
   batchVideoRunning.value = true
@@ -7142,7 +7109,7 @@ async function startBatchVideoGeneration() {
             ...(textOnly ? wanTextFields() : {}),
             style: getSelectedStyle(),
             aspect_ratio: projectAspectRatio.value || '16:9',
-            resolution: videoResolution.value || undefined,
+            resolution: resolutionOf(videoSettings),
             duration: getSbVideoDurationForApi(sb),
           })
           if (res?.task_id) {
@@ -7186,21 +7153,8 @@ async function startBatchVideoGeneration() {
   }
 }
 
-function getFinalizeMergeOptions(mode = 'complete') {
-  return {
-    delivery_mode: mode,
-    burn_narration_subtitles: !!videoSubtitle.value,
-    burn_dialogue_audio: !!videoBurnDialogue.value,
-    watermark_text: videoWatermark.value ? String(videoWatermarkText.value || '').trim().slice(0, 200) : '',
-    ...(hasStructuredStoryboards.value
-      ? {
-          dialogue_subtitles: !!videoDialogueSubtitles.value,
-          cards: !!videoCards.value,
-          review_sheets: !!videoReviewSheets.value,
-          bgm: String(videoBgmUrl.value || '').trim() ? { url: String(videoBgmUrl.value).trim(), volume_db: videoBgmVolumeDb.value } : undefined,
-        }
-      : {}),
-  }
+function getFinalizeMergeOptions(mode = 'complete', settings = currentVideoSettings.value) {
+  return mergeOptionsFromSettings(settings, { mode, structured: hasStructuredStoryboards.value })
 }
 
 async function previewDraft() {
@@ -7493,6 +7447,8 @@ function setPipelineStep(idx, text) {
 
 async function runOneClickPipeline(textOnly = false) {
   const episodeId = currentEpisodeId.value
+  // 分辨率与合成选项按发起时的这一集固定，运行中切集不影响
+  const videoSettings = currentVideoSettings.value
   const dramaIdVal = dramaId.value
   if (!episodeId || !dramaIdVal) return
   const style = getSelectedStyle()
@@ -7905,7 +7861,7 @@ async function runOneClickPipeline(textOnly = false) {
               ...(canUseWanTextForShot(sb, cfg, universal, omniRefs) ? wanTextFields() : {}),
               style,
               aspect_ratio: projectAspectRatio.value || '16:9',
-              resolution: videoResolution.value || undefined,
+              resolution: resolutionOf(videoSettings),
               duration: getSbVideoDurationForApi(sb),
             })
             if (res?.task_id) {
@@ -7929,7 +7885,7 @@ async function runOneClickPipeline(textOnly = false) {
     await checkPause()
     setPipelineStep(10, '合成整集视频...')
     try {
-      const result = await dramaAPI.finalizeEpisode(episodeId, getFinalizeMergeOptions())
+      const result = await dramaAPI.finalizeEpisode(episodeId, getFinalizeMergeOptions('complete', videoSettings))
       if (result?.task_id != null) {
         const pollResult = await pollTaskWithPause(result.task_id, () => loadDrama())
         if (pollResult?.paused) { await waitForResume(); return }
@@ -7973,6 +7929,8 @@ async function startRepairPipeline() {
 /** 修复缺失：哪一步没有就生成哪一步，有图/有内容就跳过 */
 async function runRepairPipeline() {
   const episodeId = currentEpisodeId.value
+  // 分辨率与合成选项按发起时的这一集固定，运行中切集不影响
+  const videoSettings = currentVideoSettings.value
   const dramaIdVal = dramaId.value
   if (!episodeId || !dramaIdVal) return
   const style = getSelectedStyle()
@@ -8242,7 +8200,7 @@ async function runRepairPipeline() {
               reference_mode: universal ? 'omni' : undefined,
               ...(canUseWanTextForShot(sb, cfg, universal, omniRefs) ? wanTextFields() : {}),
               aspect_ratio: projectAspectRatio.value || '16:9',
-              resolution: videoResolution.value || undefined,
+              resolution: resolutionOf(videoSettings),
               duration: getSbVideoDurationForApi(sb),
             })
             if (res?.task_id) {
@@ -8266,7 +8224,7 @@ async function runRepairPipeline() {
     await checkPause()
     pipelineCurrentStep.value = '正在生成整集视频...'
     try {
-      const result = await dramaAPI.finalizeEpisode(episodeId, getFinalizeMergeOptions())
+      const result = await dramaAPI.finalizeEpisode(episodeId, getFinalizeMergeOptions('complete', videoSettings))
       if (result?.task_id != null) {
         const pollResult = await pollTaskWithPause(result.task_id, () => loadDrama())
         if (pollResult?.paused) { await waitForResume(); return }
@@ -9222,8 +9180,14 @@ html.light .section-title { color: #1e1b4b; }
 .sb-batch-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 8px 12px;
   flex-wrap: wrap;
+  margin-left: auto;
+}
+.batch-video-options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .batch-status {
   margin-top: 12px;
@@ -9899,6 +9863,13 @@ html.light .sb-ctrl-title {
   height: 22px;
   padding: 0 8px;
   font-size: 11px;
+}
+.sb-ctrl-tag.el-tag {
+  height: 22px;
+  line-height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 .sb-ctrl-config-btn.el-button {
   border-color: rgba(139,92,246,0.45);
@@ -10607,12 +10578,6 @@ html.light .sb-video-placeholder {
 .sb-field-label { font-size: 0.8rem; color: #a1a1aa; }
 .sb-field-select { width: 100%; }
 .sb-video-fields-actions { grid-column: 1 / -1; margin-top: 8px; }
-.config-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px 24px;
-  margin-bottom: 16px;
-}
 .video-option-hint {
   flex: 1;
   min-width: 200px;
@@ -10620,16 +10585,26 @@ html.light .sb-video-placeholder {
   line-height: 1.45;
   color: var(--el-text-color-secondary);
 }
-.video-option-row {
+.base-config-fixed {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 10px 12px;
+  align-items: center;
+  gap: 8px 20px;
+  margin-bottom: 8px;
 }
-.video-watermark-input {
-  flex: 1;
-  min-width: 200px;
-  max-width: 360px;
+.base-config-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.base-config-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.base-config-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 .config-tip {
   margin: 12px 0 0;
@@ -10724,6 +10699,41 @@ html.light .sb-video-placeholder {
   color: #3a3a44;
   font-size: 0.85rem;
   margin: 0 4px;
+}
+.sb-mode-row {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-top: 10px;
+}
+.sb-mode-options {
+  flex: 1 1 520px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr));
+  gap: 6px 24px;
+  min-width: 0;
+}
+.sb-mode-options :deep(.el-checkbox) {
+  height: auto;
+  min-height: 28px;
+  margin-right: 0;
+  align-items: flex-start;
+  white-space: normal;
+}
+.sb-mode-options :deep(.el-checkbox__input) {
+  margin-top: 4px;
+}
+.sb-mode-options :deep(.el-checkbox__label) {
+  white-space: normal;
+}
+.sb-export-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.sb-export-actions .el-button {
+  margin-left: 0;
 }
 /* 解说导出行：避免浅色主题下勾选文案与卡片背景对比度不足 */
 .sb-narration-export-row :deep(.el-checkbox__label) {

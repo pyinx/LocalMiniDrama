@@ -1,5 +1,5 @@
 <template>
-  <el-button v-if="dramaId" size="small" @click="openAt()">创作与跨集复核</el-button>
+  <el-button v-if="dramaId" :size="size" title="全剧事实与创作方法、各集进度、逐镜对白与外观复核" @click="openAt()">创作与跨集复核</el-button>
   <el-dialog v-model="opened" :title="(data?.title || '作品') + ' · 创作与跨集复核'" width="min(760px, 94vw)" append-to-body>
     <section v-loading="loading" class="review-body" :aria-busy="loading">
       <div v-if="error" role="alert">{{ error }} <el-button size="small" @click="load()">重新读取</el-button></div>
@@ -73,7 +73,7 @@ import { computed, ref, watch } from 'vue'
 import request from '@/utils/request'
 import MediaReviewNotes from './MediaReviewNotes.vue'
 
-const props = defineProps({ dramaId: [Number, String], currentEpisodeId: [Number, String] })
+const props = defineProps({ dramaId: [Number, String], currentEpisodeId: [Number, String], size: { type: String, default: 'default' } })
 const opened = ref(false)
 const data = ref(null)
 const loading = ref(false)

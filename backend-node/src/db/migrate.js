@@ -119,6 +119,7 @@ function ensureAllColumns(database) {
     { name: 'edit_plan', type: 'TEXT' },
     { name: 'drama_id',       type: 'INTEGER DEFAULT 0' },
     { name: 'continuity_json', type: 'TEXT' },  // 剧集级连续性表 { [scene_id]: { props, position_lock, axis_lock, ambience } }
+    { name: 'video_settings', type: 'TEXT' },   // 本集对项目视频配置的覆盖（稀疏 JSON，见 services/videoSettings.js）
     { name: 'episode_number', type: 'INTEGER DEFAULT 0' },
     { name: 'title',          type: 'TEXT DEFAULT \'\'' },
     { name: 'script_content', type: 'TEXT' },

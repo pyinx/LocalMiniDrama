@@ -3,16 +3,16 @@
     <!-- 触发按钮，外观与 el-select 一致 -->
     <div
       class="style-picker-trigger"
-      :class="{ 'has-value': !!modelValue }"
-      @click="visible = true"
+      :class="{ 'has-value': !!modelValue, 'is-readonly': readonly }"
+      @click="!readonly && (visible = true)"
     >
       <template v-if="displayLabel">
         <img v-if="activeImage" class="spt-swatch" :src="activeImage" alt="" /><span v-else class="spt-swatch" :style="triggerSwatchStyle" />
         <span class="spt-label">{{ displayLabel }}</span>
       </template>
       <span v-else class="spt-placeholder">{{ placeholder }}</span>
-      <el-icon class="spt-arrow"><ArrowDown /></el-icon>
-      <span v-if="modelValue" class="spt-clear" @click.stop="clearSelection">
+      <el-icon v-if="!readonly" class="spt-arrow"><ArrowDown /></el-icon>
+      <span v-if="modelValue && !readonly" class="spt-clear" @click.stop="clearSelection">
         <el-icon><CircleClose /></el-icon>
       </span>
     </div>
@@ -128,6 +128,8 @@ const props = defineProps({
   customPrompt: { type: String, default: '' },
   options: { type: Array, default: () => [] },
   placeholder: { type: String, default: '图片/视频风格' },
+  /** 只读展示：不能打开选择弹窗，也不能清除 */
+  readonly: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'update:customPrompt', 'update:customSnapshot', 'change'])
@@ -257,6 +259,18 @@ async function clearAndClose() {
 }
 .style-picker-trigger:hover {
   border-color: var(--el-color-primary);
+}
+.style-picker-trigger.is-readonly {
+  cursor: default;
+  background: var(--el-fill-color-light);
+}
+.style-picker-trigger.is-readonly:hover {
+  border-color: var(--el-border-color);
+}
+.style-picker-trigger.is-readonly .spt-label {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 .style-picker-trigger.has-value {
   color: var(--el-text-color-primary);

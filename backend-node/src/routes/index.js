@@ -145,6 +145,8 @@ function setupRouter(cfg, db, log) {
   r.get('/dramas/examples', drama.listExamples);
   r.post('/dramas/import-example', drama.importExample);
   r.put('/dramas/:id/outline', drama.saveOutline);
+  r.put('/dramas/:id/video-settings', drama.saveProjectVideoSettings);
+  r.put('/episodes/:episode_id/video-settings', drama.saveEpisodeVideoSettings);
   r.get('/dramas/:id/characters', drama.getCharacters);
   r.put('/dramas/:id/characters', drama.saveCharacters);
   r.put('/dramas/:id/episodes', drama.saveEpisodes);

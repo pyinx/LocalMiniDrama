@@ -4,6 +4,7 @@ const { episodeStoryboardRows } = require('./episodeStoryboardRows');
 const { readStoredIr } = require('./segmentIr/schema');
 
 const storageLayout = require('./storageLayout');
+const videoSettings = require('./videoSettings');
 const { resolveStylePreset } = require('../constants/generationStylePresets');
 const seedance2AssetGuards = require('../utils/seedance2AssetGuards');
 const characterHeadBody = require('./characterHeadBody');
@@ -52,6 +53,8 @@ function createDrama(db, log, req) {
       meta = {};
     }
   }
+  // 视频配置只能经 videoSettings 校验后写入
+  delete meta.video_settings;
   validateProjectStyle(db, req.style, meta);
   // 新项目默认用结构化分镜（镜头包）生成；创建时明确传了开关就按传入的
   if (meta.storyboard_structured === undefined) meta.storyboard_structured = true;
@@ -89,7 +92,9 @@ function getDrama(db, dramaId, baseUrl) {
   const episodes = db.prepare(
     'SELECT * FROM episodes WHERE drama_id = ? AND deleted_at IS NULL ORDER BY episode_number ASC'
   ).all(drama.id);
-  drama.episodes = episodes.map((e) => rowToEpisode(e));
+  const projectVideoSettings = videoSettings.projectEffective(drama.metadata);
+  drama.video_settings = projectVideoSettings;
+  drama.episodes = episodes.map((e) => ({ ...rowToEpisode(e), video_settings: videoSettings.forEpisode(projectVideoSettings, e.video_settings) }));
   for (const ep of drama.episodes) {
     const storyboards = episodeStoryboardRows(db, ep.id);
     ep.storyboards = storyboards.map((s) => rowToStoryboard(s, db));
@@ -508,6 +513,8 @@ function saveOutline(db, log, dramaId, req) {
   // Project direction has its own optimistic update contract. Old outline forms
   // can submit cached metadata, including an earlier review revision.
   delete newMetadata.creative_direction;
+  // 视频配置同理：旧表单带着缓存的 metadata 提交时，不能覆盖已保存的设置
+  delete newMetadata.video_settings;
   const mergedMetadata = { ...existingMetadata, ...newMetadata };
 
   // 与 mergeCfgStyleWithDrama 一致：提示词优先读 metadata.style_prompt_*。仅改 dramas.style 而不带画风长文案时，

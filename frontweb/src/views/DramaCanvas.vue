@@ -30,7 +30,7 @@
         <span v-else-if="layoutSaveState === 'error'" class="layout-status error">保存失败</span>
 
         <div class="header-actions">
-          <CreativeReviewPanel :drama-id="dramaId" :current-episode-id="filterEpisodeId" />
+          <CreativeReviewPanel :drama-id="dramaId" :current-episode-id="filterEpisodeId" size="small" />
           <el-button size="small" type="warning" plain @click="focusScriptNode">
             剧本
           </el-button>

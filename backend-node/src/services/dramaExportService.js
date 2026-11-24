@@ -269,6 +269,7 @@ function exportDrama(db, cfg, log, dramaId, extraTakeIds = []) {
         ...(ep.novel_source ? { novel_source: JSON.parse(ep.novel_source) } : {}),
         duration: ep.duration,
         continuity: parseStoredJson(ep.continuity_json),
+        ...(ep.video_settings ? { video_settings: parseStoredJson(ep.video_settings) } : {}),
         storyboards: sbs.map(sb => {
           const igsForThis = allImagesBySb[sb.id] || [];
           // 兼容：仍提供 image_file（指向首帧或最新一张），旧版导入器可继续工作

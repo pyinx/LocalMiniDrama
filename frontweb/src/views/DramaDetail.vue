@@ -52,13 +52,8 @@
             </el-col>
             <el-col :span="12">
               <el-form-item label="画面比例">
-                <el-select v-model="infoForm.aspect_ratio" style="width: 100%" @change="saveInfo">
-                  <el-option label="16:9 横屏（默认）" value="16:9" />
-                  <el-option label="9:16 竖屏（短视频）" value="9:16" />
-                  <el-option label="3:4 竖版" value="3:4" />
-                  <el-option label="1:1 方形" value="1:1" />
-                  <el-option label="4:3 传统横屏" value="4:3" />
-                  <el-option label="21:9 宽银幕" value="21:9" />
+                <el-select v-model="infoForm.aspect_ratio" style="width: 100%" @change="onAspectRatioChange">
+                  <el-option v-for="o in ASPECT_RATIO_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -68,6 +63,29 @@
               </el-form-item>
             </el-col>
           </el-row>
+        </el-form>
+        <el-alert
+          v-if="ratioStyleChanged && assetNotice"
+          type="warning"
+          show-icon
+          :closable="false"
+          :title="assetNotice"
+          style="margin-top: 8px"
+        />
+      </section>
+
+      <!-- 视频默认配置：项目下所有分集默认复用 -->
+      <section v-if="projectVideoSettings" class="section card">
+        <div class="section-title">视频默认配置</div>
+        <p class="video-settings-tip">项目下所有分集默认复用这些配置，保证全剧一致。单集想不同，可在创作页顶部的「基础配置」里改，只对该集生效。</p>
+        <el-form label-width="110px" label-position="left">
+          <VideoSettingsForm
+            :settings="projectVideoSettings"
+            :keys="VIDEO_SETTING_KEYS"
+            :disabled="savingVideoSettings"
+            @change="onProjectSettingChange"
+            @reset="key => onProjectSettingChange(key, null)"
+          />
         </el-form>
       </section>
 
@@ -533,6 +551,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, VideoPlay, Plus, Delete, Sunny, Moon, PictureFilled, Grid } from '@element-plus/icons-vue'
 import EpisodeBatchImportDialog from '@/components/EpisodeBatchImportDialog.vue'
 import StylePickerButton from '@/components/StylePickerButton.vue'
+import VideoSettingsForm from '@/components/VideoSettingsForm.vue'
+import { ASPECT_RATIO_OPTIONS } from '@/constants/aspectRatios'
+import { VIDEO_SETTING_KEYS, saveProjectSetting, assetMismatchNotice } from '@/utils/videoSettings'
 import { useTheme } from '@/composables/useTheme'
 import { useAgentContext } from '@/stores/agentContext'
 import { dramaAPI } from '@/api/drama'
@@ -858,6 +879,28 @@ const nextEpisodeNumber = computed(() => (
 
 const infoForm = reactive({ title: '', description: '', genre: '', style: '', customStylePrompt: '', aspect_ratio: '16:9' })
 
+// 视频默认配置：后端合并好的项目有效设置；改动逐项保存
+const projectVideoSettings = ref(null)
+const savingVideoSettings = ref(false)
+async function onProjectSettingChange(key, value) {
+  savingVideoSettings.value = true
+  try {
+    projectVideoSettings.value = await saveProjectSetting(dramaAPI, dramaId, key, value)
+  } catch (e) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    savingVideoSettings.value = false
+  }
+}
+
+// 改画面比例/风格后，若已有生成素材，提示它们不会随之重新生成
+const ratioStyleChanged = ref(false)
+const assetNotice = computed(() => assetMismatchNotice(drama.value))
+function onAspectRatioChange() {
+  ratioStyleChanged.value = true
+  saveInfo()
+}
+
 function assetImageUrl(item) {
   if (!item) return ''
   const lp = item.local_path && String(item.local_path).trim()
@@ -877,6 +920,7 @@ async function loadDrama() {
     d = await backfillDramaStylePromptMetadataIfNeeded(dramaAPI, dramaId, d)
     drama.value = d
     episodes.value = d.episodes || []
+    projectVideoSettings.value = d.video_settings || null
     useAgentContext().setEpisodes(episodes.value)
     infoForm.title = d.title || ''
     infoForm.description = d.description || ''
@@ -899,6 +943,7 @@ async function loadDrama() {
 async function adoptStyle(value, positive, snapshot) {
   const metadata = stylePromptMetadataForSave(value, positive, snapshot)
   await dramaAPI.saveOutline(dramaId, { style: value, metadata })
+  ratioStyleChanged.value = true
 }
 
 let infoSaveTimer = null
@@ -1213,6 +1258,11 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.video-settings-tip {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #a1a1aa;
+}
 .drama-detail {
   min-height: 100vh;
   background: #0f0f12;

@@ -8,6 +8,17 @@ export function formatStoryboardDuration(value) {
   return Number.isFinite(seconds) && seconds > 0 ? `${seconds} 秒` : '未设置'
 }
 
+/**
+ * 保存分镜视频参数时决定 creation_mode：
+ * 结构化分镜（有 segment_ir）由镜头包驱动，创作模式只读，必须保留服务器原值；
+ * 只有旧的经典/全能分镜才允许本地单选生效。
+ */
+export function savedCreationMode(sb, localMode) {
+  const serverMode = sb?.creation_mode === 'universal' ? 'universal' : 'classic'
+  if (sb?.segment_ir) return serverMode
+  return localMode === 'universal' ? 'universal' : 'classic'
+}
+
 export const FINDING_LEVELS = {
   block: { label: '阻断', type: 'danger', order: 0 },
   warn: { label: '提醒', type: 'warning', order: 1 },
