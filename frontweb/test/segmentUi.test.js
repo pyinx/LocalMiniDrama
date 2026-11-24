@@ -1,7 +1,34 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { groupFindings, findingTag, findingWhere, formatStoryboardDuration, savedCreationMode, irToForm, formToIr, newShotForm } from '../src/utils/segmentUi.js'
+import { groupFindings, findingTag, findingWhere, formatStoryboardDuration, savedCreationMode, irToForm, formToIr, newShotForm, needsManual, optimizeSummary, optimizeRows } from '../src/utils/segmentUi.js'
+
+test('separates fixable and manual findings and counts them', () => {
+  const findings = [
+    { level: 'warn', code: 'mixed_style_vocabulary', where: {}, fixable: false },
+    { level: 'warn', code: 'emotion_label', where: { path: 'shots.0.action' }, fixable: true },
+    { level: 'warn', code: 'pronoun_reference', where: { path: 'shots.1.action' }, fixable: true },
+    { level: 'block', code: 'asset_missing', where: {}, fixable: false },
+    { level: 'info', code: 'padded', where: {}, fixable: false },
+    { level: 'warn', code: 'old_server_without_flag', where: {} },
+  ]
+  assert.deepEqual(optimizeSummary(findings), { fixable: 2, manual: 3 })
+  assert.equal(needsManual(findings[0]), true)
+  assert.equal(needsManual(findings[1]), false)
+  assert.equal(needsManual(findings[4]), false, 'info is not something to handle by hand')
+  assert.deepEqual(optimizeSummary(undefined), { fixable: 0, manual: 0 })
+  assert.deepEqual(optimizeSummary([]), { fixable: 0, manual: 0 })
+})
+
+test('builds before/after rows for optimized text edits', () => {
+  const rows = optimizeRows([
+    { path: 'shots.0.action', label: '镜头 1 · 动作', before: '眼神空洞地看着', after: '看着协议，一动不动', remaining: [] },
+    { path: 'tone', label: '基调', before: '他很难过', after: '他不想说话', remaining: ['pronoun_reference', 'unknown_code'] },
+  ])
+  assert.deepEqual(rows[0], { path: 'shots.0.action', label: '镜头 1 · 动作', before: '眼神空洞地看着', after: '看着协议，一动不动', remaining: [] })
+  assert.deepEqual(rows[1].remaining, ['代词指人', 'unknown_code'], 'known codes are named, unknown ones kept as-is')
+  assert.deepEqual(optimizeRows(null), [])
+})
 
 test('planned storyboard duration preserves seconds and identifies unset values', () => {
   assert.equal(formatStoryboardDuration(6), '6 秒')

@@ -11,7 +11,8 @@ const segmentCompileService = require('../services/segmentCompileService');
 const episodeContinuityService = require('../services/episodeContinuityService');
 const jimengRenderer = require('../services/jimeng/renderer');
 const { lintEpisode } = require('../services/segmentCompile/episodeLint');
-const { lintDialogueFidelity } = require('../services/segmentCompile/lint');
+const { lintDialogueFidelity, isFixableFinding } = require('../services/segmentCompile/lint');
+const segmentOptimizeService = require('../services/segmentOptimizeService');
 const { parseSegmentIr } = require('../services/segmentIr/schema');
 
 /** 结构化分镜（IR）相关错误：所有权冲突 409，IR 不合法 422；其他错误返回 false 交给调用方 */
@@ -363,9 +364,27 @@ function routes(db, log) {
           return response.error(res, 422, r.code, r.message, { errors: r.errors });
         }
         const { prompt, refs, duration_s, request, family } = r.compiled;
-        response.success(res, { prompt, refs, duration_s, request, family, findings: r.findings, blocked: r.blocked, protocol: r.target.protocol, model: r.target.model });
+        const findings = r.findings.map((f) => ({ ...f, fixable: isFixableFinding(f) }));
+        response.success(res, { prompt, refs, duration_s, request, family, findings, blocked: r.blocked, protocol: r.target.protocol, model: r.target.model });
       } catch (err) {
         log.error('storyboards compilePreview', { error: err.message });
+        response.internalError(res, err.message);
+      }
+    },
+    /** 按写法类提醒让模型改写分镜里的自由文本，返回提议与逐处改动；不落库，应用走 updateSegmentIr */
+    optimizePreview: async (req, res) => {
+      try {
+        const r = await segmentOptimizeService.optimizeStoryboard(db, log, req.params.id, { model: (req.body || {}).model });
+        if (r.ok === false) {
+          if (r.code === 'not_found') return response.notFound(res, r.message);
+          if (r.code === 'legacy_storyboard') return response.error(res, 409, 'legacy_storyboard', r.message);
+          return response.error(res, 422, r.code, r.message, { errors: r.errors });
+        }
+        response.success(res, r);
+      } catch (err) {
+        if (err.code === 'nothing_to_optimize') return response.error(res, 422, err.code, err.message);
+        if (err.code === 'optimize_failed') return response.error(res, 502, err.code, err.message);
+        log.error('storyboards optimizePreview', { error: err.message });
         response.internalError(res, err.message);
       }
     },

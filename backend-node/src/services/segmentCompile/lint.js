@@ -39,6 +39,13 @@ function freeTextFields(ir) {
   return out.filter(([, v]) => v);
 }
 
+const TEXT_RULE_CODES = new Set(TEXT_RULES.map((r) => r.code));
+
+/** 写法类提醒且落在可改的自由文本字段上：改写这个字段就能消除，其余提醒（台词、参考图、规划、画风）要在别处处理 */
+function isFixableFinding(f) {
+  return !!f && TEXT_RULE_CODES.has(f.code) && typeof f.where?.path === 'string';
+}
+
 /** 对一段自由文本跑写法规则 */
 function lintText(text, path = '') {
   const findings = [];
@@ -156,4 +163,4 @@ function lintDialogueFidelity(segments, script, opts = {}) {
   return findings;
 }
 
-module.exports = { lintText, lintSegment, lintDialogueFidelity, parseScriptLines };
+module.exports = { lintText, lintSegment, lintDialogueFidelity, parseScriptLines, freeTextFields, isFixableFinding };

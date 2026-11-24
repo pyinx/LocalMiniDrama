@@ -123,13 +123,20 @@
       <div class="seg-ir-sub">
         编译结果（{{ preview.family }} · {{ preview.model || '未配置视频模型，按保守能力' }}）
         <el-tag v-if="preview.blocked" type="danger" size="small">有阻断项，不能提交</el-tag>
+        <el-button size="small" link @click="findingsOpen = true">查看提醒（{{ preview.findings.length }}）</el-button>
       </div>
-      <FindingList :findings="preview.findings" show-empty />
       <div v-if="preview.refs.length" class="seg-ir-refs">
         <span v-for="r in preview.refs" :key="r.token" class="seg-ir-ref">{{ r.token }} {{ r.alias }}</span>
       </div>
       <el-input :model-value="preview.prompt" type="textarea" :autosize="{ minRows: 6, maxRows: 18 }" readonly />
     </div>
+    <SegmentFindingsDialog
+      v-model="findingsOpen"
+      :storyboard-id="storyboard.id"
+      :findings="preview?.findings || []"
+      :busy="previewing"
+      @applied="onOptimizeApplied"
+    />
   </div>
 </template>
 
@@ -139,6 +146,7 @@ import { ElMessage } from 'element-plus'
 import { storyboardsAPI } from '@/api/storyboards'
 import { variantsAPI } from '@/api/variants'
 import FindingList from '@/components/FindingList.vue'
+import SegmentFindingsDialog from '@/components/SegmentFindingsDialog.vue'
 import { irToForm, formToIr, newShotForm, newSubjectForm, newLineForm, FACING_OPTIONS, LINE_KINDS } from '@/utils/segmentUi'
 
 const props = defineProps({
@@ -151,14 +159,25 @@ const dirty = ref(false)
 const saving = ref(false)
 const previewing = ref(false)
 const preview = ref(null)
-watch(preview, (value) => emit('preview-blocked', !!value?.blocked))
+const findingsOpen = ref(false)
+watch(preview, (value) => {
+  emit('preview-blocked', !!value?.blocked)
+  // 预览作废后弹窗里不能留着空列表（会被读成「没有发现问题」）
+  if (!value) findingsOpen.value = false
+})
 const saveErrors = ref([])
 const planFindings = ref([])
 const openShots = ref([])
 
+// 父组件会定时刷新分镜、换成内容相同的新对象：只有 IR 内容真的变了，才作废预览。键排序后比较，不依赖序列化顺序
+const canonIr = (ir) => JSON.stringify(ir, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x))
+let lastIr = canonIr(props.storyboard.segment_ir)
 watch(
   () => props.storyboard.segment_ir,
   (ir) => {
+    const now = canonIr(ir)
+    if (now === lastIr) return
+    lastIr = now
     preview.value = null
     if (ir && !dirty.value) form.value = irToForm(ir)
   }
@@ -213,7 +232,10 @@ async function onSave() {
     const sb = await storyboardsAPI.updateSegmentIr(props.storyboard.id, formToIr(form.value))
     planFindings.value = sb?.plan_findings || []
     dirty.value = false
-    if (sb?.segment_ir) form.value = irToForm(sb.segment_ir)
+    if (sb?.segment_ir) {
+      form.value = irToForm(sb.segment_ir)
+      lastIr = canonIr(sb.segment_ir)
+    }
     preview.value = null
     ElMessage.success('结构化分镜已保存')
     emit('saved', sb)
@@ -221,6 +243,22 @@ async function onSave() {
     saveErrors.value = e?.response?.data?.error?.details?.errors || []
   } finally {
     saving.value = false
+  }
+}
+
+async function onOptimizeApplied(sb) {
+  planFindings.value = sb?.plan_findings || []
+  dirty.value = false
+  if (sb?.segment_ir) {
+    form.value = irToForm(sb.segment_ir)
+    lastIr = canonIr(sb.segment_ir)
+  }
+  ElMessage.success('已应用优化，正在重新编译预览')
+  emit('saved', sb)
+  // 重新预览失败时不留着改前的提醒
+  if (!(await onPreview())) {
+    preview.value = null
+    findingsOpen.value = false
   }
 }
 
@@ -232,8 +270,11 @@ async function onPreview() {
   previewing.value = true
   try {
     preview.value = await storyboardsAPI.compilePreview(props.storyboard.id)
+    findingsOpen.value = true
+    return true
   } catch (_) {
     // 错误提示由请求拦截器展示
+    return false
   } finally {
     previewing.value = false
   }

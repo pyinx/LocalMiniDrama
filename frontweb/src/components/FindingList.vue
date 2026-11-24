@@ -5,6 +5,7 @@
         <el-tag :type="findingTag(f).type" size="small" effect="plain">{{ findingTag(f).label }}</el-tag>
         <span class="finding-msg">{{ f.msg }}</span>
         <span v-if="findingWhere(f)" class="finding-where">{{ findingWhere(f) }}</span>
+        <el-tag v-if="markManual && needsManual(f)" size="small" type="info" effect="plain">需手动处理</el-tag>
       </div>
     </div>
   </div>
@@ -13,11 +14,12 @@
 
 <script setup>
 import { computed } from 'vue'
-import { groupFindings, findingTag, findingWhere } from '@/utils/segmentUi'
+import { groupFindings, findingTag, findingWhere, needsManual } from '@/utils/segmentUi'
 
 const props = defineProps({
   findings: { type: Array, default: () => [] },
   showEmpty: { type: Boolean, default: false },
+  markManual: { type: Boolean, default: false },
 })
 const grouped = computed(() => groupFindings(props.findings))
 </script>

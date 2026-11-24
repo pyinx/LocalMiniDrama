@@ -94,6 +94,10 @@ export const storyboardsAPI = {
   compilePreview(id, body = {}) {
     return request.post(`/storyboards/${id}/compile-preview`, body)
   },
+  /** 结构化分镜：让模型按写法类提醒改写，返回提议 ir 与逐处改动，不落库；错误由弹窗自己显示 */
+  optimizePreview(id, body = {}) {
+    return request.post(`/storyboards/${id}/optimize-preview`, body, { showErrorMessage: false })
+  },
   /** 按当前视频模型重新规划本集结构化分镜（拆段、重编号） */
   replanEpisode(episodeId) {
     return request.post(`/episodes/${episodeId}/replan`, {})

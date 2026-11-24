@@ -92,4 +92,20 @@ describe('style sentences (AC38)', () => {
     assert.deepEqual(deriveStyleSentences(ANIME_ZH).findings, []);
     assert.deepEqual(deriveStyleSentences('都市写实摄影，低饱和').findings, []);
   });
+
+  it('does not flag lens and grain effects as a photographic medium', () => {
+    const wuyou =
+      '治愈系田园生活模拟游戏美术风，Switch动物森友会风格融合手工定格动画微缩模型质感，3.5头身微Q版成年卡通比例，哑光手绘黏土与木质手办质感，移轴微距摄影般的浅景深与电影叙事焦点，轻微胶片呼吸感。';
+    assert.deepEqual(deriveStyleSentences(wuyou).findings, []);
+    assert.deepEqual(deriveStyleSentences('胶片颗粒感的赛璐璐动漫风').findings, []);
+  });
+
+  it('still flags real photographic and drawn medium mixes', () => {
+    for (const text of ['超写实摄影风格，日本动漫画风', '胶片摄影风格，手绘插画', '真人写实，赛璐璐上色']) {
+      const findings = deriveStyleSentences(text).findings;
+      assert.equal(findings.length, 1, text);
+      assert.equal(findings[0].code, 'mixed_style_vocabulary');
+      assert.equal(findings[0].level, 'warn');
+    }
+  });
 });

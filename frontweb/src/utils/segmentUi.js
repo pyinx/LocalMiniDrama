@@ -62,6 +62,39 @@ export function findingWhere(f) {
   return parts.join(' · ')
 }
 
+/** 阻断/提醒里不能交给一键优化的条目（fixable 由后端标记）；提示不算 */
+export function needsManual(f) {
+  return !!f && f.fixable !== true && (f.level === 'block' || f.level === 'warn')
+}
+
+/** 弹窗顶部的统计：可一键优化的条数、需手动处理的条数 */
+export function optimizeSummary(findings) {
+  const list = Array.isArray(findings) ? findings : []
+  return { fixable: list.filter((f) => f && f.fixable === true).length, manual: list.filter(needsManual).length }
+}
+
+const FINDING_CODE_NAMES = {
+  pronoun_reference: '代词指人',
+  refers_previous: '承接上一段',
+  fade_to_black: '淡出/黑场',
+  text_or_bgm: '字幕/配乐',
+  image_quality_words: '画质词',
+  fraction_ratio: '分数占比',
+  negation: '否定句',
+  emotion_label: '情绪词',
+}
+
+/** 优化提议的逐处对比：字段名、改前、改后，以及改后仍命中的同类提醒 */
+export function optimizeRows(changes) {
+  return (Array.isArray(changes) ? changes : []).map((c) => ({
+    path: c.path,
+    label: c.label,
+    before: c.before,
+    after: c.after,
+    remaining: (c.remaining || []).map((code) => FINDING_CODE_NAMES[code] || code),
+  }))
+}
+
 const orEmpty = (v) => (v == null ? '' : String(v))
 const orNull = (v) => {
   const s = v == null ? '' : String(v).trim()
