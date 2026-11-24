@@ -1247,7 +1247,7 @@
             <!-- 中：经典模式=分镜参考图；全能模式=片段描述（独立字段，与参考图并存） -->
             <div class="sb-panel sb-image" :class="{ 'sb-image--universal': isSbUniversalMode(sb.id) || !!sb.segment_ir }">
               <template v-if="sb.segment_ir">
-                <SegmentIrPanel :storyboard="sb" @preview-blocked="(blocked) => { previewBlocked[sb.id] = blocked }" @saved="() => refreshStoryboardsForEpisode(currentEpisodeId)" />
+                <SegmentIrPanel :storyboard="sb" @preview-blocked="(blocked) => { previewBlocked[sb.id] = blocked }" @previewed="(done) => { previewDone[sb.id] = done }" @saved="() => refreshStoryboardsForEpisode(currentEpisodeId)" />
               </template>
               <template v-else-if="isSbUniversalMode(sb.id)">
                 <div class="sb-prompt-label sb-universal-label-row">
@@ -6099,6 +6099,8 @@ function sbUniversalSegmentTrimmed(sb) {
 }
 
 const previewBlocked = ref({})
+/** 结构化分镜当前 IR 是否已编译预览（保存或 IR 变化后作废），key 为分镜 id */
+const previewDone = ref({})
 function sbCanSubmitVideo(sb) {
   if (!sb) return false
   if (sb.segment_ir) return !previewBlocked.value[sb.id]
@@ -6452,6 +6454,17 @@ async function onRegenerateLayoutDescription(sb) {
 async function onGenerateSbVideo(sb) {
   const videoSettings = currentVideoSettings.value
   if (!dramaId.value || !sb?.id || !sbCanSubmitVideo(sb)) return
+  if (sb.segment_ir && !previewDone.value[sb.id]) {
+    try {
+      await ElMessageBox.confirm(
+        '这个分镜还没有编译预览。建议先点「编译预览」，生成前确认最终提示词和提醒，避免白白消耗视频额度。也可以直接继续生成。',
+        '建议先编译预览',
+        { confirmButtonText: '继续生成', cancelButtonText: '先去预览', type: 'warning' }
+      )
+    } catch {
+      return
+    }
+  }
   const universal = isSbUniversalMode(sb.id)
   let universalOmniApi = universal
   const videoCfg = await getActiveVideoAiConfig()

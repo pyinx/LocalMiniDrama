@@ -141,7 +141,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storyboardsAPI } from '@/api/storyboards'
 import { variantsAPI } from '@/api/variants'
@@ -152,7 +152,7 @@ import { irToForm, formToIr, newShotForm, newSubjectForm, newLineForm, FACING_OP
 const props = defineProps({
   storyboard: { type: Object, required: true },
 })
-const emit = defineEmits(['saved', 'preview-blocked'])
+const emit = defineEmits(['saved', 'preview-blocked', 'previewed'])
 
 const form = ref(irToForm(props.storyboard.segment_ir))
 const dirty = ref(false)
@@ -162,9 +162,12 @@ const preview = ref(null)
 const findingsOpen = ref(false)
 watch(preview, (value) => {
   emit('preview-blocked', !!value?.blocked)
+  emit('previewed', !!value)
   // 预览作废后弹窗里不能留着空列表（会被读成「没有发现问题」）
   if (!value) findingsOpen.value = false
 })
+// 面板重建后预览已丢，不能让父组件还记着「已预览」
+onBeforeUnmount(() => emit('previewed', false))
 const saveErrors = ref([])
 const planFindings = ref([])
 const openShots = ref([])
@@ -294,7 +297,9 @@ async function onPreview() {
 .seg-ir-row--line { grid-template-columns: 0.8fr 0.9fr 2.4fr 0.9fr auto; }
 .seg-ir-cast-name { font-size: 12px; align-self: center; }
 .seg-ir-sub { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; display: flex; gap: 6px; align-items: center; }
-.seg-ir-shot-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Element Plus 的标题容器 flex:auto 且 min-width:auto，不放开就会被长文本撑出面板；span 须为 block，省略号才生效 */
+.seg-ir-shots :deep(.el-collapse-item__title) { min-width: 0; }
+.seg-ir-shot-title { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seg-ir-shot-ops { display: flex; gap: 8px; justify-content: flex-end; }
 .seg-ir-errors { font-size: 12px; color: var(--el-color-danger); }
 .seg-ir-preview { display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--el-border-color); padding-top: 6px; }
