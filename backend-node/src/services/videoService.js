@@ -47,14 +47,15 @@ function list(db, query) {
   const pageSize = Math.min(100, Math.max(1, parseInt(query.page_size, 10) || 20));
   const offset = (page - 1) * pageSize;
   const rows = db.prepare('SELECT * ' + sql + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params, pageSize, offset);
-  return { items: rows.map(rowToItem), total, page, pageSize };
+  const drift = takeDrift.deriveDrift(db, rows);
+  return { items: rows.map((r) => rowToItem(r, drift.get(r.id))), total, page, pageSize };
 }
 
 function hasProviderTaskId(r) {
   return !!(r && r.provider_task_id && String(r.provider_task_id).trim());
 }
 
-function rowToItem(r) {
+function rowToItem(r, assetDrift) {
   return {
     id: r.id,
     storyboard_id: r.storyboard_id,
@@ -67,6 +68,7 @@ function rowToItem(r) {
     resolution: r.resolution,
     media_check: parseMediaCheck(r),
     eligible_for_automatic_use: takeEligibility(r),
+    asset_drift: assetDrift,
     image_gen_id: r.image_gen_id,
     image_url: r.image_url,
     video_url: r.video_url,
@@ -85,7 +87,7 @@ function rowToItem(r) {
 
 function getById(db, id) {
   const r = db.prepare('SELECT * FROM video_generations WHERE id = ? AND deleted_at IS NULL').get(Number(id));
-  return r ? rowToItem(r) : null;
+  return r ? rowToItem(r, takeDrift.deriveDrift(db, [r]).get(r.id)) : null;
 }
 
 const fs = require('fs');
@@ -97,6 +99,7 @@ const taskService = require('./taskService');
 const { ipv4Request, formatNetError } = require('../utils/ipv4Http');
 const storageLayout = require('./storageLayout');
 const { parseMediaCheck, takeEligibility } = require('./workbenchTakeService');
+const takeDrift = require('./takeDrift');
 const { inspectGeneratedTake } = require('./mediaDiagnostics');
 const { WAN_LEGACY_KEYFRAME_MODEL } = require('./modelCapabilities');
 const { getFfmpegPath, hasLocalFfmpeg } = require('../utils/ffmpegPath');
@@ -273,6 +276,9 @@ async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, o
         source_resolution: nativeWanSize ? output.source_resolution : undefined,
         resolution_by_area: Boolean(nativeWanSize),
       });
+      if (mediaCheck.anomalies?.status === 'unavailable') {
+        log.warn('Video anomaly scan unavailable', { id: videoGenId, message: mediaCheck.anomalies.message });
+      }
     }
     // Preserve native Wan dimensions and keep rejected sources available for review.
     if (!nativeWanSize && takeEligibility({ media_check: mediaCheck })) {

@@ -58,6 +58,23 @@ export function isAutomaticallyUsableVideo(record) {
   return !isMediaCheckFailure(record)
 }
 
+const ANOMALY_LABELS = { black: '黑屏', frozen: '画面冻结' }
+
+/** 生成后扫描记录的画面异常，仅供回看；与 isMediaCheckFailure 无关，不影响片是否可自动使用 */
+export function mediaAnomalyNotes(record) {
+  const anomalies = record?.media_check?.anomalies
+  if (anomalies?.status !== 'flagged' || !Array.isArray(anomalies.items)) return []
+  const seconds = (value) => Number(value).toFixed(1)
+  return anomalies.items.map(item => `${ANOMALY_LABELS[item?.kind] || '画面异常'} ${seconds(item?.start_s)}–${seconds(item?.end_s)} 秒`)
+}
+
+/** 片当时用的资产图已被换掉：列出变更的资产；current、unknown、没有该字段时为空 */
+export function assetDriftNote(record) {
+  const drift = record?.asset_drift
+  if (drift?.status !== 'stale' || !Array.isArray(drift.changed) || !drift.changed.length) return ''
+  return '素材已变更：' + drift.changed.map(item => item?.alias).filter(Boolean).join('、')
+}
+
 /** 首帧图记录（与 FilmCreate.getSbFirstImage 一致） */
 export function resolveSbFirstImageRecord(sb, imagesBySbId) {
   if (!sb) return null

@@ -1560,6 +1560,7 @@
               <el-button v-if="sb.resolved_video || getSbAllVideos(sb.id).length || sb.adopted_video_generation_id" size="small" @click="reviewBoard = sb">
                 {{ sb.adopted_video_generation_id ? '已采用 #' + sb.adopted_video_generation_id + ' · 审片' : '选择采用版与审片' }}
               </el-button>
+              <el-tag v-if="sbCurrentVideoDriftNote(sb)" size="small" type="warning">{{ sbCurrentVideoDriftNote(sb) }}</el-tag>
               <el-button v-if="sb.resolved_video && getNextStoryboard(sb.id)" size="small" link @click="seamEditor?.open(sb.id)">与下一镜对听</el-button>
               <!-- 视频历史条：有多条历史时显示，点击可切换 -->
               <div v-if="getVideoStripItems(sb.id).length" class="sb-videos-strip">
@@ -2710,7 +2711,7 @@
 
 <script setup>
 import { previousStoryboard, previousTakeUrl } from '@/utils/mediaUrl'
-import { characterReference, isAutomaticallyUsableVideo, isMediaCheckFailure, mediaCheckIssueMessages, omniReferenceUrls } from '@/utils/storyboardMedia'
+import { assetDriftNote, characterReference, isAutomaticallyUsableVideo, isMediaCheckFailure, mediaCheckIssueMessages, omniReferenceUrls } from '@/utils/storyboardMedia'
 import TakeReviewDialog from '@/components/TakeReviewDialog.vue'
 import DeliveryLoudness from '@/components/DeliveryLoudness.vue'
 import EpisodeSeamEditor from '@/components/EpisodeSeamEditor.vue'
@@ -3804,6 +3805,10 @@ function getVideoById(storyboardId, id) {
 function qualityFailureMessage(...records) {
   const failed = records.find(isMediaCheckFailure)
   return failed ? mediaCheckIssueMessages(failed).join('；') : ''
+}
+/** 当前片（采用片或解析出的片）的素材是否已变更；旧片没有 id 或没有该字段时为空 */
+function sbCurrentVideoDriftNote(sb) {
+  return assetDriftNote(getVideoById(sb.id, sb.resolved_video?.id))
 }
 /** 各播放入口使用服务器解析出的采用片。 */
 function getSbVideo(storyboardId) {

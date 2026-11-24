@@ -62,3 +62,40 @@ test('unrelated errors, concurrent edits and another rejection never trigger an 
     assert.equal(reviews, stage === 'submit' ? 0 : 1)
   }
 })
+
+test('anomaly notes are informational and never fail a take', async () => {
+  const { isAutomaticallyUsableVideo, isMediaCheckFailure, mediaAnomalyNotes, mediaCheckIssueMessages } = await import('../src/utils/storyboardMedia.js')
+  const items = [
+    { kind: 'black', start_s: 3.5, end_s: 4.7, duration_s: 1.2 },
+    { kind: 'frozen', start_s: 1.5, end_s: 3.5, duration_s: 2 },
+  ]
+  const flagged = { eligible_for_automatic_use: true, media_check: { status: 'passed', issues: [], anomalies: { status: 'flagged', items } } }
+  assert.deepEqual(mediaAnomalyNotes(flagged), ['黑屏 3.5–4.7 秒', '画面冻结 1.5–3.5 秒'])
+  assert.equal(isMediaCheckFailure(flagged), false)
+  assert.equal(isAutomaticallyUsableVideo(flagged), true)
+  assert.deepEqual(mediaCheckIssueMessages(flagged), [])
+
+  // 规格失败的片：失败原因只来自 issues，扫描提示另列
+  const failed = { eligible_for_automatic_use: false, media_check: { status: 'failed', issues: [{ code: 'duration_short', message: '时长不足' }], anomalies: { status: 'flagged', items } } }
+  assert.deepEqual(mediaCheckIssueMessages(failed), ['时长不足'])
+  assert.equal(mediaAnomalyNotes(failed).length, 2)
+
+  // passed、unavailable、没有该字段、没有 media_check 都不显示
+  for (const record of [
+    { media_check: { status: 'passed', issues: [], anomalies: { status: 'passed', items: [] } } },
+    { media_check: { status: 'passed', issues: [], anomalies: { status: 'unavailable', items: [], message: '缺少 FFmpeg' } } },
+    { media_check: { status: 'passed', issues: [] } },
+    { media_check: null }, null, undefined,
+  ]) assert.deepEqual(mediaAnomalyNotes(record), [])
+})
+
+test('drift note names the changed assets and stays silent otherwise', async () => {
+  const { assetDriftNote } = await import('../src/utils/storyboardMedia.js')
+  assert.equal(assetDriftNote({ asset_drift: { status: 'stale', changed: [{ alias: '林远', kind: 'character' }, { alias: '会议室', kind: 'scene' }] } }), '素材已变更：林远、会议室')
+  for (const record of [
+    { asset_drift: { status: 'current', changed: [] } },
+    { asset_drift: { status: 'unknown', changed: [] } },
+    { asset_drift: { status: 'stale', changed: [] } },
+    {}, null, undefined,
+  ]) assert.equal(assetDriftNote(record), '')
+})

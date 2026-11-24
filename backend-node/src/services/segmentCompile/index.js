@@ -60,7 +60,11 @@ function compileSegment(ir, ctx) {
     const crowd = !!(ch.is_group || c.group);
     const kind = crowd ? 'crowd' : 'character';
     if (url) candidates.push({ alias: c.alias, name: names[c.alias], kind, url, priority: crowd ? PRIORITY.crowd : ch.role === 'main' ? PRIORITY.lead : PRIORITY.character, order });
-    else if (!firstLast) add('warn', 'no_reference_image', `「${c.alias}」还没有参考图，只能用文字指代`, { alias: c.alias });
+    else if (!firstLast) {
+      // 主角没有参考图就提交，会让他的长相每次不同，而这一步是付费的：阻断。其余角色只能用文字指代，仍是警告。
+      if (ch.role === 'main' && !crowd) add('block', 'no_reference_image', `主角「${c.alias}」还没有参考图，视频里这个角色的长相每次都会不同；请先生成角色图`, { alias: c.alias });
+      else add('warn', 'no_reference_image', `「${c.alias}」还没有参考图，只能用文字指代`, { alias: c.alias });
+    }
   });
 
   const scene = b.scenes[ir.scene.scene_id];
@@ -196,6 +200,8 @@ function compileSegment(ir, ctx) {
     family,
     prompt,
     refs: refs.map(({ alias, url, kind, token }) => ({ alias, url, kind, token })),
+    // 参考图被模型上限裁剪之前，本段现在绑定的资产图（不含上一段尾帧）；用来判断已生成的片是否过期
+    assets: candidates.filter((r) => r.kind !== 'tail_frame').map(({ alias, kind, url }) => ({ alias, kind, url })),
     duration_s: ir.duration_s,
     request,
     findings,

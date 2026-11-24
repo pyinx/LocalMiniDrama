@@ -22,9 +22,65 @@ function resolutionTier(resolution) {
   return match ? Number(match[1]) : null;
 }
 
-// Inspect the provider's downloaded source before any canvas normalization. This
-// deliberately measures metadata only: a padded derivative must not hide the
-// dimensions or duration the provider actually returned.
+// Starting values, not calibrated: a fade or a held close-up trips them, so the scan only
+// records intervals for the reviewer and never feeds eligibility (see `anomalies` below).
+const BLACK_MIN_S = 0.5;
+const FREEZE_MIN_S = 1.0;
+const ANOMALY_MAX_ITEMS = 20;
+const SCAN_TIMEOUT_MS = 30000;
+
+const round3 = n => Math.round(n * 1000) / 1000;
+
+// freezedetect prints only freeze_start when the picture is still frozen at the end of the
+// stream, so an open interval is closed at the clip's end.
+// Only lines the filters themselves print count: the log also echoes the clip's own metadata,
+// which is untrusted and could spell out a detection.
+function parseAnomalies(log, duration) {
+  const items = [];
+  for (const m of log.matchAll(/^\[Parsed_blackdetect_\d+ @ [^\]]*\]\s*black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/gm)) {
+    items.push({ kind: 'black', start_s: round3(Number(m[1])), end_s: round3(Number(m[2])), duration_s: round3(Number(m[3])) });
+  }
+  let open = null;
+  for (const m of log.matchAll(/^\[Parsed_freezedetect_\d+ @ [^\]]*\]\s*lavfi\.freezedetect\.freeze_(start|end):\s*([\d.]+)/gm)) {
+    const at = Number(m[2]);
+    if (m[1] === 'start') open = at;
+    else if (open != null) {
+      items.push({ kind: 'frozen', start_s: round3(open), end_s: round3(at), duration_s: round3(at - open) });
+      open = null;
+    }
+  }
+  if (open != null && duration > open) {
+    items.push({ kind: 'frozen', start_s: round3(open), end_s: round3(duration), duration_s: round3(duration - open) });
+  }
+  const long = items.filter(i => i.duration_s >= (i.kind === 'black' ? BLACK_MIN_S : FREEZE_MIN_S));
+  // A black screen is also a frozen one; report it once, as black.
+  const blacks = long.filter(i => i.kind === 'black');
+  const slack = 0.1;
+  return long.filter(i => i.kind === 'black' || !blacks.some(b => i.start_s >= b.start_s - slack && i.end_s <= b.end_s + slack))
+    .sort((a, b) => a.start_s - b.start_s).slice(0, ANOMALY_MAX_ITEMS);
+}
+
+// Never throws: a failed scan must not fail the take or touch its spec check.
+async function scanAnomalies(file, stream, duration) {
+  const checkedAt = new Date().toISOString();
+  try {
+    const filter = `blackdetect=d=${BLACK_MIN_S}:pix_th=0.10,freezedetect=n=-60dB:d=${FREEZE_MIN_S}`;
+    const { stderr } = await execFile(getFfmpegPath(), ['-nostdin', '-hide_banner', '-nostats', '-v', 'info', ...localInput,
+      '-i', file, '-map', '0:' + stream.index, '-an', '-vf', filter, '-f', 'null', '-'],
+      { timeout: SCAN_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true });
+    const items = parseAnomalies(stderr, duration);
+    return { status: items.length ? 'flagged' : 'passed', checked_at: checkedAt, items };
+  } catch (err) {
+    const message = err.code === 'ENOENT' ? '缺少 FFmpeg' :
+      /No such filter|Option not found|Filter not found/i.test(err.stderr || '') ? '当前 FFmpeg 缺少黑屏或冻结检测滤镜' :
+      err.killed ? '画面扫描超时' : '无法解码视频以扫描画面';
+    return { status: 'unavailable', checked_at: checkedAt, items: [], message };
+  }
+}
+
+// Inspect the provider's downloaded source before any canvas normalization. The spec check
+// deliberately measures metadata only: a padded derivative must not hide the dimensions or
+// duration the provider actually returned. `anomalies` is a separate, advisory record.
 async function inspectGeneratedTake(file, expected = {}) {
   try {
     const media = await probe(file);
@@ -33,7 +89,8 @@ async function inspectGeneratedTake(file, expected = {}) {
     const height = Number(stream?.height) || null;
     const duration = Number(stream?.duration) || Number(media.format?.duration) || null;
     if (!stream || !width || !height || !Number.isFinite(duration) || duration <= 0) {
-      return { status: 'unavailable', checked_at: new Date().toISOString(), issues: [], message: '原始视频尺寸或时长不可读取' };
+      const message = '原始视频尺寸或时长不可读取';
+      return { status: 'unavailable', checked_at: new Date().toISOString(), issues: [], anomalies: { status: 'unavailable', items: [], message }, message };
     }
     const rotation = Number(stream.side_data_list?.find(s => s.rotation != null)?.rotation ?? stream.tags?.rotate ?? 0);
     const sideways = Math.abs(rotation % 180) === 90;
@@ -78,9 +135,11 @@ async function inspectGeneratedTake(file, expected = {}) {
           message: `有效画面画幅不符：期望 ${expected.aspect_ratio}，多处采样的有效画面约为 ${rect.w}×${rect.h}` });
       }
     }
-    return { status: issues.length ? 'failed' : 'passed', checked_at: new Date().toISOString(), ...actual, issues };
+    const anomalies = await scanAnomalies(file, stream, duration);
+    return { status: issues.length ? 'failed' : 'passed', checked_at: new Date().toISOString(), ...actual, issues, anomalies };
   } catch (err) {
-    return { status: 'unavailable', checked_at: new Date().toISOString(), issues: [], message: err.code === 'ENOENT' ? '缺少 FFmpeg 或 ffprobe' : '无法读取原始视频信息' };
+    const message = err.code === 'ENOENT' ? '缺少 FFmpeg 或 ffprobe' : '无法读取原始视频信息';
+    return { status: 'unavailable', checked_at: new Date().toISOString(), issues: [], anomalies: { status: 'unavailable', items: [], message }, message };
   }
 }
 

@@ -139,6 +139,7 @@ function details(db, sbId) {
   const rows = candidates(db, sbId);
   const selection = selectionFields(db, sb, rows);
   const current = selection.resolved_video;
+  const drift = require('./takeDrift').deriveDrift(db, rows);
   return {
     ...selection,
     can_register_legacy: Boolean(current && current.id == null && !rows.some(v => sameMedia(current, publicMedia(v)))),
@@ -146,6 +147,7 @@ function details(db, sbId) {
       ...publicMedia(v), model: v.model, created_at: v.created_at, keep_in_archive: !!v.keep_in_archive,
       media_check: parseMediaCheck(v),
       eligible_for_automatic_use: takeEligibility(v),
+      asset_drift: drift.get(v.id),
       reviews: reviews(db, v.id),
     })),
   };

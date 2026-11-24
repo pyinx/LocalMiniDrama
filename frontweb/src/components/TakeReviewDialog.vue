@@ -11,6 +11,10 @@
         <el-alert v-if="qualityIssues.length" title="质量检查发现问题。候选仍保留，可预览后手动采用。" type="warning" :closable="false" show-icon>
           <ul class="quality-issues"><li v-for="(issue, index) in qualityIssues" :key="index">{{ issue }}</li></ul>
         </el-alert>
+        <el-alert v-if="anomalyNotes.length" title="画面扫描发现可能的问题，仅供回看，不影响采用。" type="info" :closable="false" show-icon>
+          <ul class="quality-issues"><li v-for="(note, index) in anomalyNotes" :key="index">{{ note }}</li></ul>
+        </el-alert>
+        <el-alert v-if="driftNote" :title="driftNote + '。候选仍可采用；要用新图，请重拍本镜。'" type="warning" :closable="false" show-icon />
         <video ref="player" :key="candidate.id" :src="videoRecordUrl(candidate)" controls preload="metadata" class="take-player" />
         <MediaMeasurement :key="candidate.id" :id="candidate.id" :board-id="board.id" @seek="seekSample" />
         <el-button size="small" :disabled="busy || candidate.id === state.adopted_video_generation_id" @click="adopt">采用此版</el-button>
@@ -44,7 +48,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storyboardsAPI } from '@/api/storyboards'
-import { mediaCheckIssueMessages, videoRecordUrl } from '@/utils/storyboardMedia'
+import { assetDriftNote, mediaAnomalyNotes, mediaCheckIssueMessages, videoRecordUrl } from '@/utils/storyboardMedia'
 import MediaMeasurement from './MediaMeasurement.vue'
 const props = defineProps({ board: Object, episodeNumber: Number })
 const emit = defineEmits(['close', 'selection', 'revise', 'reshoot'])
@@ -53,6 +57,8 @@ const state = ref({ candidates: [] }), selected = ref(null), player = ref(null)
 const busy = ref(false), seconds = ref(0), note = ref(''), action = ref('revise')
 const candidate = computed(() => state.value.candidates.find(v => v.id === selected.value))
 const qualityIssues = computed(() => mediaCheckIssueMessages(candidate.value))
+const anomalyNotes = computed(() => mediaAnomalyNotes(candidate.value))
+const driftNote = computed(() => assetDriftNote(candidate.value))
 watch(selected, () => { seconds.value = 0; note.value = '' })
 function seekSample(time) {
   if (player.value) player.value.currentTime = time
