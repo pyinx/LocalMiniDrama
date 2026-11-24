@@ -860,10 +860,10 @@
           <el-checkbox v-model="storyboardUseFirstLastFrame" @change="onStoryboardUseFirstLastFrameChange">
             首尾帧参考图（经典模式双槽；图生前先走专业帧提示词模块 first/last，再生图；视频绑定 first/last_frame_url）
           </el-checkbox>
-          <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings()">
+          <el-checkbox v-model="storyboardUniversalOmni" :disabled="storyboardStructured" @change="(v) => onStoryboardModeChange('omni', v)">
             全能分镜模式（每镜输出多子分镜段落式 universal_segment_text，与「生成/润色全能提示词」同版式）
           </el-checkbox>
-          <el-checkbox v-model="storyboardStructured" @change="() => saveProjectSettings()">
+          <el-checkbox v-model="storyboardStructured" :disabled="storyboardUniversalOmni" @change="(v) => onStoryboardModeChange('structured', v)">
             结构化分镜（推荐：生成时输出镜头结构，生视频时按所选视频模型自动编译提示词与参考图，提交前可预览检查）
           </el-checkbox>
           <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings()">
@@ -3687,6 +3687,15 @@ function onStoryboardUseFirstLastFrameChange() {
   saveProjectSettings()
 }
 
+/** 分镜生成模式互斥：全能分镜 与 结构化分镜 后端走不同服务，不能同时生效 */
+function onStoryboardModeChange(which, checked) {
+  if (checked) {
+    if (which === 'omni') storyboardStructured.value = false
+    else if (which === 'structured') storyboardUniversalOmni.value = false
+  }
+  saveProjectSettings()
+}
+
 function uploadingSbImageSlot(sbId) {
   return sbImageUploadSlotById.value[sbId] || null
 }
@@ -4687,6 +4696,10 @@ async function loadDrama() {
     storyboardIncludeNarration.value = !!(d.metadata && d.metadata.storyboard_include_narration)
     storyboardUniversalOmni.value = !!(d.metadata && d.metadata.storyboard_universal_omni)
     storyboardStructured.value = !!(d.metadata && d.metadata.storyboard_structured)
+    // 旧项目可能同时存储了两个 true（后端曾允许并存），加载时归一化：结构化优先于全能
+    if (storyboardUniversalOmni.value && storyboardStructured.value) {
+      storyboardUniversalOmni.value = false
+    }
     storyboardUseFirstLastFrame.value = !!(d.metadata && d.metadata.storyboard_use_first_last_frame)
     lastFrameUseFirstLayoutLock.value = d.metadata?.last_frame_use_first_layout_lock !== false
     if (storyboardUseFirstLastFrame.value && gridMode.value !== 'single') {
