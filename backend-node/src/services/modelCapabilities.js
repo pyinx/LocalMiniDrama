@@ -4,7 +4,6 @@
  *
  * 来源：
  * - 火山方舟 Seedance、MiniMax H3、DashScope Wan 的时长/参考图数：原 videoClient 中已在用的常量
- * - 即梦（jimeng-novel）各模型：`jimeng-novel model describe` 实测（即梦能力报告 §4.4）
  * - Seedance 2.x 原生人声：即梦能力报告 §0（同一模型族）
  * 查不到依据的字段列入 unknownFields 并取保守值（未知的原生人声一律按非原生处理）。
  */
@@ -157,29 +156,6 @@ const ENTRIES = [
     },
     unknownFields: ['maxPromptChars'],
   },
-  ...[
-    ['Seedance_2.5', 4, 30, 30, 15000, true],
-    ['Seedance_2.5_flash', 4, 30, 10, 15000, true],
-    ['Seedance_2.5_draft', 4, 30, 30, 15000, true],
-    ['seedance2.0_vision', 4, 15, 9, 5000, true],
-    ['seedance2.0_fast_vision', 4, 15, 9, 5000, true],
-    ['Seedance_2.0_mini', 4, 15, 9, 5000, false],
-    ['wan3.0', 4, 30, 10, 20000, true],
-    ['happyhorse-1.1', 3, 15, 9, 5000, false],
-  ].map(([id, min, max, refImages, maxPromptChars, firstLastFrame]) => ({
-    protocols: new Set(['jimeng_novel']),
-    match: (_m, raw) => raw === id,
-    caps: {
-      family: 'jimeng',
-      duration: { min, max, step: 1 },
-      refImages,
-      maxPromptChars,
-      ratios: STANDARD_RATIOS,
-      firstLastFrame,
-      nativeAudio: /seedance/i.test(id),
-    },
-    unknownFields: /seedance/i.test(id) ? [] : ['nativeAudio'],
-  })),
 ];
 
 function clone(caps) {

@@ -8,11 +8,9 @@ const { WAN_LEGACY_KEYFRAME_MODEL, promptChars } = require('../services/modelCap
 const { prepareWanVideo, localImagePath } = require('../services/wanVideoRequest');
 const { beatSignature, universalDraftWithoutActionNote } = require('../services/universalOmniMultiBeatFormat');
 const { storageRoot: resolveStorageRoot, filesBaseUrl } = require('../utils/storagePaths');
-const jimengRenderer = require('../services/jimeng/renderer');
 
 const segmentCompileService = require('../services/segmentCompileService');
 
-const JIMENG_CONFLICT = new Set(['confirmation_required', 'confirmation_consumed', 'confirmation_stale', 'generation_in_progress']);
 const operationConflict = res => response.error(res, 409, 'VIDEO_OPERATION_CONFLICT', '原提交内容已变化或记录已删除，请核查后重新发起');
 
 function resolveOperation(db, key, dramaId, storyboardId, storageRoot) {
@@ -59,7 +57,6 @@ function routes(db, log, cfg) {
       }
     },
     create: async (req, res) => {
-      let isJimeng = false;
       try {
         const body = req.body || {};
         const now = new Date().toISOString();
@@ -80,14 +77,6 @@ function routes(db, log, cfg) {
         const target = resolveVideoTarget(db, body.model || undefined);
         const compiledIr = compileForRequest(db, res, storyboardId, target);
         if (compiledIr === false) return;
-        isJimeng = compiledIr?.target.protocol === jimengRenderer.PROTOCOL;
-        if (isJimeng) {
-          const st = await jimengRenderer.status(db);
-          if (!st.available) return response.error(res, 503, 'jimeng_unavailable', st.message, { reason: st.reason });
-        }
-        if (!compiledIr && target.protocol === jimengRenderer.PROTOCOL) {
-          return response.error(res, 422, 'jimeng_requires_structured', '即梦渲染只支持结构化分镜，请先用「结构化分镜」重新生成本集分镜');
-        }
         const provider = target.config?.provider || body.provider || 'chatfire';
         const board = storyboardId && db.prepare('SELECT s.duration,s.dialogue,s.narration,s.action,s.result,s.universal_segment_text,s.universal_beat_signature,s.creation_mode,s.adopted_sound FROM storyboards s JOIN episodes e ON e.id=s.episode_id WHERE s.id=? AND e.drama_id=? AND s.deleted_at IS NULL AND e.deleted_at IS NULL').get(storyboardId, dramaId);
         let prompt = body.prompt || '';
@@ -242,10 +231,6 @@ function routes(db, log, cfg) {
             if (existing) {
               if (!planned && existing.video_request_hash) {
                 if (existing.video_request_hash !== requestHash) return { conflict: true };
-              } else if (!planned && isJimeng) {
-                const quote = db.prepare('SELECT items FROM jimeng_confirmations WHERE token=?').get(String(body.jimeng_confirmation || ''));
-                const node = quote && JSON.parse(quote.items).find(item => item.storyboard_id === storyboardId);
-                if (!node || existing.provider !== jimengRenderer.PROTOCOL || existing.provider_task_id !== node.key || existing.model !== compiledIr.target.model) return { conflict: true };
               } else if (!planned) {
                 const inputs = { prompt, style_negative: styleNegative, duration, aspect_ratio: aspectRatio, resolution, seed,
                   camera_fixed: cameraFixed, watermark, image_url: imageUrl, first_frame_url: firstFrameUrl,
@@ -257,11 +242,6 @@ function routes(db, log, cfg) {
             }
           }
           if (incompatibility) return { incompatibility };
-          if (isJimeng) {
-            const id = jimengRenderer.prepareSubmit(db, log, storyboardId, body.jimeng_confirmation, { model: body.model || undefined });
-            if (operation) db.prepare('UPDATE video_generations SET operation_key=? WHERE id=?').run(operation, id);
-            return { id };
-          }
           const task = taskService.createTask(db, log, 'video_generation', String(dramaId));
           const inserted = db.prepare(
             `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, style_negative, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, compiled_json, video_config_id, video_protocol, video_target_hash, video_request_hash, status, task_id, created_at, updated_at, operation_key, dispatch_state)
@@ -271,17 +251,11 @@ function routes(db, log, cfg) {
         }).immediate();
         if (result.conflict) return operationConflict(res);
         if (result.incompatibility) return response.error(res, 422, 'video_model_incompatible', result.incompatibility);
-        if (!result.reused) setImmediate(() => {
-          if (isJimeng) return jimengRenderer.runSubmitted(db, log, result.id).catch(err => log.error('jimeng runSubmitted', { id: result.id, error: err.message }));
-          videoService.processVideoGeneration(db, log, result.id);
-        });
+        if (!result.reused) setImmediate(() => videoService.processVideoGeneration(db, log, result.id));
         const item = result.legacy || videoService.getById(db, result.id);
         if (result.reused) return response.success(res, item);
         response.created(res, item);
       } catch (err) {
-        if (isJimeng && JIMENG_CONFLICT.has(err.code)) return response.error(res, 409, err.code, err.message, err.video_generation_id ? { video_generation_id: err.video_generation_id } : undefined);
-        if (isJimeng && err.code === 'segment_compile_blocked') return response.error(res, 422, err.code, err.message, { findings: err.findings });
-        if (isJimeng && err.code && !err.code.startsWith('SQLITE_')) return response.error(res, 422, err.code, err.message);
         log.error('videos create', { error: err.message });
         response.internalError(res, err.message);
       }

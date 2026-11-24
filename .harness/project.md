@@ -18,7 +18,6 @@ The harness runs these; it never guesses them. Leave a value empty to disable th
 | `lint` | | |
 | `typecheck` | | |
 | `build` | `cd frontweb && npm run build` | |
-| `test:live` | `cd backend-node && JIMENG_LIVE=1 node --test test/live/*.live.test.js` | 真实调用即梦免费路径（会建并删除测试画布），不在 `test` 中 |
 | `run` | `cd backend-node && npm run dev` | frontend dev server: `cd frontweb && npm run dev` |
 | `e2e` | | end-to-end tests against a running app |
 | `coverage` | | must exit 0 and print a total line (`TOTAL … N%` or istanbul's `All files` row), checked against `coverage-floor` |

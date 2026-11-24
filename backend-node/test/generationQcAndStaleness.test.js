@@ -360,10 +360,10 @@ test('regenerated or rebound assets make a take stale', () => {
 test('cases without comparable refs are unknown', () => {
   const { db, ids } = driftWorld();
   const unknown = { status: 'unknown', changed: [] };
-  // 旧片：没有 compiled_json / 无法解析 / 即梦形状没有 refs / 首尾帧模式 refs 为空
+  // 旧片：没有 compiled_json / 无法解析 / 没有 refs 字段 / 首尾帧模式 refs 为空
   assert.deepEqual(driftOf(db, addTake(db, ids, { compiledJson: null })), unknown);
   assert.deepEqual(driftOf(db, addTake(db, ids, { compiledJson: 'not json' })), unknown);
-  assert.deepEqual(driftOf(db, addTake(db, ids, { compiledJson: JSON.stringify({ family: 'jimeng', protocol: 'jimeng_novel', request: {} }) })), unknown);
+  assert.deepEqual(driftOf(db, addTake(db, ids, { compiledJson: JSON.stringify({ family: 'seedance', protocol: 'volcengine_omni', request: {} }) })), unknown);
   assert.deepEqual(driftOf(db, addTake(db, ids, { mutateCompiled: b => ({ ...b, refs: [] }) })), unknown);
   // 只剩尾帧参考，也没有可比较的资产
   assert.deepEqual(driftOf(db, addTake(db, ids, { mutateCompiled: b => ({ ...b, refs: [{ alias: '上一段尾帧', kind: 'tail_frame', url: 'http://a/tail.png', token: '@图片1' }] }) })), unknown);

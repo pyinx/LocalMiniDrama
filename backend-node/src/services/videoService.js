@@ -364,8 +364,8 @@ function generationTarget(db, row) {
   return videoClient.resolveStoredVideoTarget(db, row);
 }
 
-function failMissingTarget(db, row) {
-  const error = row.video_config_id != null ? '提交时的视频配置或模型已停用、删除或变更，请恢复原配置或重新生成' : '未配置视频模型';
+function failMissingTarget(db, row, reason) {
+  const error = reason || (row.video_config_id != null ? '提交时的视频配置或模型已停用、删除或变更，请恢复原配置或重新生成' : '未配置视频模型');
   setVideoGenFailed(db, row.id, error, new Date().toISOString());
   if (row.task_id) taskService.updateTaskError(db, row.task_id, error);
 }
@@ -382,22 +382,14 @@ async function resumePollForVideoGeneration(db, log, videoGenId) {
   if (!row || row.status !== 'processing') return;
   const providerTaskId = row.provider_task_id && String(row.provider_task_id).trim();
   if (!providerTaskId) return;
-  if (row.provider === 'jimeng_novel') {
-    // 即梦：只查不重提（provider_task_id 是节点 key，提交前已写入）
-    activeVideoPolls.add(videoGenId);
-    try {
-      await require('./jimeng/renderer').poll(db, log, videoGenId);
-    } catch (err) {
-      log.error('jimeng resume poll error', { id: videoGenId, error: err.message });
-    } finally {
-      activeVideoPolls.delete(videoGenId);
-    }
-    return;
-  }
-
   const target = generationTarget(db, row);
   if (!target?.config) {
     failMissingTarget(db, row);
+    return;
+  }
+  const baseUrl = String(target.config.base_url || '').trim();
+  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+    failMissingTarget(db, row, '视频配置的 Base URL 不是有效的网络地址，无法继续查询，请检查 AI 配置后重新生成');
     return;
   }
 

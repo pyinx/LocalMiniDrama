@@ -72,7 +72,7 @@ function lintSegment(ir, compiled, caps) {
       findings.push({ level: 'block', code: 'too_many_references', where: {}, msg: `参考图 ${compiled.refs.length} 张超过上限 ${caps.refImages}` });
     }
     const bound = new Set(compiled.refs.map((r) => r.token));
-    const tokenRe = compiled.family === 'jimeng' ? /\{\{[^}]+\}\}/g : new RegExp((caps.refToken || '@图片') + '\\d+', 'g');
+    const tokenRe = new RegExp((caps.refToken || '@图片') + '\\d+', 'g');
     for (const m of compiled.prompt.matchAll(tokenRe)) {
       if (!bound.has(m[0])) findings.push({ level: 'block', code: 'alias_unbound', where: { index: m.index, match: m[0] }, msg: `${m[0]} 没有对应的参考图` });
     }

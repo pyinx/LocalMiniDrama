@@ -373,7 +373,6 @@
             <el-option label="可灵 Omni-Video（官方 api-beijing / ffir 中转，O1 全能）" value="kling_omni" />
             <el-option label="xAI Grok Imagine（官方 prompt + aspect_ratio，/v1/videos/generations）" value="xai" />
             <el-option label="MiniMax H3（官方 V2：/v2/video_generation，模型 MiniMax-H3）" value="minimax_h3" />
-            <el-option label="即梦 jimeng-novel CLI（本机已登录；只用于结构化分镜，先报价确认再提交，花即梦积分）" value="jimeng_novel" />
             <el-option label="NanoBanana" value="nano_banana" />
           </el-select>
         </el-form-item>
@@ -1376,12 +1375,10 @@ const rules = computed(() => ({
   service_type: [{ required: true, message: '请选择服务类型', trigger: 'change' }],
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   provider: [{ required: true, message: '请选择或输入厂商', trigger: 'change' }],
-  // 即梦 CLI 走本机登录态，不需要 Base URL / API Key
-  base_url: form.value.api_protocol === 'jimeng_novel' ? [] : [{ required: true, message: '请输入 Base URL', trigger: 'blur' }],
+  base_url: [{ required: true, message: '请输入 Base URL', trigger: 'blur' }],
   api_key: [
     {
       validator: (_rule, v, cb) => {
-        if (form.value.api_protocol === 'jimeng_novel') return cb()
         const st = form.value.service_type
         if (st === 'jimeng2_character_auth') {
           if (v != null && String(v).trim()) return cb()
@@ -1461,7 +1458,6 @@ const providerConfigs = {
     { id: 'volces', name: '火山引擎', models: ['doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128', 'doubao-seedance-2-5-260628', 'doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-0-pro-fast-251015'] },
     // { id: 'chatfire', name: 'Chatfire', models: ['doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-lite-i2v-250428', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-0-pro-fast-251015', 'sora-2', 'sora-2-pro'] },
     { id: 'minimax_h3', name: 'MiniMax H3', models: ['MiniMax-H3'] },
-    { id: 'jimeng_novel', name: '即梦短剧 CLI（本机 jimeng-novel，可选）', models: ['Seedance_2.5', 'Seedance_2.5_flash', 'Seedance_2.5_draft', 'seedance2.0_fast_vision', 'seedance2.0_vision', 'Seedance_2.0_mini', 'wan3.0', 'happyhorse-1.1'] },
     { id: 'minimax', name: 'MiniMax 海螺', models: ['MiniMax-Hailuo-2.3', 'MiniMax-Hailuo-2.3-Fast', 'MiniMax-Hailuo-02'] },
     { id: 'gemini', name: 'Google Gemini (Veo)', models: ['veo-3.1-generate-preview', 'veo-3.0-generate-preview', 'veo-3.0-fast-generate-preview'] },
     { id: 'dashscope', name: '通义万相' },
@@ -1509,7 +1505,6 @@ const providerProtocolMap = {
   grok: 'xai',
   minimax: 'openai',
   minimax_h3: 'minimax_h3',
-  jimeng_novel: 'jimeng_novel',
   openai: 'openai',
   cheap_seedance2: 'sora',
   chatfire: 'openai',
@@ -1526,7 +1521,6 @@ function getBaseUrlForProvider(provider) {
   const p = String(provider).toLowerCase()
   if (p === 'gemini' || p === 'google') return 'https://generativelanguage.googleapis.com'
   if (p === 'minimax_h3') return 'https://api.minimaxi.com'
-  if (p === 'jimeng_novel') return 'local://jimeng-novel'
   if (p === 'minimax') return 'https://api.minimaxi.com/v1'
   if (p === 'volces' || p === 'volcengine') return 'https://ark.cn-beijing.volces.com/api/v3'
   if (p === 'openai') return 'https://api.openai.com/v1'

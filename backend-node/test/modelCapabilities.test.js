@@ -41,16 +41,6 @@ describe('model capabilities (AC4)', () => {
     assert.equal(vace.sizes['9:16'], '720*1280');
     assert.equal(getVideoCaps({ protocol: 'dashscope', model: 'wan2.6-r2v-flash' }).refImages, 5);
     assert.equal(getVideoCaps({ protocol: 'dashscope', model: 'wan2.2-kf2v-flash' }).firstLastFrame, true);
-
-    const j25 = getVideoCaps({ protocol: 'jimeng_novel', model: 'Seedance_2.5' });
-    assertShape(j25);
-    assert.equal(j25.family, 'jimeng');
-    assert.deepEqual(j25.duration, { min: 4, max: 30, step: 1 });
-    assert.equal(j25.refImages, 30);
-    assert.equal(j25.maxPromptChars, 15000);
-    assert.equal(j25.nativeAudio, true);
-    assert.equal(getVideoCaps({ protocol: 'jimeng_novel', model: 'Seedance_2.0_mini' }).firstLastFrame, false);
-    assert.equal(getVideoCaps({ protocol: 'jimeng_novel', model: 'seedance2.0_fast_vision' }).maxPromptChars, 5000);
   });
 
   it('unknown model is conservative', () => {
@@ -63,7 +53,7 @@ describe('model capabilities (AC4)', () => {
     assert.ok(u.duration.max <= 10);
     assert.ok(u.refImages <= 3);
     assert.ok(u.maxPromptChars <= 2000);
-    const known = getVideoCaps({ protocol: 'jimeng_novel', model: 'Seedance_2.5' });
+    const known = getVideoCaps({ protocol: 'minimax_h3', model: 'MiniMax-H3' });
     u.ratios.push('x');
     assert.ok(!known.ratios.includes('x'), 'callers cannot mutate the table');
   });

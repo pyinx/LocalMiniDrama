@@ -11,7 +11,6 @@ const TARGETS = {
   seedance: { protocol: 'volcengine_omni', model: 'doubao-seedance-2-0-260128' },
   minimax_h3: { protocol: 'minimax_h3', model: 'MiniMax-H3' },
   wan: { protocol: 'dashscope', model: 'wan2.6-r2v-flash' },
-  jimeng: { protocol: 'jimeng_novel', model: 'Seedance_2.5' },
 };
 
 function irOf(overrides = {}) {
@@ -50,7 +49,7 @@ function checkStructure(out, ir, caps) {
   const rank = { character: 0, crowd: 0, scene: 1, prop: 2, tail_frame: 3 };
   assert.deepEqual(refs.map((r) => rank[r.kind]), [...refs.map((r) => rank[r.kind])].sort((a, b) => a - b));
   // 正文出现的每个参考记号都已绑定
-  const tokenRe = out.family === 'jimeng' ? /\{\{([^}]+)\}\}/g : /(?:@图片|character|图)(\d+)/g;
+  const tokenRe = /(?:@图片|character|图)(\d+)/g;
   const bound = new Set(refs.map((r) => r.token));
   for (const m of prompt.matchAll(tokenRe)) assert.ok(bound.has(m[0]), `unbound token ${m[0]}`);
   // 每个镜头：景别、机位、每个出镜者的朝向与视线
@@ -87,14 +86,12 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
     const out = compileSegment(ir, ctx);
     assert.equal(out.family, family);
     checkStructure(out, ir, ctx.caps);
-    if (family === 'jimeng') assert.ok(out.refs.every((r) => r.token === `{{${r.alias}}}`));
-    else if (family === 'wan') assert.deepEqual(out.refs.map(r => r.token), ['character1', 'character2', 'character3', 'character4']);
+    if (family === 'wan') assert.deepEqual(out.refs.map(r => r.token), ['character1', 'character2', 'character3', 'character4']);
     else assert.deepEqual(out.refs.map((r) => r.token), out.refs.map((_, i) => `@图片${i + 1}`));
   }
   it('seedance structure', () => familyStructure('seedance'));
   it('minimax_h3 structure', () => familyStructure('minimax_h3'));
   it('wan structure', () => familyStructure('wan'));
-  it('jimeng structure', () => familyStructure('jimeng'));
 
   it('audio flag follows caps', () => {
     for (const target of Object.values(TARGETS)) {
@@ -118,7 +115,7 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
 
   it('wan disables prompt_extend', () => {
     assert.equal(compileSegment(irOf(), ctxFor(TARGETS.wan)).request.prompt_extend, false);
-    for (const t of [TARGETS.seedance, TARGETS.minimax_h3, TARGETS.jimeng]) {
+    for (const t of [TARGETS.seedance, TARGETS.minimax_h3]) {
       assert.equal('prompt_extend' in compileSegment(irOf(), ctxFor(t)).request, false);
     }
   });
@@ -195,7 +192,7 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
     const out = compileSegment(ir, ctxFor(TARGETS.minimax_h3));
     assert.ok(out.findings.some((f) => f.level === 'block' && f.code === 'duration_outside_envelope'));
     assert.equal(out.duration_s, 28, 'never truncated');
-    assert.ok(!compileSegment(ir, ctxFor(TARGETS.jimeng)).findings.some((f) => f.code === 'duration_outside_envelope'), '30s model accepts it');
+    assert.ok(!compileSegment(irOf(), ctxFor(TARGETS.minimax_h3)).findings.some((f) => f.code === 'duration_outside_envelope'), 'an in-envelope segment is accepted');
   });
 
   it('first last frame mode', () => {
@@ -235,7 +232,7 @@ describe('prompt compilers (AC7 / AC8 / AC26 / AC30 / AC35 / AC39)', () => {
 
   it('first last frame unsupported blocks', () => {
     const ir = irOf({ continuity: { mode: 'first_last', first_frame_image_id: 50 } });
-    const out = compileSegment(ir, ctxFor({ protocol: 'jimeng_novel', model: 'Seedance_2.0_mini' }));
+    const out = compileSegment(ir, ctxFor(TARGETS.wan));
     assert.ok(out.findings.some((f) => f.level === 'block' && f.code === 'first_last_unsupported'));
   });
 

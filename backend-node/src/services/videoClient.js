@@ -4108,9 +4108,6 @@ async function callVideoApi(db, log, opts, target = resolveVideoTarget(db, opts.
     video_gen_id
   } = opts;
   const { config, model, protocol } = target;
-  if (config && String(config.api_protocol || '').trim().toLowerCase() === 'jimeng_novel') {
-    return { error: '即梦渲染需要先报价确认，只能通过结构化分镜提交' };
-  }
   if (!config) {
     throw new Error('???????????AI ?????? video ?????????');
   }

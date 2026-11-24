@@ -119,39 +119,3 @@ test('ir form roundtrip', () => {
   cleared.cast[0].wardrobe_id = '7'
   assert.equal(formToIr(cleared).cast[0].wardrobe_id, 7)
 })
-
-import { jimengOptionState, confirmReducer } from '../src/utils/segmentUi.js'
-
-test('jimeng availability disables option', () => {
-  assert.equal(jimengOptionState(null).disabled, true, 'unknown status disabled until checked')
-  assert.deepEqual(jimengOptionState({ available: true }), { disabled: false, label: '', detail: '' })
-  for (const reason of ['not_configured', 'not_installed', 'not_logged_in', 'cli_error', 'weird']) {
-    const s = jimengOptionState({ available: false, reason, message: 'm' })
-    assert.equal(s.disabled, true)
-    assert.ok(s.label.length > 0)
-  }
-  assert.match(jimengOptionState({ available: false, reason: 'not_logged_in' }).label, /login/)
-})
-
-test('estimate confirmation state machine', () => {
-  const run = (events, start) => events.reduce((s, e) => confirmReducer(s, e), start)
-  const conf = { token: 't', total: 400, balance: 1000, affordable: true }
-  let s = run([{ type: 'estimate' }, { type: 'estimated', confirmation: conf }])
-  assert.equal(s.phase, 'estimated')
-  assert.equal(confirmReducer(s, { type: 'submit' }).phase, 'estimated', 'cannot submit before confirming')
-  s = run([{ type: 'confirm' }, { type: 'submit' }], s)
-  assert.equal(s.phase, 'submitting')
-  assert.equal(confirmReducer(s, { type: 'submitted' }).phase, 'done')
-  const rejected = confirmReducer(s, { type: 'rejected', code: 'confirmation_stale', message: '有改动' })
-  assert.equal(rejected.phase, 'stale')
-  assert.equal(rejected.confirmation, null, 'stale token discarded')
-  assert.equal(confirmReducer(s, { type: 'rejected', code: 'generation_in_progress', message: 'x' }).phase, 'error')
-  const changed = run([{ type: 'estimate' }, { type: 'estimated', confirmation: conf }, { type: 'configChanged' }])
-  assert.equal(changed.phase, 'stale')
-  assert.equal(confirmReducer(changed, { type: 'confirm' }).phase, 'stale', 'stale estimate cannot be confirmed')
-  assert.equal(confirmReducer(changed, { type: 'estimate' }).phase, 'estimating', 're-estimate allowed')
-  const poor = run([{ type: 'estimate' }, { type: 'estimated', confirmation: { ...conf, affordable: false } }, { type: 'confirm' }])
-  assert.equal(poor.phase, 'estimated')
-  assert.match(poor.error, /余额不足/)
-  assert.equal(confirmReducer(undefined, { type: 'confirm' }).phase, 'idle')
-})

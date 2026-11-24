@@ -1,7 +1,7 @@
 /**
  * 结构化分镜段 → 某个视频模型的请求（prompt、参考图、首尾帧、请求开关）。
  * 各写法族共用同一骨架：风格句 → 参考说明 → 地点与连续性 → 镜头逐条 → 尾注；
- * 族之间只差参考记号（即梦用 {{别名}}，其余用 @图片N）、是否原生出人声、以及请求开关。
+ * 族之间只差参考记号（@图片N，万相为「图N」）、是否原生出人声、以及请求开关。
  * 纯函数：所有数据库内容由调用方放进 ctx.bindings。
  */
 const P = require('./rules/phrases');
@@ -117,7 +117,7 @@ function compileSegment(ir, ctx) {
     byPriority.slice(caps.refImages).forEach((r) => add('warn', 'reference_dropped', `参考图超过模型上限 ${caps.refImages} 张，「${r.name}」改用文字指代`, { alias: r.alias }));
     refs = kept
       .sort((x, y) => EMIT[x.kind] - EMIT[y.kind] || x.order - y.order)
-      .map((r, i) => ({ ...r, token: family === 'jimeng' ? `{{${r.alias}}}` : `${caps.refToken || '@图片'}${i + 1}` }));
+      .map((r, i) => ({ ...r, token: `${caps.refToken || '@图片'}${i + 1}` }));
   }
   const tokens = Object.fromEntries(refs.map((r) => [r.alias, r.token]));
   const who = (alias) => tokens[alias] || names[alias] || alias;
