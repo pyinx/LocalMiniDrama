@@ -1,12 +1,14 @@
 /**
- * 整集检查（警告）：开场钩子、相邻段主运镜、同场景环境声、尾帧依赖轮数。
+ * 整集检查（警告）：开场钩子、相邻段主运镜、同场景环境声、尾帧依赖轮数，以及相邻镜头/片段的人物交接（handoffLint）。
  * 判定只用 IR 字段（shots[].event、main_move、continuity.tail_ref_from）与剧集连续性表。
  */
+const { lintHandoff } = require('./handoffLint');
+
 const OPENING_SECONDS = 3;
 const MAX_TAIL_ROUNDS = 2;
 
 /**
- * @param {{ storyboard_id: number, ir: object }[]} segments 本集按顺序的 IR 段
+ * @param {{ storyboard_id: number, storyboard_number?: number, ir: object }[]} segments 本集按顺序的 IR 段
  * @param {{ continuity?: Record<string, { ambience?: string }> }} [opts] 剧集连续性表（按 scene_id）
  */
 function lintEpisode(segments, opts = {}) {
@@ -53,7 +55,7 @@ function lintEpisode(segments, opts = {}) {
       findings.push({ level: 'warn', code: 'tail_chain_too_deep', where: where(i), msg: `尾帧依赖已到第 ${rounds} 轮（一集最多 ${MAX_TAIL_ROUNDS} 轮），请把这一段改成文字承接` });
     }
   });
-  return findings;
+  return [...findings, ...lintHandoff(segments)];
 }
 
 module.exports = { lintEpisode };

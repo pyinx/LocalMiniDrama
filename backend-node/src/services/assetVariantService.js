@@ -5,7 +5,7 @@
 const { z } = require('zod');
 const imageClient = require('./imageClient');
 const A = require('./segmentCompile/rules/assetPhrases');
-const { deriveStyleSentences } = require('./segmentCompile/style');
+const { deriveStyleSentences, styleWithoutSubject } = require('./segmentCompile/style');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 const { toPublicUrl } = require('../utils/storagePaths');
 
@@ -70,7 +70,7 @@ const KINDS = {
     }),
     columns: ['name', 'state_phrase', 'sort_order'],
     buildPrompt: (parent, row, style) =>
-      [style.asset, A.propStateLead(parent.name || '道具'), String(parent.description || '').trim(), A.propStateChange(row.state_phrase)]
+      [styleWithoutSubject(style.asset), A.propStateLead(parent.name || '道具'), String(parent.description || '').trim(), A.propStateChange(row.state_phrase)]
         .filter(Boolean)
         .join('\n'),
   },

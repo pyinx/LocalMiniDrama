@@ -1500,8 +1500,12 @@ async function callImageApi(db, log, opts) {
   let inputPrompt = sourcePrompt || '';
   let selectedStyle = '';
   if (assetTask && project) {
-    const { zh, en } = styleFieldsFromDramaRow(project);
-    const selected = zh || en || preset.resolveStylePreset(project.style)?.zh || (project.style === 'custom' ? '' : project.style);
+    // 道具图只取画风里的媒介与笔触，否则项目画风里的人物/场景描述会把道具画成人物
+    const forTask = (text) => (assetTask === 'prop' ? require('./segmentCompile/style').styleWithoutSubject(text) : text);
+    const fields = styleFieldsFromDramaRow(project);
+    const zh = forTask(fields.zh);
+    const en = forTask(fields.en);
+    const selected = zh || en || forTask(preset.resolveStylePreset(project.style)?.zh || (project.style === 'custom' ? '' : project.style));
     selectedStyle = [zh, en, selected].find(text => text && inputPrompt.includes(text)) || selected;
     if (selectedStyle && !inputPrompt.includes(selectedStyle)) inputPrompt += '\n画风：' + selectedStyle;
   }

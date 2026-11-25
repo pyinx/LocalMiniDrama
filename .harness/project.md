@@ -13,7 +13,7 @@ The harness runs these; it never guesses them. Leave a value empty to disable th
 
 | Key | Command | Notes |
 |---|---|---|
-| `test` | `cd backend-node && node --test --test-skip-pattern="keeps undubbed shots and respects explicit sound choices" --test-skip-pattern="remaps timed cues from one cut plan" --test-skip-pattern="逐句配音接替" test/*.test.js && cd ../frontweb && node --test test/*.test.js` | 排除 3 个已知失败（本机 ffmpeg 缺 libx264，改动前即失败）；换到带 libx264 的 ffmpeg 后应去掉 skip 参数。backend 458 + frontend 64 tests |
+| `test` | `cd backend-node && node --test test/*.test.js && cd ../frontweb && node --test test/*.test.js` | 需要带 libass 和 libx264 的 ffmpeg，否则 3 个配音/字幕相关测试失败（Homebrew 的 ffmpeg 缺 libass）。本机先 `export FFMPEG_PATH=$HOME/.local/share/ffmpeg-static/ffmpeg`。backend 483 + frontend 65 tests |
 | `test:one` | `node --test {file}` | `{file}` relative to repo root |
 | `lint` | | |
 | `typecheck` | | |
@@ -56,7 +56,7 @@ Drafted by `hx init`, confirmed by a human.
 | Episode merge + post | `backend-node/src/services/videoMergeService.js`, `mergedEpisodePostProcess.js` | ffmpeg concat, subtitles, TTS mix |
 | TTS | `backend-node/src/services/ttsService.js` | minimax / OpenAI-compatible |
 | DB schema + migrations | `backend-node/src/db/migrate.js` | `ensureColumns()` on startup |
-| In-app agent + skills | `backend-node/src/mastra/index.mjs`, `skills.mjs` | loads `data/skills/*` |
+| In-app agent + skills | `backend-node/src/mastra/index.mjs`, `skills.mjs` | loads `backend-node/skills/` (主助手只挂载 `skills/short-drama`) |
 | Frontend HTTP | `frontweb/src/utils/request.js` | |
 | Storyboard UI | `frontweb/src/views/FilmCreate.vue` | `buildSbVideoPromptForApi` |
 

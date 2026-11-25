@@ -95,10 +95,17 @@ function referenceErrors(ir, label, known) {
   return errs;
 }
 
+// 模型只规划出一段时可能直接返回这一段的对象；extractFirstArray 会误取它里面的 cast 等数组当作分镜段
+const SEGMENT_KEYS = ['version', 'duration_s', 'scene', 'shots'];
+function isBareSegment(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && SEGMENT_KEYS.some((k) => k in v);
+}
+
 function parseIrArray(text, log, what) {
   let arr = null;
   try {
-    arr = extractFirstArray(safeParseAIJSON(String(text || ''), [], log));
+    const parsed = safeParseAIJSON(String(text || ''), [], log);
+    arr = isBareSegment(parsed) ? [parsed] : extractFirstArray(parsed);
   } catch (e) {
     throw new Error(`${what}失败：模型输出不是可解析的 JSON（${e.message}）`);
   }
@@ -150,9 +157,9 @@ function conversionCandidates(db, episodeId) {
 }
 
 function episodeSegments(db, episodeId) {
-  return db.prepare('SELECT id, segment_ir FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL AND segment_ir IS NOT NULL ORDER BY storyboard_number, id')
+  return db.prepare('SELECT id, storyboard_number, segment_ir FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL AND segment_ir IS NOT NULL ORDER BY storyboard_number, id')
     .all(Number(episodeId))
-    .map((r) => ({ storyboard_id: r.id, ir: readStoredIr(r.segment_ir) }))
+    .map((r) => ({ storyboard_id: r.id, storyboard_number: r.storyboard_number, ir: readStoredIr(r.segment_ir) }))
     .filter((s) => s.ir);
 }
 

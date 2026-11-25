@@ -131,4 +131,63 @@ describe('legacy and structured pipelines coexist (AC10)', () => {
     assert.equal(check.body.data.segments, 1);
     assert.ok(check.body.data.findings.some((f) => f.code === 'line_not_in_script'), 'script is empty in fixture, so lines are flagged');
   });
+
+  it('surfaces handoff findings through segment-check and generation', async () => {
+    const routes = storyboardRoutes(db, noopLog);
+    const storyboardService = require('../src/services/storyboardService');
+    const now = new Date().toISOString();
+    const check = () => {
+      const res = mockRes();
+      routes.episodeSegmentCheck({ params: { episode_id: String(ids.episodeId) } }, res);
+      assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+      return res.body.data.findings.filter((f) => f.code === 'holding_changed');
+    };
+    const irHolding = (holding) => {
+      const ir = sampleIr(ids);
+      for (const sh of ir.shots) for (const sub of sh.subjects) if (sub.alias === '林远') sub.holding = holding;
+      return ir;
+    };
+    // 序号 1（结构化）、2（旧分镜）、3（结构化）：被旧分镜隔开，不检查
+    storyboardService.saveSegmentIr(db, noopLog, ids.sbIr, irHolding('纸箱'));
+    const sb3 = db.prepare("INSERT INTO storyboards (episode_id, storyboard_number, title, duration, created_at, updated_at) VALUES (?, 3, '第三段', 8, ?, ?)").run(ids.episodeId, now, now).lastInsertRowid;
+    storyboardService.saveSegmentIr(db, noopLog, sb3, irHolding(null));
+    assert.deepEqual(check(), []);
+    // 旧分镜挪到末尾后两段相邻：持物突变被报出来
+    db.prepare('UPDATE storyboards SET storyboard_number = 9 WHERE id = ?').run(ids.sbLegacy);
+    db.prepare('UPDATE storyboards SET storyboard_number = 2 WHERE id = ?').run(sb3);
+    const found = check();
+    assert.equal(found.length, 1);
+    assert.equal(found[0].where.storyboard_id, sb3);
+    assert.equal(found[0].level, 'warn');
+
+    // 结构化生成返回的 findings 里同样出现
+    db.prepare("UPDATE episodes SET script_content = ? WHERE id = ?").run('林远：是因为绩效吗？', ids.episodeId);
+    const segA = irHolding('纸箱');
+    const segB = irHolding(null);
+    segA.shots = [segA.shots[1]];
+    segA.duration_s = segA.shots[0].seconds;
+    segB.shots = [segB.shots[1]];
+    segB.duration_s = segB.shots[0].seconds;
+    aiClient.generateText = async () => '```json\n' + JSON.stringify([segA, segB]) + '\n```';
+    const result = await runStructuredStoryboardGeneration(db, noopLog, ids.episodeId, {});
+    assert.ok(result.findings.some((f) => f.code === 'holding_changed' && f.where.storyboard_id === result.storyboard_ids[1]), JSON.stringify(result.findings));
+  });
+
+  it('generation does not compare segments split by a protected legacy storyboard', async () => {
+    const kept = createVideo({ storyboard_id: ids.sbLegacy, prompt: '保留的旧片' });
+    db.prepare('UPDATE video_generations SET keep_in_archive = 1 WHERE id = ?').run(kept.body.data.id);
+    db.prepare("UPDATE episodes SET script_content = ? WHERE id = ?").run('林远：是因为绩效吗？', ids.episodeId);
+    const seg = (holding) => {
+      const ir = sampleIr(ids);
+      for (const sh of ir.shots) for (const sub of sh.subjects) if (sub.alias === '林远') sub.holding = holding;
+      ir.shots = [ir.shots[1]];
+      ir.duration_s = ir.shots[0].seconds;
+      return ir;
+    };
+    // 序号 1、2（受保护的旧分镜）、3：1 和 3 之间隔着旧分镜，不算相邻
+    aiClient.generateText = async () => '```json\n' + JSON.stringify([seg('纸箱'), seg('纸箱'), seg(null)]) + '\n```';
+    const result = await runStructuredStoryboardGeneration(db, noopLog, ids.episodeId, {});
+    assert.equal(result.storyboard_ids.length, 2, 'number 2 kept for the protected storyboard');
+    assert.deepEqual(result.findings.filter((f) => f.code === 'holding_changed'), []);
+  });
 });

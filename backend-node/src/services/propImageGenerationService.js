@@ -6,6 +6,7 @@ const propService = require('./propService');
 const uploadService = require('./uploadService');
 const storageLayout = require('./storageLayout');
 const { aspectRatioToSize } = require('./imageService');
+const { styleWithoutSubject } = require('./segmentCompile/style');
 
 function preferredImageProvider(model, cfg) {
   return model ? undefined : cfg?.ai?.default_image_provider;
@@ -41,7 +42,8 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
   const projectStyle = opts?.project_style ?? imageClient.readProjectStyle(db, prop.drama_id);
   cfg = mergeCfgStyleWithDrama(cfg, projectStyle);
   const styleOverride = (opts && opts.style) ? String(opts.style).trim() : '';
-  const baseStyle = styleOverride || (cfg?.style?.default_style_en || cfg?.style?.default_style || '');
+  // 项目画风可能写了人物/场景，道具图只取媒介与笔触；用户在界面显式传入的 style 原样使用
+  const baseStyle = styleOverride || styleWithoutSubject(cfg?.style?.default_style_en || cfg?.style?.default_style || '');
   let style = '';
   style = appendPrompt(style, baseStyle);
   if (!styleOverride) {

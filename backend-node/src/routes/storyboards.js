@@ -393,11 +393,11 @@ function routes(db, log) {
         const ep = db.prepare('SELECT id, script_content, description FROM episodes WHERE id = ? AND deleted_at IS NULL').get(Number(req.params.episode_id));
         if (!ep) return response.notFound(res, '剧集不存在');
         const segments = db
-          .prepare('SELECT id, segment_ir FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL AND segment_ir IS NOT NULL ORDER BY storyboard_number, id')
+          .prepare('SELECT id, storyboard_number, segment_ir FROM storyboards WHERE episode_id = ? AND deleted_at IS NULL AND segment_ir IS NOT NULL ORDER BY storyboard_number, id')
           .all(ep.id)
-          .map((r) => ({ storyboard_id: r.id, parsed: parseSegmentIr(r.segment_ir) }))
+          .map((r) => ({ storyboard_id: r.id, storyboard_number: r.storyboard_number, parsed: parseSegmentIr(r.segment_ir) }))
           .filter((x) => x.parsed.ok)
-          .map((x) => ({ storyboard_id: x.storyboard_id, ir: x.parsed.ir }));
+          .map((x) => ({ storyboard_id: x.storyboard_id, storyboard_number: x.storyboard_number, ir: x.parsed.ir }));
         const continuity = episodeContinuityService.getContinuity(db, ep.id) || {};
         const findings = segments.length
           ? [...lintEpisode(segments, { continuity }), ...lintDialogueFidelity(segments, ep.script_content || ep.description || '')]
