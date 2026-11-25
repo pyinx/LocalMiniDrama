@@ -9,6 +9,7 @@ const noopLog = { info() {}, warn() {}, error() {}, debug() {}, errorw() {} };
 const DEFAULTS = {
   resolution: '480p',
   subtitle: false,
+  voice_source: 'native',
   dialogue_burn: false,
   watermark: { enabled: false, text: '' },
   dialogue_subtitles: true,
@@ -20,6 +21,7 @@ const DEFAULTS = {
 const NON_DEFAULTS = {
   resolution: '1080p',
   subtitle: true,
+  voice_source: 'dubbed',
   dialogue_burn: true,
   watermark: { enabled: true, text: '示例水印' },
   dialogue_subtitles: false,
@@ -116,6 +118,39 @@ describe('项目级视频设置', () => {
     assert.equal(e2, later.ep2.id);
   });
 
+  it('voice_source defaults, validates, and layers project and episode', async t => {
+    const { request, url } = await openWorkbench(t);
+    const { dramaId, drama, ep1, ep2, ids: [e1, e2] } = await seedDrama(request);
+    assert.equal(drama.video_settings.voice_source, 'native', '默认原生人声');
+    assert.equal(ep1.video_settings.effective.voice_source, 'native');
+
+    for (const bad of ['tts', '', 1, true]) {
+      assert.equal((await raw(url, 'PUT', `/dramas/${dramaId}/video-settings`, { voice_source: bad })).status, 400, String(bad));
+      assert.equal((await raw(url, 'PUT', `/episodes/${e1}/video-settings`, { voice_source: bad })).status, 400, String(bad));
+    }
+
+    await request('PUT', `/dramas/${dramaId}/video-settings`, { voice_source: 'dubbed' });
+    let d = await readDrama(request, dramaId);
+    assert.equal(d.drama.video_settings.voice_source, 'dubbed');
+    assert.equal(d.ep1.video_settings.effective.voice_source, 'dubbed', '分集跟随项目');
+
+    // 本集覆盖优先；与项目相同视为清除
+    const own = await request('PUT', `/episodes/${e1}/video-settings`, { voice_source: 'native' });
+    assert.deepEqual(own.overrides, { voice_source: 'native' });
+    d = await readDrama(request, dramaId);
+    assert.equal(d.ep1.video_settings.effective.voice_source, 'native');
+    assert.equal(d.ep2.video_settings.effective.voice_source, 'dubbed', '其它集不受影响');
+    const same = await request('PUT', `/episodes/${e1}/video-settings`, { voice_source: 'dubbed' });
+    assert.deepEqual(same.overrides, {});
+
+    // null 清除项目默认，回到 native
+    await request('PUT', `/episodes/${e2}/video-settings`, { voice_source: 'native' });
+    await request('PUT', `/dramas/${dramaId}/video-settings`, { voice_source: null });
+    d = await readDrama(request, dramaId);
+    assert.equal(d.drama.video_settings.voice_source, 'native');
+    assert.equal(d.ep2.video_settings.effective.voice_source, 'native', '本集覆盖不受项目清除影响');
+  });
+
   it('清除覆盖后恢复跟随', async t => {
     const { request } = await openWorkbench(t);
     const { dramaId, ids: [e1] } = await seedDrama(request);
@@ -177,6 +212,8 @@ describe('项目级视频设置', () => {
       { resolution: '4k' },
       { resolution: 720 },
       { subtitle: 'yes' },
+      { voice_source: 'tts' },
+      { voice_source: true },
       { cards: 1 },
       { watermark: { enabled: true, text: 'x'.repeat(201) } },
       { watermark: { enabled: 'on', text: 'x' } },

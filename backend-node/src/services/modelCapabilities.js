@@ -5,7 +5,8 @@
  * 来源：
  * - 火山方舟 Seedance、MiniMax H3、DashScope Wan 的时长/参考图数：原 videoClient 中已在用的常量
  * - Seedance 2.x 原生人声：即梦能力报告 §0（同一模型族）
- * 查不到依据的字段列入 unknownFields 并取保守值（未知的原生人声一律按非原生处理）。
+ * - MiniMax H3 原生人声：/v2/video_generation 的 generate_audio（默认开启）
+ * 查不到依据的字段列入 unknownFields 并取保守值（未知的原生人声在表里取 false；用户选了原生人声时是否尝试，由 resolveVoiceSource 决定）。
  */
 
 const STANDARD_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'];
@@ -50,7 +51,9 @@ const ENTRIES = [
   ...[['kling_omni', 2500], ['vidu', 5000]].map(([protocol, maxPromptChars]) => ({
     protocols: new Set([protocol]), match: () => true,
     caps: { ...CONSERVATIVE, maxPromptChars },
-    unknownFields: ['duration', 'refImages', 'ratios', 'firstLastFrame', 'nativeAudio'],
+    // 这两个适配器固定关闭音轨（可灵 Omni 提交 sound:'off'，Vidu 提交 audio:false，见 videoClient.js），
+    // 不会出人声：nativeAudio 是已知的 false，不列入 unknownFields
+    unknownFields: ['duration', 'refImages', 'ratios', 'firstLastFrame'],
   })),
   ...Object.entries(wanVideoModels).map(([id, mode]) => {
     const omni = mode === 'omni';
@@ -132,9 +135,9 @@ const ENTRIES = [
       maxPromptChars: 2000,
       ratios: [...STANDARD_RATIOS, 'adaptive'],
       firstLastFrame: true,
-      nativeAudio: false,
+      nativeAudio: true,
     },
-    unknownFields: ['maxPromptChars', 'nativeAudio'],
+    unknownFields: ['maxPromptChars'],
   },
   {
     protocols: new Set(['dashscope']),
@@ -272,9 +275,30 @@ function promptChars(text) {
   return Array.from(text).length;
 }
 
+/** 万相里没有音轨开关的型号不能通过 generate_audio:false 关掉音轨（见 wanVideoRequest 的请求校验） */
+function canDisableAudio(caps) {
+  return !(caps.family === 'wan' && caps.nativeAudio && !caps.audioSwitch);
+}
+
+/**
+ * 用户选的台词声音（native 原生人声 / dubbed 后期配音）与模型能力合并：
+ * 已知不支持原生人声的型号选 native → 改走配音；关不掉音轨的型号选 dubbed → 改走原生；
+ * 能力未知（unknownFields 含 nativeAudio）的型号按所选方式去试。
+ * @returns {{ source: 'native'|'dubbed', fallback: null|'native_unsupported'|'cannot_silence' }}
+ */
+function resolveVoiceSource(caps, preferred) {
+  if (preferred === 'dubbed') {
+    return canDisableAudio(caps) ? { source: 'dubbed', fallback: null } : { source: 'native', fallback: 'cannot_silence' };
+  }
+  const knownNoNative = !caps.nativeAudio && !caps.unknownFields.includes('nativeAudio');
+  return knownNoNative ? { source: 'dubbed', fallback: 'native_unsupported' } : { source: 'native', fallback: null };
+}
+
 module.exports = {
   promptChars,
   getVideoCaps,
+  canDisableAudio,
+  resolveVoiceSource,
   storyboardPlanningCaps,
   durationChoices,
   WAN_LEGACY_KEYFRAME_MODEL,

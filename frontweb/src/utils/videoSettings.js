@@ -4,14 +4,14 @@
  * `video_settings = { overrides, effective }`，随项目返回 `video_settings`（项目有效设置）。
  */
 
-/** 8 项，按界面顺序 */
+/** 9 项，按界面顺序 */
 export const VIDEO_SETTING_KEYS = [
-  'resolution', 'subtitle', 'dialogue_burn', 'watermark',
+  'resolution', 'subtitle', 'voice_source', 'dialogue_burn', 'watermark',
   'dialogue_subtitles', 'cards', 'bgm', 'review_sheets',
 ]
 
-/** 仅结构化分镜才有意义的 4 项（沿用原先「视频配置」里的显示条件） */
-const STRUCTURED_ONLY = ['dialogue_subtitles', 'cards', 'bgm', 'review_sheets']
+/** 仅结构化分镜才有意义的 5 项（沿用原先「视频配置」里的显示条件） */
+const STRUCTURED_ONLY = ['voice_source', 'dialogue_subtitles', 'cards', 'bgm', 'review_sheets']
 
 export function visibleKeys({ structured } = {}) {
   return structured ? [...VIDEO_SETTING_KEYS] : VIDEO_SETTING_KEYS.filter(k => !STRUCTURED_ONLY.includes(k))
@@ -35,7 +35,8 @@ export function mergeOptionsFromSettings(effective, { mode = 'complete', structu
   return {
     delivery_mode: mode,
     burn_narration_subtitles: !!s.subtitle,
-    burn_dialogue_audio: !!s.dialogue_burn,
+    // 结构化分集选「后期配音」＝ 需要把逐句配音合进成片，不再要求用户另开对白烧录
+    burn_dialogue_audio: !!s.dialogue_burn || (structured && s.voice_source === 'dubbed'),
     watermark_text: watermark,
     ...(structured
       ? {

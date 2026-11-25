@@ -6,7 +6,7 @@ import {
 } from '../src/utils/videoSettings.js'
 
 const project = {
-  resolution: '720p', subtitle: true, dialogue_burn: false,
+  resolution: '720p', subtitle: true, voice_source: 'native', dialogue_burn: false,
   watermark: { enabled: false, text: '' }, dialogue_subtitles: true, cards: true,
   bgm: { url: '', volume_db: -18 }, review_sheets: true,
 }
@@ -84,10 +84,41 @@ test('创作页改动只保存为本集覆盖', async () => {
   assert.equal(scopeOf({}, 'resolution'), 'project', '没有 video_settings 时按随项目处理')
   assert.equal(scopeOf(null, 'resolution'), 'project')
 
-  // 8 项齐全；非结构化分镜不显示后 4 项
-  assert.equal(VIDEO_SETTING_KEYS.length, 8)
+  // 9 项齐全；非结构化分镜不显示结构化专属的 5 项
+  assert.equal(VIDEO_SETTING_KEYS.length, 9)
   assert.deepEqual(visibleKeys({ structured: false }), ['resolution', 'subtitle', 'dialogue_burn', 'watermark'])
   assert.deepEqual(visibleKeys({ structured: true }), VIDEO_SETTING_KEYS)
+})
+
+test('台词声音只在结构化分集显示，并沿用既有保存路径', async () => {
+  assert.ok(VIDEO_SETTING_KEYS.includes('voice_source'))
+  assert.ok(visibleKeys({ structured: true }).includes('voice_source'))
+  assert.ok(!visibleKeys({ structured: false }).includes('voice_source'), '非结构化分集不显示')
+
+  const api = fakeApi()
+  await saveEpisodeSetting(api, 21, 'voice_source', 'dubbed')
+  await saveEpisodeSetting(api, 21, 'voice_source', null)
+  await saveProjectSetting(api, 7, 'voice_source', 'native')
+  assert.deepEqual(api.calls, [
+    ['episode', 21, { voice_source: 'dubbed' }],
+    ['episode', 21, { voice_source: null }],
+    ['project', 7, { voice_source: 'native' }],
+  ], '创作页只写本集覆盖（null 恢复随项目），项目页写项目默认')
+
+  const episode = { video_settings: { overrides: { voice_source: 'dubbed' }, effective: { ...project, voice_source: 'dubbed' } } }
+  assert.equal(scopeOf(episode, 'voice_source'), 'episode')
+  assert.equal(scopeOf({ video_settings: { overrides: {}, effective: project } }, 'voice_source'), 'project')
+})
+
+test('后期配音在结构化分集下联动对白烧录', () => {
+  const dubbed = { ...project, voice_source: 'dubbed', dialogue_burn: false }
+  assert.equal(mergeOptionsFromSettings(dubbed, { structured: true }).burn_dialogue_audio, true)
+  assert.equal(mergeOptionsFromSettings({ ...dubbed, voice_source: 'native' }, { structured: true }).burn_dialogue_audio, false)
+  assert.equal(mergeOptionsFromSettings({ ...project, dialogue_burn: true }, { structured: true }).burn_dialogue_audio, true,
+    '原生人声但用户自己开了对白烧录，保持开')
+  assert.equal(mergeOptionsFromSettings(dubbed, { structured: false }).burn_dialogue_audio, false, '非结构化分集不受影响')
+  assert.equal(mergeOptionsFromSettings({ ...dubbed, dialogue_burn: true }, { structured: false }).burn_dialogue_audio, true)
+  assert.equal(dubbed.dialogue_burn, false, '不改写设置里的 dialogue_burn')
 })
 
 test('已有素材时提示比例与风格不一致', () => {

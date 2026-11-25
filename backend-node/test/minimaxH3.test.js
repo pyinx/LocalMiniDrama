@@ -91,6 +91,22 @@ describe('MiniMax H3 request ratio (AC1)', () => {
     } finally { teardown(); }
   });
 
+  it('sends generate_audio only when the compiled request provides it', async () => {
+    setup();
+    try {
+      const call = (extra) => videoClient.callVideoApi(null, noopLog, {
+        prompt: 'p', model: 'MiniMax-H3', duration: 8, aspect_ratio: '9:16',
+        reference_urls: ['https://cdn.example.com/a.jpg'], ...extra,
+      });
+      await call({ generate_audio: true });
+      assert.equal(sentBody.generate_audio, true);
+      await call({ generate_audio: false });
+      assert.equal(sentBody.generate_audio, false, 'false 必须原样下发，上游默认是出声');
+      await call({});
+      assert.equal('generate_audio' in sentBody, false, '没有编译结果时不写该字段');
+    } finally { teardown(); }
+  });
+
   it('keeps adaptive ratio for first/last frame mode', async () => {
     setup();
     try {

@@ -12,6 +12,13 @@ const { toPublicUrl } = require('../utils/storagePaths');
 const characterHeadBody = require('./characterHeadBody');
 const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 const { tailFrameEligibility } = require('./segmentCompile/continuity');
+const videoSettings = require('./videoSettings');
+const { resolveVoiceSource } = require('./modelCapabilities');
+
+const VOICE_FALLBACK_MSG = {
+  native_unsupported: '当前模型不支持原生人声，本段按后期配音编译（角色不开口）。要让成片带上台词声音，请把视频配置里的「台词声音」改选「后期配音」',
+  cannot_silence: '当前模型的音轨无法关闭，台词声音已按原生人声处理',
+};
 
 /**
  * 尾帧衔接检查：来源必须是紧邻上一段、同场景版本且有共同角色；来源视频缺失或比尾帧新（重生成过）时阻断。
@@ -114,7 +121,7 @@ function loadBindings(db, cfg, dramaId, ir, episodeNumber = null) {
 function compileStoryboard(db, storyboardId, opts = {}) {
   const sb = db
     .prepare(
-      `SELECT s.id, s.segment_ir, s.episode_id, s.storyboard_number, e.drama_id, e.episode_number FROM storyboards s JOIN episodes e ON e.id = s.episode_id
+      `SELECT s.id, s.segment_ir, s.episode_id, s.storyboard_number, e.drama_id, e.episode_number, e.video_settings FROM storyboards s JOIN episodes e ON e.id = s.episode_id
        WHERE s.id = ? AND s.deleted_at IS NULL AND e.deleted_at IS NULL`
     )
     .get(Number(storyboardId));
@@ -133,14 +140,18 @@ function compileStoryboard(db, storyboardId, opts = {}) {
 
   const bindings = loadBindings(db, cfg, sb.drama_id, ir, Number(sb.episode_number));
   const tail = opts.tailFrame ? { tailFrame: opts.tailFrame, findings: [] } : checkTailFrame(db, sb, ir, bindings);
+  const voiceSetting = videoSettings.forEpisode(videoSettings.projectEffective(drama && drama.metadata), sb.video_settings).effective.voice_source;
+  const voice = resolveVoiceSource(target.caps, voiceSetting);
   const compiled = compileSegment(ir, {
     caps: target.caps,
+    native: voice.source === 'native',
     style,
     bindings,
     continuity,
     tailFrame: tail.tailFrame,
   });
   const findings = [...style.findings, ...tail.findings, ...compiled.findings, ...lintSegment(ir, compiled, target.caps)];
+  if (voice.fallback) findings.push({ level: 'info', code: 'voice_source_fallback', where: {}, msg: VOICE_FALLBACK_MSG[voice.fallback] });
   return {
     ok: true,
     ir,

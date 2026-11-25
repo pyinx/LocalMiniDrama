@@ -3969,6 +3969,7 @@ async function callMinimaxH3VideoApi(config, log, opts) {
     files_base_url,
     storage_local_path,
     video_gen_id,
+    generate_audio,
   } = opts || {};
   const url = buildMinimaxH3CreateUrl(config);
   const finalModel = isMinimaxH3Model(model) ? 'MiniMax-H3' : model || 'MiniMax-H3';
@@ -4027,6 +4028,8 @@ async function callMinimaxH3VideoApi(config, log, opts) {
     duration: dur,
     resolution: res,
   };
+  // 不传时上游默认出声；结构化分镜的编译结果明确了是否要人声，必须原样下发
+  if (typeof generate_audio === 'boolean') body.generate_audio = generate_audio;
   // 文生视频 ratio 必填且不能 adaptive；首尾帧跟随首帧（adaptive）；
   // 仅参考图时不下发 ratio 上游会按默认横屏出片，竖屏剧被 pad 成大黑边，所以必须显式下发
   if (useFirstLast) {
@@ -4362,6 +4365,7 @@ async function callVideoApi(db, log, opts, target = resolveVideoTarget(db, opts.
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
       video_gen_id: opts.video_gen_id,
+      generate_audio: opts.generate_audio,
     });
   }
 

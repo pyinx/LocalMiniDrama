@@ -31,8 +31,8 @@ describe('model capabilities (AC4)', () => {
     assert.equal(h3.family, 'minimax_h3');
     assert.deepEqual(h3.duration, { min: 4, max: 15, step: 1 });
     assert.equal(h3.refImages, 9);
-    assert.ok(h3.unknownFields.includes('nativeAudio'), 'H3 native audio is unverified');
-    assert.equal(h3.nativeAudio, false, 'unverified native audio is treated as non-native');
+    assert.equal(h3.nativeAudio, true, 'H3 generates native audio (generate_audio defaults on)');
+    assert.ok(!h3.unknownFields.includes('nativeAudio'));
 
     const vace = getVideoCaps({ protocol: 'dashscope', model: 'wanx2.1-vace-plus' });
     assertShape(vace);

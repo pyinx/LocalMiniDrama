@@ -15,6 +15,19 @@
           <span v-if="settings.subtitle" class="video-option-hint">开启后，合成整集时会检测解说旁白：若有文案则自动生成 SRT、按分镜时长合成旁白语音（过长加速 / 过短补静音）、与成片对齐后烧录字幕并混音。</span>
         </template>
 
+        <template v-else-if="key === 'voice_source'">
+          <el-radio-group :model-value="settings.voice_source" :disabled="disabled" @change="v => emit('change', key, v)">
+            <el-radio-button value="native">模型原生人声</el-radio-button>
+            <el-radio-button value="dubbed">后期配音</el-radio-button>
+          </el-radio-group>
+          <span class="video-option-hint">
+            {{ settings.voice_source === 'dubbed'
+              ? '视频里角色不开口，合成整集时按角色音色逐句配音并自动叠加，无需再开对白烧录（个别无法关闭音轨的模型会保留原声，编译预览会提示）。'
+              : '由视频模型直接生成对白与口型。模型不支持原生人声时，编译预览会提示，并按角色不开口出片；需要台词声音请改选「后期配音」。' }}
+            仅影响之后新生成的片段，已生成的片段不变。
+          </span>
+        </template>
+
         <template v-else-if="key === 'dialogue_burn'">
           <el-switch :model-value="settings.dialogue_burn" :disabled="disabled" @change="v => emit('change', key, v)" />
           <span v-if="settings.dialogue_burn" class="video-option-hint">跟随整集的镜头使用已有配音，其余保留原声。单镜选择优先，旁白可独立叠加。</span>
@@ -88,7 +101,7 @@
 
 <script setup>
 /**
- * 视频配置 8 项的表单：只负责展示与抛出变更，保存由调用方决定。
+ * 视频配置 9 项的表单：只负责展示与抛出变更，保存由调用方决定。
  * 创作页（本集，传 scopes 以标出「本集自定义」并可恢复随项目）与项目详情页（项目默认，不传 scopes）共用。
  */
 defineProps({
@@ -105,6 +118,7 @@ const emit = defineEmits(['change', 'reset'])
 const LABELS = {
   resolution: '分辨率',
   subtitle: '字幕',
+  voice_source: '台词声音',
   dialogue_burn: '对白烧录',
   watermark: '水印',
   dialogue_subtitles: '台词字幕',

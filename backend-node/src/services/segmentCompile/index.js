@@ -19,6 +19,7 @@ function envelopeOk(d, { min, max, step, values }) {
  * @param {{
  *   caps: object,
  *   family?: string,
+ *   native?: boolean,  // 台词是否由模型原生出声；不传时取 caps.nativeAudio
  *   style: { video: string },
  *   bindings: { characters: object, wardrobes?: object, scenes: object, sceneStates?: object, props?: object, propStates?: object, images?: object },
  *   continuity?: { props?: {name:string,look:string}[], position_lock?: string, axis_lock?: string, ambience?: string },
@@ -28,7 +29,8 @@ function envelopeOk(d, { min, max, step, values }) {
 function compileSegment(ir, ctx) {
   const caps = ctx.caps;
   const family = ctx.family || caps.family || 'generic';
-  const native = !!caps.nativeAudio;
+  // 台词声音由调用方按用户设置与模型能力解析后传入；没传时只看能力表
+  const native = ctx.native ?? !!caps.nativeAudio;
   const b = { wardrobes: {}, sceneStates: {}, props: {}, propStates: {}, images: {}, ...ctx.bindings };
   const findings = [];
   const add = (level, code, msg, where = {}) => findings.push({ level, code, where, msg });

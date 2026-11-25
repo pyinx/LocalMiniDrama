@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { promptChars } = require('./modelCapabilities');
+const { promptChars, canDisableAudio } = require('./modelCapabilities');
 const { toLocalPath } = require('../utils/storagePaths');
 
 const SIZES_1080 = { '16:9': '1920*1080', '9:16': '1080*1920', '1:1': '1440*1440', '4:3': '1632*1248', '3:4': '1248*1632' };
@@ -73,7 +73,7 @@ function prepareWanVideo(caps, opts) {
   }
   if (!(caps.wan26 && mode === 'reference') && typeof opts.prompt_extend === 'boolean') parameters.prompt_extend = opts.prompt_extend;
   if (['wan2.6-t2v', 'wan2.6-i2v-flash'].includes(opts.model) && opts.prompt_extend !== false) parameters.shot_type = 'multi';
-  if (opts.generate_audio === false && caps.nativeAudio && !caps.audioSwitch) return fail('不支持通过参数关闭音轨');
+  if (opts.generate_audio === false && !canDisableAudio(caps)) return fail('不支持通过参数关闭音轨');
   if (opts.generate_audio === true && !caps.nativeAudio) return fail('不支持生成音频');
   if (caps.audioSwitch && typeof opts.generate_audio === 'boolean') parameters.audio = opts.generate_audio;
   if (opts.watermark != null) parameters.watermark = Boolean(opts.watermark);

@@ -1,12 +1,13 @@
 /**
- * 视频配置（分辨率、字幕、对白烧录、水印、台词字幕、字卡、背景音乐、审片拼图）。
- * 本模块独占这 8 项的定义、默认值、校验与合并：
+ * 视频配置（分辨率、字幕、台词声音、对白烧录、水印、台词字幕、字卡、背景音乐、审片拼图）。
+ * 本模块独占这 9 项的定义、默认值、校验与合并：
  *   有效设置 = DEFAULTS ← 项目（dramas.metadata.video_settings）← 分集覆盖（episodes.video_settings）
  * 项目与分集都只存「已设置的键」（稀疏）；读取时逐键校验，非法值视为未设置。
  */
 const storageLayout = require('./storageLayout');
 
 const RESOLUTIONS = ['480p', '720p', '1080p'];
+const VOICE_SOURCES = ['native', 'dubbed'];
 const WATERMARK_MAX = 200;
 const BGM_URL_MAX = 1000;
 const BGM_DB_MIN = -40;
@@ -15,6 +16,7 @@ const BGM_DB_MAX = -6;
 const DEFAULTS = Object.freeze({
   resolution: '480p',
   subtitle: false,
+  voice_source: 'native',
   dialogue_burn: false,
   watermark: Object.freeze({ enabled: false, text: '' }),
   dialogue_subtitles: true,
@@ -39,6 +41,9 @@ function normalizeValue(key, value) {
   switch (key) {
     case 'resolution':
       if (!RESOLUTIONS.includes(value)) throw inputError('分辨率只能是 ' + RESOLUTIONS.join('、'));
+      return value;
+    case 'voice_source':
+      if (!VOICE_SOURCES.includes(value)) throw inputError('台词声音只能是 ' + VOICE_SOURCES.join('、'));
       return value;
     case 'subtitle':
     case 'dialogue_burn':
@@ -96,7 +101,7 @@ function forEpisode(project, rawOverrides) {
   return { overrides, effective: { ...project, ...overrides } };
 }
 
-/** 校验补丁：对象；键只能是这 8 项；值为 null（清除）或合法值。返回规整后的补丁，全有或全无 */
+/** 校验补丁：对象；键只能是这 9 项；值为 null（清除）或合法值。返回规整后的补丁，全有或全无 */
 function validatePatch(patch) {
   if (!isPlainObject(patch)) throw inputError('请求体必须是对象');
   const out = {};
