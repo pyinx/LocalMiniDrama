@@ -42,10 +42,16 @@ function readScope(ctx) {
   };
 }
 
-function validateSkillMarkdown(markdown) {
+function validateSkillMarkdown(markdown, dirName) {
   const fence = String(markdown || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fence) return { valid: false };
-  return { valid: /^name:\s*\S+/m.test(fence[1]) };
+  const front = fence[1];
+  const name = (front.match(/^name:\s*(\S+)\s*$/m) || [])[1];
+  const description = (front.match(/^description:\s*(.+?)\s*$/m) || [])[1];
+  if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return { valid: false };
+  if (!description || !description.trim()) return { valid: false };
+  if (dirName && path.basename(dirName) !== name) return { valid: false };
+  return { valid: true };
 }
 
 function loadService(name) {
@@ -165,6 +171,98 @@ function buildTools() {
         if (guard.action === 'decline') return { proceed: false, output: { ok: false, error: guard.error } };
       },
     }),
+    get_series_notes: tool('get_series_notes', '读取当前剧的全剧笔记（事实、伏笔、弧线）', z.object({
+      kind: z.string().optional(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeGetSeriesNotes(appDb, scope.dramaId, input);
+    }),
+    save_series_notes: tool('save_series_notes', '保存当前剧的全剧笔记，需带 revision 防止覆盖', z.object({
+      kind: z.string().optional(),
+      expected_revision: z.number(),
+      document: z.record(z.string(), z.unknown()),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeSaveSeriesNotes(appDb, scope.dramaId, input);
+    }),
+    check_series_continuity: tool('check_series_continuity', '核对剧本是否保留全剧不可变事实', z.object({
+      script: z.string(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeCheckSeriesContinuity(appDb, scope.dramaId, scope.episodeId, input.script);
+    }),
+    review_episode_deep: tool('review_episode_deep', '对当前集做深审，产出带证据的诊断 finding', z.object({
+      mode: z.enum(['selection', 'first-three', 'dialogue', 'full']).optional(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeReviewEpisodeDeep(appDb, appLog, scope.dramaId, scope.episodeId, input);
+    }),
+    propose_script_edits: tool('propose_script_edits', '按 finding 产出最小改动提议，不直接改剧本', z.object({
+      finding_ids: z.array(z.string()).min(1),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeProposeScriptEdits(appDb, appLog, scope.dramaId, scope.episodeId, input);
+    }),
+    get_source_facts: tool('get_source_facts', '读取小说源文本的事实卡，检测源是否变化', z.object({
+      source_hash: z.string().optional(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeGetSourceFacts(appDb, scope.dramaId, input);
+    }),
+    propose_episode_split: tool('propose_episode_split', '按可拍事件提议小说分集切点，不写剧集', z.object({
+      source_hash: z.string().optional(),
+      episode_count: z.number().int().min(1).max(200),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeProposeEpisodeSplit(appDb, scope.dramaId, input);
+    }),
+    get_asset_matrix: tool('get_asset_matrix', '读取全剧角色/场景/道具资产矩阵与状态提议', z.object({}), async (_input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeGetAssetMatrix(appDb, scope.dramaId);
+    }),
+    propose_prop_states: tool('propose_prop_states', '按本集剧本提议道具状态，只写笔记不落库', z.object({}), async (_input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeProposePropStates(appDb, appLog, scope.dramaId, scope.episodeId);
+    }),
+    check_asset_lock: tool('check_asset_lock', '检查分镜引用的资产是否就绪、是否有连续性锁', z.object({
+      storyboard_id: z.number(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeCheckAssetLock(appDb, scope.dramaId, scope.episodeId, input.storyboard_id);
+    }),
+    propose_blocking: tool('propose_blocking', '为一场戏提议主机位、轴线与逐拍动作，不写分镜', z.object({
+      scene_id: z.number().optional(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeProposeBlocking(appDb, appLog, scope.dramaId, scope.episodeId, input);
+    }),
+    review_shot_continuity: tool('review_shot_continuity', '用现有编译器复核结构化分镜的连续性，不修改分镜', z.object({
+      storyboard_id: z.number(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeReviewShotContinuity(appDb, scope.dramaId, scope.episodeId, input.storyboard_id);
+    }),
+    get_take_evidence: tool('get_take_evidence', '聚合成片的提交提示词、媒体检测、参考图与审片证据，不抽帧不改片', z.object({
+      storyboard_id: z.number(),
+      take_id: z.number(),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeGetTakeEvidence(appDb, scope.dramaId, scope.episodeId, input);
+    }),
+    record_clip_findings: tool('record_clip_findings', '把作者目视确认的成片问题与归因写入质检笔记，需引用证据', z.object({
+      evidence: z.record(z.string(), z.unknown()),
+      expected_revision: z.number().int().min(0),
+      findings: z.array(z.object({
+        class: z.enum(['requirement_not_executed', 'single_take_variance', 'prompt_under_specified']),
+        evidence_ids: z.array(z.string()).min(1),
+        visible_evidence: z.string(),
+        action: z.enum(['revise', 'replace', 'reshoot']).optional(),
+        note: z.string().optional(),
+      })).min(1),
+    }), async (input, ctx) => {
+      const scope = readScope(ctx);
+      return tools.executeRecordClipFindings(appDb, scope.dramaId, scope.episodeId, input);
+    }),
   };
 }
 
@@ -209,6 +307,7 @@ export async function initAgent({ db, log, config, dataDir }) {
   try {
     const dir = dataDir || path.join(process.cwd(), 'data');
     fs.mkdirSync(dir, { recursive: true });
+    tools.configureP0Tools({ db, dataDir: dir });
     const file = path.join(dir, 'agent.db').replace(/\\/g, '/');
     const storage = new LibSQLStore({ id: 'drama-agent', url: `file:${file}` });
     memory = new Memory({ storage, options: { lastMessages: 20, semanticRecall: false } });

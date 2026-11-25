@@ -2,9 +2,43 @@ import { createRequire } from 'module';
 import { assertOwned, resolveEpisode } from './context.mjs';
 import methods from '../services/workbenchCreativeMethods.js';
 import storyboardRows from '../services/episodeStoryboardRows.js';
+import { createAgentNotesService } from '../services/agentNotesService.js';
+import { reviewEpisode, proposeEdits } from '../services/agentScriptReviewService.js';
+import { getSourceFacts, proposeEpisodeSplit } from '../services/agentNovelService.js';
+import { getAssetMatrix, proposePropStates, checkAssetLock } from '../services/agentAssetService.js';
+import { proposeBlocking, reviewShotContinuity } from '../services/agentShotService.js';
+import { getTakeEvidence, recordClipFindings } from '../services/agentClipQcService.js';
 
 function fail(error) {
   return { ok: false, error };
+}
+
+// P0 tools: db / dataDir / notes / model deps are injectable for tests; production uses the
+// same modules with the agent's configured db, dataDir and aiClient.generateText.
+let p0Deps = null;
+export function configureP0Tools(config) {
+  p0Deps = config;
+}
+
+function p0Notes() {
+  if (p0Deps && p0Deps.notes) return p0Deps.notes;
+  const dataDir = (p0Deps && p0Deps.dataDir) || require('path').join(process.cwd(), 'data');
+  return createAgentNotesService({ dataDir });
+}
+
+function p0ModelDeps(log, db) {
+  if (p0Deps && p0Deps.generateText) return { generateText: p0Deps.generateText, log };
+  const aiClient = requireService('aiClient.js');
+  const modelDb = (p0Deps && p0Deps.db) || db;
+  if (!modelDb) return { generateText: async () => { throw new Error('model db unavailable'); }, log };
+  return {
+    generateText: (prompt, system) => aiClient.generateText(modelDb, log, 'text', prompt, system, {
+      scene_key: 'script_deep_review',
+      temperature: 0.2,
+      max_tokens: 4096,
+    }),
+    log,
+  };
 }
 
 function dramaRow(db, dramaId) {
@@ -355,6 +389,154 @@ export function executeGetTask(db, dramaId, input) {
   ).get(String(input.taskId));
   if (!row) return fail('任务不存在');
   return { ok: true, taskId: row.id, summary: `${row.type || '任务'}：${row.status || ''}` };
+}
+
+/* ---------------- P0: series notes + script doctor ---------------- */
+
+export function executeGetSeriesNotes(db, dramaId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const kind = input.kind || 'series-bible';
+  const result = p0Notes().readOrEmpty(Number(dramaId), kind);
+  if (!result.ok) return fail(result.error);
+  return { ok: true, kind: result.kind, revision: result.revision, document: result.document };
+}
+
+export function executeSaveSeriesNotes(db, dramaId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const result = p0Notes().write(Number(dramaId), input.kind || 'series-bible', input.expected_revision, input.document);
+  if (!result.ok) return fail(result.error);
+  return { ok: true, kind: result.kind, revision: result.revision, summary: '已保存全剧笔记' };
+}
+
+export function executeCheckSeriesContinuity(db, dramaId, episodeId, script) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  const text = String(script == null ? '' : script).trim();
+  if (!text) return fail('empty_script');
+  const note = p0Notes().readOrEmpty(Number(dramaId), 'series-bible');
+  if (!note.ok) return fail(note.error);
+  const facts = Array.isArray(note.document.invariants) ? note.document.invariants : [];
+  const violations = [];
+  for (const fact of facts) {
+    const tokens = Array.isArray(fact.tokens) ? fact.tokens : (typeof fact === 'string' ? [fact] : []);
+    if (tokens.length === 0) continue;
+    if (!tokens.some((token) => text.includes(String(token)))) {
+      violations.push({ id: fact.id || '', expected: tokens[0] });
+    }
+  }
+  return { ok: true, violations, checked: facts.length };
+}
+
+export async function executeReviewEpisodeDeep(db, log, dramaId, episodeId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return reviewEpisode({
+    db,
+    log,
+    episodeId: resolved.episodeId,
+    mode: input.mode || 'full',
+    notes: p0Notes(),
+    deps: p0ModelDeps(log, db),
+  });
+}
+
+export async function executeProposeScriptEdits(db, log, dramaId, episodeId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return proposeEdits({
+    db,
+    dramaId: Number(dramaId),
+    episodeId: resolved.episodeId,
+    findingIds: input.finding_ids,
+    notes: p0Notes(),
+    deps: p0ModelDeps(log, db),
+  });
+}
+
+/* ---------------- P1: novel / asset / shot ---------------- */
+
+export function executeGetSourceFacts(db, dramaId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  return getSourceFacts(db, p0Notes(), Number(dramaId), input);
+}
+
+export function executeProposeEpisodeSplit(db, dramaId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  return proposeEpisodeSplit(db, p0Notes(), Number(dramaId), input);
+}
+
+export function executeGetAssetMatrix(db, dramaId) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  return getAssetMatrix(db, p0Notes(), Number(dramaId));
+}
+
+export async function executeProposePropStates(db, log, dramaId, episodeId) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return proposePropStates({
+    db, log, notes: p0Notes(), deps: p0ModelDeps(log, db),
+    dramaId: Number(dramaId), episodeId: resolved.episodeId,
+  });
+}
+
+export function executeCheckAssetLock(db, dramaId, episodeId, storyboardId) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return checkAssetLock(db, p0Notes(), Number(dramaId), resolved.episodeId, storyboardId);
+}
+
+export async function executeProposeBlocking(db, log, dramaId, episodeId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return proposeBlocking({
+    db, log, notes: p0Notes(), deps: p0ModelDeps(log, db),
+    dramaId: Number(dramaId), episodeId: resolved.episodeId, sceneId: input.scene_id,
+  });
+}
+
+export function executeReviewShotContinuity(db, dramaId, episodeId, storyboardId) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return reviewShotContinuity({
+    db, notes: p0Notes(), dramaId: Number(dramaId), episodeId: resolved.episodeId, storyboardId,
+  });
+}
+
+/* ---------------- P2: clip-qc ---------------- */
+
+export function executeGetTakeEvidence(db, dramaId, episodeId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return getTakeEvidence({
+    db,
+    dramaId: Number(dramaId),
+    episodeId: resolved.episodeId,
+    storyboardId: input.storyboard_id,
+    takeId: input.take_id,
+  });
+}
+
+export function executeRecordClipFindings(db, dramaId, episodeId, input = {}) {
+  if (!dramaRow(db, dramaId)) return fail('not_found');
+  const resolved = resolveEpisode(db, dramaId, episodeId);
+  if (!resolved.ok) return resolved;
+  return recordClipFindings({
+    db,
+    notes: p0Notes(),
+    dramaId: Number(dramaId),
+    episodeId: resolved.episodeId,
+    evidence: input.evidence,
+    expected_revision: input.expected_revision,
+    findings: input.findings,
+  });
 }
 
 export const deleteItemSpec = { id: 'delete_item', requireApproval: true };

@@ -18,6 +18,7 @@ function createAgentTestDb() {
       title TEXT,
       script_content TEXT,
       description TEXT,
+      novel_source TEXT,
       deleted_at TEXT
     );
     CREATE TABLE characters (
@@ -60,14 +61,49 @@ function createAgentTestDb() {
       description TEXT,
       dialogue TEXT,
       action TEXT,
+      characters TEXT,
       image_prompt TEXT,
       video_prompt TEXT,
+      segment_ir TEXT,
       image_url TEXT,
       local_path TEXT,
       video_url TEXT,
       deleted_at TEXT,
       created_at TEXT,
       updated_at TEXT
+    );
+    CREATE TABLE video_generations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      drama_id INTEGER,
+      storyboard_id INTEGER,
+      provider TEXT,
+      prompt TEXT,
+      model TEXT,
+      duration REAL,
+      aspect_ratio TEXT,
+      resolution TEXT,
+      image_url TEXT,
+      first_frame_url TEXT,
+      last_frame_url TEXT,
+      reference_image_urls TEXT,
+      video_url TEXT,
+      local_path TEXT,
+      status TEXT,
+      task_id TEXT,
+      media_check TEXT,
+      compiled_json TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      deleted_at TEXT
+    );
+    CREATE TABLE video_take_reviews (
+      id INTEGER PRIMARY KEY,
+      video_generation_id INTEGER NOT NULL,
+      time_ms INTEGER NOT NULL,
+      note TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL
     );
     CREATE TABLE image_generations (
       id INTEGER PRIMARY KEY,

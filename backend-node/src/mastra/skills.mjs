@@ -6,7 +6,7 @@ function acceptSkill(dir, log, validate) {
   if (!fs.existsSync(skillFile) || !fs.statSync(skillFile).isFile()) return null;
   try {
     const markdown = fs.readFileSync(skillFile, 'utf8');
-    const result = validate(markdown);
+    const result = validate(markdown, path.basename(dir));
     if (result && result.valid) return path.resolve(dir);
     log.warn(`跳过不合法的 skill：${dir}`);
   } catch (err) {
